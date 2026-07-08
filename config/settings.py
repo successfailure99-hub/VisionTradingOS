@@ -1,0 +1,11 @@
+WATCHLIST = [
+    "NIFTY",
+    "BANKNIFTY",
+    "SENSEX",
+]
+
+TIMEFRAME = "5m"
+
+VOICE_ENABLED = True
+
+AI_ENABLED = True
