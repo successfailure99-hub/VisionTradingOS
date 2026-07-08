@@ -1,17 +1,20 @@
 from core.event_bus import EventBus
+from core.events import CAMARILLA_UPDATED
+
+bus = EventBus()
 
 
-def test_event_bus():
+def on_camarilla(levels):
+    print("Received Camarilla Levels")
+    print(levels)
 
-    bus = EventBus()
 
-    results = []
+bus.subscribe(CAMARILLA_UPDATED, on_camarilla)
 
-    def receiver(data):
-        results.append(data)
-
-    bus.subscribe("hello", receiver)
-
-    bus.publish("hello", 100)
-
-    assert results == [100]
+bus.publish(
+    CAMARILLA_UPDATED,
+    {
+        "H4": 25250,
+        "L4": 24980,
+    },
+)
