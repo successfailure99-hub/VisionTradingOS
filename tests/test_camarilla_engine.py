@@ -1,32 +1,77 @@
+"""
+====================================================
+Vision Trading OS
+Test - Camarilla Engine
+====================================================
+"""
+
 from datetime import date
 
 from core.event_bus import EventBus
 from core.events import CAMARILLA_UPDATED
 
+from core.models.daily_ohlc import DailyOHLC
+
 from engines.camarilla.camarilla_engine import CamarillaEngine
 
 
-bus = EventBus()
+# ==================================================
+# Create Event Bus
+# ==================================================
+
+event_bus = EventBus()
 
 
-def on_camarilla(levels):
+# ==================================================
+# Event Listener
+# ==================================================
+
+def on_camarilla_updated(levels):
     print("\n========== EVENT RECEIVED ==========")
     print(levels)
 
 
-bus.subscribe(CAMARILLA_UPDATED, on_camarilla)
-
-
-engine = CamarillaEngine(bus)
-
-levels = engine.calculate(
-    trading_date=date.today(),
-    previous_high=25260,
-    previous_low=25010,
-    previous_close=25120,
+event_bus.subscribe(
+    CAMARILLA_UPDATED,
+    on_camarilla_updated,
 )
+
+
+# ==================================================
+# Create Engine
+# ==================================================
+
+engine = CamarillaEngine(event_bus)
+
+
+# ==================================================
+# Create Previous Day OHLC
+# ==================================================
+
+daily_ohlc = DailyOHLC(
+    trading_date=date.today(),
+    open=25150,
+    high=25260,
+    low=25010,
+    close=25120,
+)
+
+
+# ==================================================
+# Calculate Levels
+# ==================================================
+
+levels = engine.calculate(daily_ohlc)
+
+
+# ==================================================
+# Display Results
+# ==================================================
 
 print("\n========== ENGINE DATA ==========")
 print(levels)
 
 print("\nEngine Ready:", engine.is_ready())
+
+print("\nCached Levels:")
+print(engine.levels)

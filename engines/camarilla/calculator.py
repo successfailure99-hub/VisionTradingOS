@@ -1,29 +1,48 @@
+"""
+====================================================
+Vision Trading OS
+Camarilla Calculator
+====================================================
+"""
+
+from core.models.daily_ohlc import DailyOHLC
+
 from engines.camarilla.levels import CamarillaLevels
-from datetime import date
 
 
 class CamarillaCalculator:
+    """
+    Responsible only for calculating Camarilla Levels.
+    No caching.
+    No events.
+    No logging.
+    """
 
     @staticmethod
     def calculate(
-        trading_date: date,
-        previous_high: float,
-        previous_low: float,
-        previous_close: float,
+        daily_ohlc: DailyOHLC,
     ) -> CamarillaLevels:
 
+        previous_high = daily_ohlc.high
+        previous_low = daily_ohlc.low
+        previous_close = daily_ohlc.close
+        trading_date = daily_ohlc.trading_date
+
         if previous_high <= previous_low:
-            raise ValueError("Previous High must be greater than Previous Low.")
+            raise ValueError(
+                "Previous High must be greater than Previous Low."
+            )
 
         rng = previous_high - previous_low
 
+        # Camarilla Levels
         h3 = previous_close + (rng * 1.1 / 4)
         h4 = previous_close + (rng * 1.1 / 2)
 
         l3 = previous_close - (rng * 1.1 / 4)
         l4 = previous_close - (rng * 1.1 / 2)
 
-        # Extension levels
+        # Extension Levels
         h5 = (previous_high / previous_low) * previous_close
         l5 = previous_close - (h5 - previous_close)
 
@@ -31,9 +50,9 @@ class CamarillaCalculator:
         l6 = l5 - (l4 - l5)
 
         pivot = (
-            previous_high +
-            previous_low +
-            previous_close
+            previous_high
+            + previous_low
+            + previous_close
         ) / 3
 
         return CamarillaLevels(

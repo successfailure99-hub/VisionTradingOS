@@ -5,10 +5,10 @@ Camarilla Engine
 ====================================================
 """
 
-from datetime import date
-
 from core.event_bus import EventBus
 from core.events import CAMARILLA_UPDATED
+
+from core.models.daily_ohlc import DailyOHLC
 
 from engines.camarilla.calculator import CamarillaCalculator
 from engines.camarilla.levels import CamarillaLevels
@@ -16,8 +16,13 @@ from engines.camarilla.levels import CamarillaLevels
 
 class CamarillaEngine:
     """
-    Responsible for calculating and storing
-    today's Camarilla levels.
+    Camarilla Engine
+
+    Responsibilities
+    ----------------
+    1. Calculate today's Camarilla levels.
+    2. Cache today's levels.
+    3. Publish CAMARILLA_UPDATED event.
     """
 
     def __init__(self, event_bus: EventBus):
@@ -27,28 +32,28 @@ class CamarillaEngine:
 
     @property
     def levels(self) -> CamarillaLevels | None:
+        """
+        Returns the latest calculated Camarilla Levels.
+        """
         return self._levels
 
     def calculate(
         self,
-        trading_date: date,
-        previous_high: float,
-        previous_low: float,
-        previous_close: float,
+        daily_ohlc: DailyOHLC,
     ) -> CamarillaLevels:
+        """
+        Calculate Camarilla levels using the previous day's OHLC.
+        """
 
-        # Prevent duplicate calculation
+        # Prevent duplicate calculation for same trading day
         if (
             self._levels is not None
-            and self._levels.trading_date == trading_date
+            and self._levels.trading_date == daily_ohlc.trading_date
         ):
             return self._levels
 
         self._levels = CamarillaCalculator.calculate(
-            trading_date,
-            previous_high,
-            previous_low,
-            previous_close,
+            daily_ohlc
         )
 
         # Publish event
@@ -60,7 +65,14 @@ class CamarillaEngine:
         return self._levels
 
     def is_ready(self) -> bool:
+        """
+        Returns True if today's Camarilla levels
+        have already been calculated.
+        """
         return self._levels is not None
 
-    def clear(self):
+    def clear(self) -> None:
+        """
+        Clears today's cached Camarilla levels.
+        """
         self._levels = None
