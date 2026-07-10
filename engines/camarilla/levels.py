@@ -2,10 +2,10 @@ from dataclasses import dataclass
 from datetime import date
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class CamarillaLevels:
     """
-    Stores the complete Camarilla levels for one trading day.
+    Stores the complete immutable Camarilla levels for one trading day.
     """
 
     trading_date: date
