@@ -5,24 +5,28 @@ VWAP Levels
 ====================================================
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+
+from core.enums.instrument import Instrument
 
 
 @dataclass(slots=True, frozen=True)
 class VWAPLevels:
     """
-    Stores the current VWAP values.
+    Immutable session VWAP state for one instrument.
     """
+
+    symbol: Instrument
+
+    trading_date: date
 
     timestamp: datetime
 
     vwap: float
 
-    upper_band_1: float
-    upper_band_2: float
-    upper_band_3: float
+    cumulative_volume: int
 
-    lower_band_1: float
-    lower_band_2: float
-    lower_band_3: float
+    cumulative_price_volume: float
