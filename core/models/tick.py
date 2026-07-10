@@ -8,6 +8,9 @@ Tick Model
 from dataclasses import dataclass
 from datetime import datetime
 
+from core.enums.exchange import Exchange
+from core.enums.instrument import Instrument
+
 
 @dataclass(slots=True, frozen=True)
 class Tick:
@@ -24,9 +27,9 @@ class Tick:
         AI Engine
     """
 
-    symbol: str
+    symbol: Instrument
 
-    exchange: str
+    exchange: Exchange
 
     timestamp: datetime
 

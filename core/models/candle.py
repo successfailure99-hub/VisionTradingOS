@@ -8,18 +8,24 @@ Candle Model
 from dataclasses import dataclass
 from datetime import datetime
 
-from core.enums.timeframe import TimeFrame
-
 
 @dataclass(slots=True, frozen=True)
 class Candle:
     """
-    Represents one completed candle.
+    Represents one completed market candle.
+
+    This model is used by:
+
+    - Candle Engine
+    - VWAP Engine
+    - Price Action Engine
+    - Dashboard
+    - AI Engine
     """
 
     symbol: str
 
-    timeframe: TimeFrame
+    timeframe: str
 
     start_time: datetime
 
