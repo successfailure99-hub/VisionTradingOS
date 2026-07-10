@@ -26,6 +26,13 @@ class CandleEngine(BaseEngine):
     """
     Builds live one-minute candles from incoming ticks.
 
+    Candle Engine V1 assumes serialized, single-threaded
+    tick delivery. Thread safety is provided upstream by the
+    Market Data Engine.
+
+    V1 supports only TimeFrame.ONE_MINUTE. Multi-timeframe
+    candle construction will be implemented in a future version.
+
     Responsibilities
     ----------------
     1. Receive Tick objects
@@ -150,15 +157,25 @@ class CandleEngine(BaseEngine):
         self,
         symbol: Instrument,
     ) -> Candle:
-        current = self._current[symbol]
+        current = self._current.get(symbol)
+
+        if current is None:
+            raise KeyError(
+                f"No active candle found for {symbol.value}"
+            )
+
         candle = current.close_candle()
 
         self._history[symbol].append(candle)
         self._data = candle
 
-        self._event_bus.publish(
-            CANDLE_CLOSED,
-            candle,
-        )
+        try:
+            self._event_bus.publish(
+                CANDLE_CLOSED,
+                candle,
+            )
+        finally:
+            if self._current.get(symbol) is current:
+                del self._current[symbol]
 
         return candle
