@@ -174,11 +174,17 @@ class VWAPEngine(BaseEngine):
             )
 
         if trading_date > state.trading_date:
+            previous_latest = state.latest
+
             state.trading_date = trading_date
             state.cumulative_volume = 0
             state.cumulative_price_volume = 0.0
             state.last_tick = None
             state.latest = None
+
+            if previous_latest is self._data:
+                self._data = self._first_latest_result()
+
             return
 
         if (

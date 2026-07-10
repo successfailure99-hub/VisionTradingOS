@@ -434,3 +434,99 @@ def test_date_reset_vwap_starts_fresh_from_first_positive_tick():
     assert result.cumulative_volume == 20
     assert_close(result.cumulative_price_volume, 6000.0)
     assert_close(result.vwap, 300.0)
+
+
+def test_new_date_zero_volume_tick_clears_stale_engine_data():
+    event_bus = EventBus()
+    events = []
+    event_bus.subscribe(VWAP_UPDATED, events.append)
+    engine = VWAPEngine(event_bus)
+
+    day_one = engine.on_tick(
+        make_tick(
+            timestamp=datetime(2026, 7, 10, 9, 15, 1),
+            price=100,
+            volume=10,
+        )
+    )
+    day_two_zero = make_tick(
+        timestamp=datetime(2026, 7, 11, 9, 15, 1),
+        price=110,
+        volume=0,
+    )
+
+    result = engine.on_tick(day_two_zero)
+
+    assert result is None
+    assert day_one is not None
+    assert engine.get_latest(Instrument.NIFTY) is None
+    assert Instrument.NIFTY not in engine.get_all_latest()
+    assert engine.data is None
+    assert not engine.is_ready()
+    assert events == [day_one]
+
+
+def test_new_date_zero_volume_tick_falls_back_to_other_latest_data():
+    engine = VWAPEngine(EventBus())
+    banknifty = engine.on_tick(
+        make_tick(
+            instrument=Instrument.BANKNIFTY,
+            timestamp=datetime(2026, 7, 10, 9, 15, 1),
+            price=200,
+            volume=20,
+        )
+    )
+    nifty = engine.on_tick(
+        make_tick(
+            instrument=Instrument.NIFTY,
+            timestamp=datetime(2026, 7, 10, 9, 15, 1),
+            price=100,
+            volume=10,
+        )
+    )
+
+    result = engine.on_tick(
+        make_tick(
+            instrument=Instrument.NIFTY,
+            timestamp=datetime(2026, 7, 11, 9, 15, 1),
+            price=110,
+            volume=0,
+        )
+    )
+
+    assert result is None
+    assert nifty is not None
+    assert engine.get_latest(Instrument.NIFTY) is None
+    assert Instrument.NIFTY not in engine.get_all_latest()
+    assert engine.get_latest(Instrument.BANKNIFTY) == banknifty
+    assert engine.data == banknifty
+    assert engine.is_ready()
+
+
+def test_new_date_positive_volume_tick_replaces_stale_engine_data():
+    engine = VWAPEngine(EventBus())
+    day_one = engine.on_tick(
+        make_tick(
+            timestamp=datetime(2026, 7, 10, 9, 15, 1),
+            price=100,
+            volume=10,
+        )
+    )
+
+    day_two = engine.on_tick(
+        make_tick(
+            timestamp=datetime(2026, 7, 11, 9, 15, 1),
+            price=150,
+            volume=5,
+        )
+    )
+
+    assert day_one is not None
+    assert day_two is not None
+    assert day_two.trading_date == datetime(2026, 7, 11).date()
+    assert day_two.cumulative_volume == 5
+    assert_close(day_two.cumulative_price_volume, 750.0)
+    assert_close(day_two.vwap, 150.0)
+    assert engine.get_latest(Instrument.NIFTY) == day_two
+    assert engine.data == day_two
+    assert engine.is_ready()
