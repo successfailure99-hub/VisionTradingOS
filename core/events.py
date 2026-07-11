@@ -64,6 +64,12 @@ OPTION_CHAIN_READY = "option_chain_ready"
 AI_DECISION_READY = "ai_decision_ready"
 
 # ==================================================
+# Strategy Events
+# ==================================================
+
+STRATEGY_DECISION_READY = "strategy_decision_ready"
+
+# ==================================================
 # Risk Management Events
 # ==================================================
 
