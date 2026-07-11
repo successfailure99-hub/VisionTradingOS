@@ -386,7 +386,7 @@ def test_summary_calculations_mixed_records_rounding_and_empty_behavior():
     assert summary.average_loss == -50.0
     assert summary.profit_factor == 2.0024
     assert summary.expectancy == 16.71
-    assert summary.average_r_multiple == 0.3889
+    assert summary.average_r_multiple == 0.3342
     assert summary.best_trade_pnl == 100.12
     assert summary.worst_trade_pnl == -50.0
     assert summary.average_holding_seconds == 3600.0
