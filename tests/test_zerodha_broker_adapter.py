@@ -18,6 +18,7 @@ from brokers.zerodha import (
     ZerodhaOrderUpdate,
     ZerodhaResponseParser,
 )
+from core.event_bus import EventBus
 from engines.order_management.enums import (
     OrderCommandType,
     OrderRejectionReason,
@@ -27,6 +28,7 @@ from engines.order_management.enums import (
     ProductType,
 )
 from engines.order_management.models import OrderCommand, OrderState
+from engines.order_management.order_management_engine import OrderManagementEngine
 
 
 TS = datetime(2026, 7, 10, 10, 0)
@@ -356,11 +358,13 @@ def test_command_translation_acknowledgement_fills_cancel_reject_and_unknowns():
     assert ZerodhaResponseParser.to_order_command(previous_partial, update(filled_quantity=25, pending_quantity=125, average_price=100.5)) is None
     increased = ZerodhaResponseParser.to_order_command(previous_partial, update(filled_quantity=50, pending_quantity=100, average_price=101.0))
     assert increased.fill_quantity == 25
+    assert increased.fill_price == 101.5
     assert_raises(ValueError, lambda: ZerodhaResponseParser.to_order_command(previous_partial, update(filled_quantity=10, pending_quantity=140, average_price=100.0)))
 
     complete = ZerodhaResponseParser.to_order_command(previous_partial, update(status=ZerodhaOrderStatus.COMPLETE, filled_quantity=150, pending_quantity=0, average_price=101.0))
     assert complete.command_type is OrderCommandType.FILL
     assert complete.fill_quantity == 125
+    assert complete.fill_price == 101.1
     filled = submitted(status=OrderStatus.FILLED, filled_quantity=150, remaining_quantity=0, average_fill_price=101.0)
     assert ZerodhaResponseParser.to_order_command(filled, update(status=ZerodhaOrderStatus.COMPLETE, filled_quantity=150, pending_quantity=0, average_price=101.0)) is None
     assert_raises(ValueError, lambda: ZerodhaResponseParser.to_order_command(submitted_order, update(status=ZerodhaOrderStatus.COMPLETE, filled_quantity=149, pending_quantity=1, average_price=101.0)))
@@ -375,6 +379,90 @@ def test_command_translation_acknowledgement_fills_cancel_reject_and_unknowns():
     assert reject.rejection_message == "RMS block"
     fallback = ZerodhaResponseParser.to_order_command(submitted_order, update(status=ZerodhaOrderStatus.REJECTED))
     assert fallback.rejection_message == "Broker rejected order"
+
+
+def test_cumulative_average_derives_incremental_fill_prices_for_order_management():
+    engine = OrderManagementEngine(EventBus(), "NIFTY", "1m")
+    state = submitted(quantity=100, remaining_quantity=100)
+    engine._orders[state.client_order_id] = state
+    engine._latest_order_id = state.client_order_id
+    engine._data = state
+    engine._approved_quantities[state.client_order_id] = 100
+    engine._timestamp_is_aware = False
+
+    first = ZerodhaResponseParser.to_order_command(
+        state,
+        update(filled_quantity=25, pending_quantity=75, average_price=100.0),
+    )
+    assert first.fill_quantity == 25
+    assert first.fill_price == 100.0
+    after_first = engine.apply(first)
+    assert after_first.average_fill_price == 100.0
+
+    second = ZerodhaResponseParser.to_order_command(
+        after_first,
+        update(filled_quantity=50, pending_quantity=50, average_price=102.0),
+    )
+    assert second.fill_quantity == 25
+    assert second.fill_price == 104.0
+    after_second = engine.apply(second)
+    assert after_second.average_fill_price == 102.0
+
+    third = ZerodhaResponseParser.to_order_command(
+        after_second,
+        update(filled_quantity=75, pending_quantity=25, average_price=103.0),
+    )
+    assert third.fill_quantity == 25
+    assert third.fill_price == 105.0
+    after_third = engine.apply(third)
+    assert after_third.average_fill_price == 103.0
+
+    assert ZerodhaResponseParser.to_order_command(
+        after_third,
+        update(filled_quantity=75, pending_quantity=25, average_price=103.0),
+    ) is None
+
+    complete = ZerodhaResponseParser.to_order_command(
+        after_third,
+        update(status=ZerodhaOrderStatus.COMPLETE, filled_quantity=100, pending_quantity=0, average_price=104.0),
+    )
+    assert complete.fill_quantity == 25
+    assert complete.fill_price == 107.0
+    filled = engine.apply(complete)
+    assert filled.status is OrderStatus.FILLED
+    assert filled.average_fill_price == 104.0
+
+
+def test_invalid_cumulative_average_fill_updates_are_rejected():
+    submitted_order = submitted()
+    assert_raises(
+        ValueError,
+        lambda: ZerodhaResponseParser.to_order_command(
+            submitted_order,
+            update(filled_quantity=25, pending_quantity=125, average_price=0.0),
+        ),
+    )
+    previous_partial = submitted(filled_quantity=25, remaining_quantity=125, average_fill_price=100.0, status=OrderStatus.PARTIALLY_FILLED)
+    assert_raises(
+        ValueError,
+        lambda: ZerodhaResponseParser.to_order_command(
+            previous_partial,
+            update(filled_quantity=50, pending_quantity=100, average_price=50.0),
+        ),
+    )
+    missing_previous_average = submitted(
+        filled_quantity=25,
+        remaining_quantity=125,
+        average_fill_price=None,
+        status=OrderStatus.PARTIALLY_FILLED,
+    )
+    assert_raises(
+        ValueError,
+        lambda: ZerodhaResponseParser.to_order_command(
+            missing_previous_average,
+            update(filled_quantity=50, pending_quantity=100, average_price=101.0),
+        ),
+    )
 
 
 def test_architecture_no_events_no_credentials_no_network_and_immutability():

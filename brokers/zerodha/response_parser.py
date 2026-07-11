@@ -116,13 +116,28 @@ class ZerodhaResponseParser:
             raise ValueError("Broker cumulative filled quantity moved backwards.")
         if delta == 0:
             return None
+        if update.average_price <= 0:
+            raise ValueError("Broker cumulative average price must be positive for a fill.")
+        previous_average = 0.0
+        if previous.filled_quantity > 0:
+            if previous.average_fill_price is None or previous.average_fill_price <= 0:
+                raise ValueError("Previous average fill price must be positive when quantity was already filled.")
+            previous_average = previous.average_fill_price
+        incremental_notional = (update.average_price * update.filled_quantity) - (
+            previous_average * previous.filled_quantity
+        )
+        if incremental_notional <= 0:
+            raise ValueError("Incremental fill notional must be positive.")
+        incremental_fill_price = incremental_notional / delta
+        if not isfinite(incremental_fill_price) or incremental_fill_price <= 0:
+            raise ValueError("Incremental fill price must be finite and positive.")
         return OrderCommand(
             command_type=OrderCommandType.FILL,
             client_order_id=previous.client_order_id,
             timestamp=update.timestamp,
             broker_order_id=update.order_id,
             fill_quantity=delta,
-            fill_price=update.average_price,
+            fill_price=incremental_fill_price,
         )
 
     @staticmethod
