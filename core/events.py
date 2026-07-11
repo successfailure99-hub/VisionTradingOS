@@ -94,6 +94,12 @@ POSITION_UPDATED = "position_updated"
 POSITION_CLOSED = "position_closed"
 
 # ==================================================
+# Trade Journal Events
+# ==================================================
+
+TRADE_RECORDED = "trade_recorded"
+
+# ==================================================
 # Alert & Notification Events
 # ==================================================
 
