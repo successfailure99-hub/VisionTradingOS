@@ -38,7 +38,9 @@ def test_type_mapping_for_index_equity_future_option_and_unknown():
     assert normalizer.normalize(raw(instrument_type="FUT", expiry="2026-07-30")).instrument_type is ZerodhaInstrumentType.FUTURE
     assert normalizer.normalize(raw(instrument_type="CE", expiry="2026-07-30")).instrument_type is ZerodhaInstrumentType.OPTION
     assert normalizer.normalize(raw(instrument_type="PE", expiry="2026-07-30")).instrument_type is ZerodhaInstrumentType.OPTION
-    assert normalizer.normalize(raw(instrument_type="")).instrument_type is ZerodhaInstrumentType.UNKNOWN
+    assert normalizer.normalize(raw(instrument_type="")).instrument_type is ZerodhaInstrumentType.INDEX
+    unknown_record = raw(instrument_type="", segment="NSE", expiry=None)
+    assert normalizer.normalize(unknown_record).instrument_type is ZerodhaInstrumentType.UNKNOWN
 
 
 def test_expiry_inputs_and_malformed_date_rejected():
