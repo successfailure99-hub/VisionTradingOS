@@ -26,7 +26,7 @@ class FakeKiteConnect:
     def instruments(self, exchange=None):
         self.calls.append(exchange)
         if exchange == "BAD":
-            raise RuntimeError(f"bad api_key access_token")
+            raise RuntimeError(f"bad {self.api_key} {self.access_token}")
         return [{"exchange": exchange}]
 
 
@@ -63,20 +63,26 @@ def test_validates_credentials_and_does_not_fetch_in_constructor(monkeypatch):
 
 def test_instruments_delegates_and_raw_client_is_not_public(monkeypatch):
     install_fake_module(monkeypatch)
-    client = KiteInstrumentClient(api_key="api_key", access_token="access_token")
+    api_key = "real_api_key_secret_123"
+    access_token = "real_access_token_secret_456"
+    client = KiteInstrumentClient(api_key=api_key, access_token=access_token)
     assert client.instruments() == [{"exchange": None}]
     assert client.instruments("NSE") == [{"exchange": "NSE"}]
     assert not hasattr(client, "client")
     rendered = repr(client)
-    assert "api_key" not in rendered
-    assert "access_token" not in rendered
+    assert api_key not in rendered
+    assert access_token not in rendered
+    assert "[REDACTED]" in rendered
 
 
 def test_project_errors_redact_credentials(monkeypatch):
     install_fake_module(monkeypatch)
-    client = KiteInstrumentClient(api_key="api_key", access_token="access_token")
+    api_key = "real_api_key_secret_123"
+    access_token = "real_access_token_secret_456"
+    client = KiteInstrumentClient(api_key=api_key, access_token=access_token)
     with pytest.raises(RuntimeError) as exc:
         client.instruments("BAD")
     message = str(exc.value)
-    assert "api_key" not in message
-    assert "access_token" not in message
+    assert api_key not in message
+    assert access_token not in message
+    assert "[REDACTED]" in message
