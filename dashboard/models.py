@@ -2,8 +2,22 @@
 Immutable dashboard presentation models.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+
+
+def _require_non_negative(value: int, field_name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer")
+
+
+def _require_aware(value: datetime | None, field_name: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, datetime):
+        raise TypeError(f"{field_name} must be a datetime")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{field_name} must be timezone-aware")
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +34,104 @@ class DashboardRuntimeView:
     last_started_at: datetime | None
     last_stopped_at: datetime | None
     last_error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardLiveSubscriptionView:
+    instrument: str
+    exchange: str
+    instrument_token: int
+    mode: str
+
+    def __post_init__(self) -> None:
+        _require_non_negative(self.instrument_token, "instrument_token")
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardLiveMarketDataView:
+    available: bool
+    runtime_status: str
+    ready: bool
+    running: bool
+    websocket_status: str
+    connected: bool
+    configured_instruments: tuple[str, ...]
+    configured_tokens: tuple[int, ...]
+    subscription_count: int
+    subscription_rows: tuple[DashboardLiveSubscriptionView, ...]
+    connection_count: int
+    disconnection_count: int
+    reconnect_count: int
+    raw_tick_count: int
+    normalized_tick_count: int
+    delivered_tick_count: int
+    rejected_tick_count: int
+    start_count: int
+    stop_count: int
+    last_connected_at: datetime | None
+    last_disconnected_at: datetime | None
+    last_tick_at: datetime | None
+    last_started_at: datetime | None
+    last_stopped_at: datetime | None
+    last_error: str | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "configured_instruments", tuple(self.configured_instruments))
+        object.__setattr__(self, "configured_tokens", tuple(self.configured_tokens))
+        object.__setattr__(self, "subscription_rows", tuple(self.subscription_rows))
+        for name in (
+            "subscription_count",
+            "connection_count",
+            "disconnection_count",
+            "reconnect_count",
+            "raw_tick_count",
+            "normalized_tick_count",
+            "delivered_tick_count",
+            "rejected_tick_count",
+            "start_count",
+            "stop_count",
+        ):
+            _require_non_negative(getattr(self, name), name)
+        for name in (
+            "last_connected_at",
+            "last_disconnected_at",
+            "last_tick_at",
+            "last_started_at",
+            "last_stopped_at",
+        ):
+            _require_aware(getattr(self, name), name)
+        if self.subscription_count != len(self.subscription_rows):
+            raise ValueError("subscription_count must match subscription_rows")
+
+
+def unavailable_live_market_data_view() -> DashboardLiveMarketDataView:
+    return DashboardLiveMarketDataView(
+        available=False,
+        runtime_status="Live market data not configured",
+        ready=False,
+        running=False,
+        websocket_status="Offline",
+        connected=False,
+        configured_instruments=(),
+        configured_tokens=(),
+        subscription_count=0,
+        subscription_rows=(),
+        connection_count=0,
+        disconnection_count=0,
+        reconnect_count=0,
+        raw_tick_count=0,
+        normalized_tick_count=0,
+        delivered_tick_count=0,
+        rejected_tick_count=0,
+        start_count=0,
+        stop_count=0,
+        last_connected_at=None,
+        last_disconnected_at=None,
+        last_tick_at=None,
+        last_started_at=None,
+        last_stopped_at=None,
+        last_error=None,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,3 +228,4 @@ class DashboardView:
     strategies: tuple[DashboardStrategyView, ...]
     positions: tuple[DashboardPositionView, ...]
     journals: tuple[DashboardJournalView, ...]
+    live_market_data: DashboardLiveMarketDataView = field(default_factory=unavailable_live_market_data_view)
