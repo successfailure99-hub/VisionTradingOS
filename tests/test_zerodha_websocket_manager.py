@@ -32,6 +32,7 @@ class FakeTickerClient:
         self.modes = []
         self.fail_subscribe = None
         self.fail_unsubscribe = None
+        self.invoke_close_callback_on_close = False
 
     def set_callbacks(self, **callbacks):
         if self.callbacks is not None:
@@ -43,6 +44,8 @@ class FakeTickerClient:
 
     def close(self):
         self.close_calls += 1
+        if self.invoke_close_callback_on_close:
+            self.callbacks["on_close"](None, 1000, "closed")
 
     def subscribe(self, instrument_tokens):
         if self.fail_subscribe:
@@ -128,6 +131,76 @@ def test_disconnect_callbacks_reconnect_and_noreconnect():
     assert subject.snapshot().reconnect_count == 1
     client.callbacks["on_noreconnect"](None)
     assert subject.status is ZerodhaWebSocketStatus.ERROR
+
+
+def test_synchronous_on_close_during_client_close_counts_one_disconnect():
+    client = FakeTickerClient()
+    client.invoke_close_callback_on_close = True
+    subject = manager(client)
+    subject.connect()
+    client.callbacks["on_connect"](None, {})
+
+    snapshot = subject.disconnect()
+
+    assert snapshot.status is ZerodhaWebSocketStatus.DISCONNECTED
+    assert snapshot.disconnection_count == 1
+    assert snapshot.last_disconnected_at == NOW
+
+
+def test_asynchronous_on_close_after_disconnect_returns_does_not_count_twice():
+    client = FakeTickerClient()
+    subject = manager(client)
+    subject.connect()
+    client.callbacks["on_connect"](None, {})
+
+    snapshot = subject.disconnect()
+    first_disconnected_at = snapshot.last_disconnected_at
+    client.callbacks["on_close"](None, 1000, "closed")
+
+    assert subject.snapshot().disconnection_count == 1
+    assert subject.snapshot().last_disconnected_at == first_disconnected_at
+
+
+def test_manual_disconnect_with_no_callback_counts_once_and_double_disconnect_is_idempotent():
+    client = FakeTickerClient()
+    subject = manager(client)
+    subject.connect()
+    client.callbacks["on_connect"](None, {})
+
+    first = subject.disconnect()
+    second = subject.disconnect()
+
+    assert first.disconnection_count == 1
+    assert second.disconnection_count == 1
+    assert second.status is ZerodhaWebSocketStatus.DISCONNECTED
+
+
+def test_remote_on_close_counts_once_and_duplicate_callback_is_idempotent():
+    client = FakeTickerClient()
+    subject = manager(client)
+    subject.connect()
+    client.callbacks["on_connect"](None, {})
+
+    client.callbacks["on_close"](None, 1000, "closed")
+    first_disconnected_at = subject.snapshot().last_disconnected_at
+    client.callbacks["on_close"](None, 1000, "duplicate")
+
+    assert subject.snapshot().disconnection_count == 1
+    assert subject.snapshot().last_disconnected_at == first_disconnected_at
+
+
+def test_reconnect_followed_by_another_close_permits_new_disconnection_count():
+    client = FakeTickerClient()
+    subject = manager(client)
+    subject.connect()
+    client.callbacks["on_connect"](None, {})
+    client.callbacks["on_close"](None, 1000, "closed")
+
+    client.callbacks["on_connect"](None, {})
+    client.callbacks["on_close"](None, 1000, "closed again")
+
+    assert subject.snapshot().connection_count == 2
+    assert subject.snapshot().disconnection_count == 2
 
 
 def test_subscribe_unsubscribe_disconnected_and_connected_failure_paths():
