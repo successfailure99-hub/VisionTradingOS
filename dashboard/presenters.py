@@ -3,22 +3,29 @@ Pure dashboard presentation builders.
 """
 
 from application.lifecycle_manager import LifecycleSnapshot
+from application.live_market_data import LiveMarketDataRuntimeSnapshot
 from application.models import RuntimeSnapshot
 from dashboard.models import (
     DashboardAIView,
     DashboardJournalView,
+    DashboardLiveMarketDataView,
+    DashboardLiveSubscriptionView,
     DashboardMarketView,
     DashboardPositionView,
     DashboardRuntimeView,
     DashboardStrategyView,
     DashboardView,
+    unavailable_live_market_data_view,
 )
 
 
 MISSING = "-"
 
 
-def build_dashboard_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardView:
+def build_dashboard_view(
+    lifecycle_snapshot: LifecycleSnapshot,
+    live_market_data_snapshot: LiveMarketDataRuntimeSnapshot | None = None,
+) -> DashboardView:
     runtime_snapshots = lifecycle_snapshot.orchestrator_snapshot.runtime_snapshots
     return DashboardView(
         runtime=build_runtime_view(lifecycle_snapshot),
@@ -27,6 +34,52 @@ def build_dashboard_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardView
         strategies=tuple(build_strategy_view(snapshot) for snapshot in runtime_snapshots),
         positions=tuple(build_position_view(snapshot) for snapshot in runtime_snapshots),
         journals=tuple(build_journal_view(snapshot) for snapshot in runtime_snapshots),
+        live_market_data=build_live_market_data_view(live_market_data_snapshot),
+    )
+
+
+def build_live_market_data_view(
+    snapshot: LiveMarketDataRuntimeSnapshot | None,
+) -> DashboardLiveMarketDataView:
+    if snapshot is None:
+        return unavailable_live_market_data_view()
+    websocket = snapshot.websocket
+    subscriptions = tuple(getattr(websocket, "subscribed_instruments", ()) or ()) if websocket is not None else ()
+    rows = tuple(
+        DashboardLiveSubscriptionView(
+            instrument=_enum_text(subscription.instrument),
+            exchange=_enum_text(subscription.exchange),
+            instrument_token=subscription.instrument_token,
+            mode=_enum_text(subscription.mode),
+        )
+        for subscription in subscriptions
+    )
+    return DashboardLiveMarketDataView(
+        available=True,
+        runtime_status=_enum_text(snapshot.status),
+        ready=snapshot.ready,
+        running=snapshot.running,
+        websocket_status=_enum_text(getattr(websocket, "status", None)),
+        connected=bool(getattr(websocket, "connected", False)),
+        configured_instruments=tuple(_enum_text(instrument) for instrument in snapshot.configured_instruments),
+        configured_tokens=tuple(snapshot.configured_tokens),
+        subscription_count=len(rows),
+        subscription_rows=rows,
+        connection_count=getattr(websocket, "connection_count", 0),
+        disconnection_count=getattr(websocket, "disconnection_count", 0),
+        reconnect_count=getattr(websocket, "reconnect_count", 0),
+        raw_tick_count=getattr(websocket, "raw_tick_count", 0),
+        normalized_tick_count=getattr(websocket, "normalized_tick_count", 0),
+        delivered_tick_count=getattr(websocket, "delivered_tick_count", 0),
+        rejected_tick_count=getattr(websocket, "rejected_tick_count", 0),
+        start_count=snapshot.start_count,
+        stop_count=snapshot.stop_count,
+        last_connected_at=getattr(websocket, "last_connected_at", None),
+        last_disconnected_at=getattr(websocket, "last_disconnected_at", None),
+        last_tick_at=getattr(websocket, "last_tick_at", None),
+        last_started_at=snapshot.last_started_at,
+        last_stopped_at=snapshot.last_stopped_at,
+        last_error=_safe_error(snapshot.last_error or getattr(websocket, "last_error", None)),
     )
 
 
@@ -162,3 +215,11 @@ def _enum_text(value) -> str:
     if text.isupper():
         return text
     return text.replace("_", " ").title()
+
+
+def _safe_error(value) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return value.__class__.__name__
+    return value
