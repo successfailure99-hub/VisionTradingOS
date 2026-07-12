@@ -1,0 +1,3 @@
+"""
+Dashboard panel widgets.
+"""
