@@ -65,7 +65,8 @@ def configuration(auto_connect=False):
 
 def session_manager(expires_at=NOW + timedelta(hours=1)):
     manager = ZerodhaSessionManager(ZerodhaCredentials("api_key", "api_secret"), client=FakeAuthClient(), clock=lambda: NOW)
-    manager.restore_session(user_id="AB1234", access_token="access_token", authenticated_at=NOW, expires_at=expires_at)
+    authenticated_at = expires_at - timedelta(hours=1) if expires_at <= NOW else NOW
+    manager.restore_session(user_id="AB1234", access_token="access_token", authenticated_at=authenticated_at, expires_at=expires_at)
     return manager
 
 
