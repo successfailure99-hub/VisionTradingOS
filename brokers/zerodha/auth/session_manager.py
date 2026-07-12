@@ -200,7 +200,7 @@ class ZerodhaSessionManager:
         return _require_text(str(response.get("user_id", "")), "user_id")
 
     def _profile_user_id(self, profile: Mapping[str, object], *, required: bool = True) -> str:
-        raw_user_id = profile.get("user_id") or profile.get("user_shortname")
+        raw_user_id = profile.get("user_id")
         if raw_user_id is None and not required:
             return ""
         return _require_text(str(raw_user_id or ""), "profile user_id")
