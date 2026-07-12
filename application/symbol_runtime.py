@@ -25,7 +25,6 @@ from engines.risk.models import RiskDecisionState, RiskSnapshot
 from engines.risk.risk_engine import RiskEngine
 from engines.strategy.models import StrategyDecisionState, StrategySnapshot
 from engines.strategy.strategy_engine import StrategyEngine
-from engines.vwap.levels import VWAPLevels
 from engines.vwap.vwap_engine import VWAPEngine
 
 from application.enums import RuntimeInstrument, RuntimeStatus
