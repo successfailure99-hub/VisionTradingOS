@@ -106,9 +106,9 @@ def test_validate_requires_running_lifecycle_authenticated_session_and_matching_
     with pytest.raises(RuntimeError):
         stopped.validate()
 
-    expired_session = auth(NOW - timedelta(seconds=1))
-    with pytest.raises(RuntimeError):
-        runtime(session=expired_session)
+    expired_session_manager = auth(NOW - timedelta(seconds=1))
+    with pytest.raises(ValueError, match="expired"):
+        runtime(session=expired_session_manager)
 
     mismatch_config = config(sub(Instrument.BANKNIFTY, 102))
     with pytest.raises(ValueError):
