@@ -111,8 +111,13 @@ def test_validate_requires_running_lifecycle_authenticated_session_and_matching_
         runtime(session=expired_session_manager)
 
     mismatch_config = config(sub(Instrument.BANKNIFTY, 102))
-    with pytest.raises(ValueError):
-        runtime(configuration=mismatch_config)
+    mismatched_runtime, _ = runtime(configuration=mismatch_config)
+
+    with pytest.raises(
+        ValueError,
+        match="subscription instrument is not configured",
+    ):
+        mismatched_runtime.validate()
 
 
 def test_successful_validate_start_stop_restart_and_counters():
