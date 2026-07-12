@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QApplication
 
 from application.enums import RuntimeStatus
 from application.lifecycle_manager import ApplicationLifecycleManager
+from application.live_market_data import LiveMarketDataRuntime, LiveMarketDataRuntimeStatus
 from dashboard.main_window import VisionMainWindow
 
 
@@ -14,14 +15,22 @@ class DashboardApplication:
         self,
         lifecycle: ApplicationLifecycleManager,
         *,
+        live_market_data_runtime: LiveMarketDataRuntime | None = None,
         argv: list[str] | None = None,
         refresh_interval_ms: int = 500,
     ):
         if not isinstance(lifecycle, ApplicationLifecycleManager):
             raise TypeError("lifecycle must be an ApplicationLifecycleManager.")
+        if live_market_data_runtime is not None and not isinstance(live_market_data_runtime, LiveMarketDataRuntime):
+            raise TypeError("live_market_data_runtime must be a LiveMarketDataRuntime.")
         self._lifecycle = lifecycle
+        self._live_market_data_runtime = live_market_data_runtime
         self._qt_app = QApplication.instance() or QApplication(argv or [])
-        self._main_window = VisionMainWindow(lifecycle, refresh_interval_ms=refresh_interval_ms)
+        self._main_window = VisionMainWindow(
+            lifecycle,
+            live_market_data_runtime=live_market_data_runtime,
+            refresh_interval_ms=refresh_interval_ms,
+        )
         self._shutdown = False
 
     @property
@@ -31,6 +40,10 @@ class DashboardApplication:
     @property
     def main_window(self) -> VisionMainWindow:
         return self._main_window
+
+    @property
+    def live_market_data_runtime(self) -> LiveMarketDataRuntime | None:
+        return self._live_market_data_runtime
 
     def run(self) -> int:
         if self._lifecycle.status is not RuntimeStatus.RUNNING:
@@ -46,6 +59,29 @@ class DashboardApplication:
         if self._shutdown:
             return
         self._shutdown = True
+        first_error = None
         self._main_window.stop_refresh()
-        if self._lifecycle.status is RuntimeStatus.RUNNING:
-            self._lifecycle.stop()
+        try:
+            self._stop_live_runtime_if_needed()
+        except Exception as exc:
+            first_error = exc
+        try:
+            if self._lifecycle.status is RuntimeStatus.RUNNING:
+                self._lifecycle.stop()
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
+        if first_error is not None:
+            raise first_error
+
+    def _stop_live_runtime_if_needed(self) -> None:
+        runtime = self._live_market_data_runtime
+        if runtime is None:
+            return
+        if runtime.status in {
+            LiveMarketDataRuntimeStatus.STARTING,
+            LiveMarketDataRuntimeStatus.RUNNING,
+            LiveMarketDataRuntimeStatus.STOPPING,
+            LiveMarketDataRuntimeStatus.ERROR,
+        }:
+            runtime.stop()
