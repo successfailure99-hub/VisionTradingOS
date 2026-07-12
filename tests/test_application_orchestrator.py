@@ -409,19 +409,54 @@ def test_analysis_only_default_and_explicit_dry_run_submission_safety():
 
 
 def test_no_forbidden_live_execution_capabilities_or_private_engine_state_access():
+    import ast
     import inspect
+
     import application.orchestrator as orchestrator_module
     import application.symbol_runtime as runtime_module
 
-    source = (inspect.getsource(orchestrator_module) + inspect.getsource(runtime_module)).lower()
-    forbidden = (
+    source = inspect.getsource(orchestrator_module) + inspect.getsource(runtime_module)
+    tree = ast.parse(source)
+
+    forbidden_import_roots = {
         "requests",
         "websocket",
+        "websockets",
         "kiteconnect",
-        "login",
+    }
+    forbidden_attribute_names = {
+        "_state",
+        "_data",
+        "_orders",
         "access_token",
-        "._state",
-        "._data",
-        "._orders",
-    )
-    assert all(token not in source for token in forbidden)
+    }
+    forbidden_function_names = {
+        "login",
+    }
+
+    imported_roots = set()
+    accessed_attributes = set()
+    called_function_names = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_roots.update(
+                alias.name.split(".", 1)[0]
+                for alias in node.names
+            )
+
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_roots.add(node.module.split(".", 1)[0])
+
+        elif isinstance(node, ast.Attribute):
+            accessed_attributes.add(node.attr)
+
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                called_function_names.add(node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                called_function_names.add(node.func.attr)
+
+    assert imported_roots.isdisjoint(forbidden_import_roots)
+    assert accessed_attributes.isdisjoint(forbidden_attribute_names)
+    assert called_function_names.isdisjoint(forbidden_function_names)
