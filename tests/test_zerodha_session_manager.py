@@ -26,6 +26,8 @@ class FakeAuthClient:
         self.applied_tokens = []
         self.profile_calls = 0
         self.profile_user_id = "AB1234"
+        self.profile_user_shortname = None
+        self.generate_user_id = "AB1234"
         self.fail_generate = None
         self.fail_profile = None
         self.access_token = "access_token_123"
@@ -38,7 +40,7 @@ class FakeAuthClient:
         self.generate_calls.append((request_token, api_secret))
         if self.fail_generate:
             raise self.fail_generate
-        return {"access_token": self.access_token, "user_id": "AB1234"}
+        return {"access_token": self.access_token, "user_id": self.generate_user_id}
 
     def set_access_token(self, access_token):
         self.applied_tokens.append(access_token)
@@ -47,7 +49,12 @@ class FakeAuthClient:
         self.profile_calls += 1
         if self.fail_profile:
             raise self.fail_profile
-        return {"user_id": self.profile_user_id}
+        profile = {}
+        if self.profile_user_id is not None:
+            profile["user_id"] = self.profile_user_id
+        if self.profile_user_shortname is not None:
+            profile["user_shortname"] = self.profile_user_shortname
+        return profile
 
 
 def clock():
@@ -197,6 +204,77 @@ def test_restore_session_mismatch_fails_safely():
 
     assert subject.status is ZerodhaAuthStatus.ERROR
     assert subject.session is None
+
+
+def test_authentication_ignores_user_shortname_and_uses_response_user_id_when_profile_user_id_absent():
+    client = FakeAuthClient()
+    client.profile_user_id = None
+    client.profile_user_shortname = "Display Name"
+    client.generate_user_id = "GENERATED123"
+    subject = manager(client)
+
+    snapshot = authenticate(subject)
+
+    assert snapshot.status is ZerodhaAuthStatus.AUTHENTICATED
+    assert snapshot.user_id == "GENERATED123"
+    assert subject.session.user_id == "GENERATED123"
+
+
+def test_authentication_prefers_profile_user_id_over_response_user_id():
+    client = FakeAuthClient()
+    client.profile_user_id = "PROFILE123"
+    client.profile_user_shortname = "Display Name"
+    client.generate_user_id = "GENERATED123"
+    subject = manager(client)
+
+    snapshot = authenticate(subject)
+
+    assert snapshot.user_id == "PROFILE123"
+    assert subject.session.user_id == "PROFILE123"
+
+
+def test_restore_session_rejects_profile_containing_only_user_shortname():
+    client = FakeAuthClient()
+    client.profile_user_id = None
+    client.profile_user_shortname = "Display Name"
+    subject = manager(client)
+
+    with pytest.raises(ValueError):
+        subject.restore_session(
+            user_id="AB1234",
+            access_token="restored_token",
+            authenticated_at=NOW,
+        )
+
+    assert subject.status is ZerodhaAuthStatus.ERROR
+    assert subject.session is None
+
+
+def test_validate_session_rejects_profile_containing_only_user_shortname_and_clears_session():
+    client = FakeAuthClient()
+    subject = manager(client)
+    authenticate(subject)
+    client.profile_user_id = None
+    client.profile_user_shortname = "Display Name"
+
+    with pytest.raises(ValueError):
+        subject.validate_session()
+
+    assert subject.status is ZerodhaAuthStatus.ERROR
+    assert subject.session is None
+
+
+def test_user_shortname_never_becomes_snapshot_user_id():
+    client = FakeAuthClient()
+    client.profile_user_id = None
+    client.profile_user_shortname = "Display Name"
+    client.generate_user_id = "GENERATED123"
+    subject = manager(client)
+
+    snapshot = authenticate(subject)
+
+    assert snapshot.user_id == "GENERATED123"
+    assert snapshot.user_id != "Display Name"
 
 
 def test_explicit_expired_session_transitions_to_expired():
