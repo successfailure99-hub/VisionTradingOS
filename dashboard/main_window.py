@@ -6,9 +6,11 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QSplitter, QTabWidget, QVBoxLayout, QWidget
 
 from application.lifecycle_manager import ApplicationLifecycleManager
+from application.live_market_data import LiveMarketDataRuntime
 from dashboard.models import DashboardView
 from dashboard.panels.ai_panel import AIPanel
 from dashboard.panels.journal_panel import JournalPanel
+from dashboard.panels.live_market_data_panel import LiveMarketDataPanel
 from dashboard.panels.market_panel import MarketPanel
 from dashboard.panels.position_panel import PositionPanel
 from dashboard.panels.runtime_panel import RuntimePanel
@@ -21,17 +23,22 @@ class VisionMainWindow(QMainWindow):
         self,
         lifecycle: ApplicationLifecycleManager,
         *,
+        live_market_data_runtime: LiveMarketDataRuntime | None = None,
         refresh_interval_ms: int = 500,
         parent=None,
     ):
         if not isinstance(lifecycle, ApplicationLifecycleManager):
             raise TypeError("lifecycle must be an ApplicationLifecycleManager.")
+        if live_market_data_runtime is not None and not isinstance(live_market_data_runtime, LiveMarketDataRuntime):
+            raise TypeError("live_market_data_runtime must be a LiveMarketDataRuntime.")
         if not isinstance(refresh_interval_ms, int) or refresh_interval_ms <= 0:
             raise ValueError("refresh_interval_ms must be a positive integer.")
         super().__init__(parent)
         self._lifecycle = lifecycle
+        self._live_market_data_runtime = live_market_data_runtime
         self._current_view: DashboardView | None = None
         self._runtime_panel = RuntimePanel()
+        self._live_market_data_panel = LiveMarketDataPanel()
         self._tabs = QTabWidget()
         self._instrument_panels = {}
         self._timer = QTimer(self)
@@ -53,13 +60,19 @@ class VisionMainWindow(QMainWindow):
 
     def refresh(self) -> DashboardView:
         lifecycle_snapshot = self._lifecycle.snapshot()
-        view = build_dashboard_view(lifecycle_snapshot)
+        live_snapshot = (
+            self._live_market_data_runtime.snapshot()
+            if self._live_market_data_runtime is not None
+            else None
+        )
+        view = build_dashboard_view(lifecycle_snapshot, live_snapshot)
         self.render(view)
         self._current_view = view
         return view
 
     def render(self, view: DashboardView) -> None:
         self._runtime_panel.render(view.runtime)
+        self._live_market_data_panel.render(view.live_market_data)
         self._sync_tabs(view)
         for index, market in enumerate(view.markets):
             panels = self._instrument_panels[market.symbol]
@@ -81,6 +94,7 @@ class VisionMainWindow(QMainWindow):
         root = QWidget()
         layout = QVBoxLayout(root)
         layout.addWidget(self._runtime_panel)
+        layout.addWidget(self._live_market_data_panel)
         layout.addWidget(self._tabs, 1)
         self.setCentralWidget(root)
 
