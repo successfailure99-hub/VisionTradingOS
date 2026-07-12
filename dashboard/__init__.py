@@ -9,12 +9,15 @@ __all__ = [
     "VisionMainWindow",
     "DashboardView",
     "DashboardRuntimeView",
+    "DashboardLiveMarketDataView",
+    "DashboardLiveSubscriptionView",
     "DashboardMarketView",
     "DashboardAIView",
     "DashboardStrategyView",
     "DashboardPositionView",
     "DashboardJournalView",
     "build_dashboard_view",
+    "build_live_market_data_view",
 ]
 
 
@@ -31,9 +34,15 @@ def __getattr__(name):
         from dashboard.presenters import build_dashboard_view
 
         return build_dashboard_view
+    if name == "build_live_market_data_view":
+        from dashboard.presenters import build_live_market_data_view
+
+        return build_live_market_data_view
     if name in {
         "DashboardView",
         "DashboardRuntimeView",
+        "DashboardLiveMarketDataView",
+        "DashboardLiveSubscriptionView",
         "DashboardMarketView",
         "DashboardAIView",
         "DashboardStrategyView",
