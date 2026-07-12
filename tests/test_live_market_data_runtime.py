@@ -10,7 +10,7 @@ import pytest
 from application.bootstrap import ApplicationBootstrap
 from application.live_market_data import LiveMarketDataConfiguration, LiveMarketDataRuntime, LiveMarketDataRuntimeStatus
 from brokers.zerodha.auth import ZerodhaCredentials, ZerodhaSessionManager
-from brokers.zerodha.market_data import ZerodhaInstrumentSubscription, ZerodhaWebSocketManager
+from brokers.zerodha.market_data import ZerodhaInstrumentSubscription, ZerodhaWebSocketStatus, ZerodhaWebSocketManager
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
 
@@ -67,7 +67,8 @@ def config(subscription=sub()):
 
 def auth(expires_at=NOW + timedelta(hours=1)):
     manager = ZerodhaSessionManager(ZerodhaCredentials("api_key", "api_secret"), client=FakeAuthClient(), clock=lambda: NOW)
-    manager.restore_session(user_id="AB1234", access_token="access_secret", authenticated_at=NOW, expires_at=expires_at)
+    authenticated_at = expires_at - timedelta(hours=1) if expires_at <= NOW else NOW
+    manager.restore_session(user_id="AB1234", access_token="access_secret", authenticated_at=authenticated_at, expires_at=expires_at)
     return manager
 
 
