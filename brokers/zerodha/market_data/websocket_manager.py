@@ -70,6 +70,7 @@ class ZerodhaWebSocketManager:
         self._last_disconnected_at: datetime | None = None
         self._last_tick_at: datetime | None = None
         self._last_error: str | None = None
+        self._disconnect_count_available = False
         self._client.set_callbacks(
             on_connect=self._on_connect,
             on_ticks=self._on_ticks,
@@ -107,7 +108,6 @@ class ZerodhaWebSocketManager:
             if self._status in {ZerodhaWebSocketStatus.CREATED, ZerodhaWebSocketStatus.DISCONNECTED}:
                 self._status = ZerodhaWebSocketStatus.DISCONNECTED
                 return self.snapshot()
-            was_active = self._is_active_status()
             self._status = ZerodhaWebSocketStatus.DISCONNECTING
             try:
                 self._client.close()
@@ -116,9 +116,7 @@ class ZerodhaWebSocketManager:
                 self._last_error = self._safe_error(exc)
                 raise
             self._status = ZerodhaWebSocketStatus.DISCONNECTED
-            if was_active:
-                self._disconnection_count += 1
-                self._last_disconnected_at = self._now()
+            self._account_disconnect()
             return self.snapshot()
 
     def subscribe(
@@ -258,6 +256,7 @@ class ZerodhaWebSocketManager:
         with self._lock:
             self._status = ZerodhaWebSocketStatus.CONNECTED
             self._connection_count += 1
+            self._disconnect_count_available = True
             self._last_connected_at = self._now()
             self._last_error = None
             tokens = list(self._registry.tokens())
@@ -276,11 +275,8 @@ class ZerodhaWebSocketManager:
 
     def _on_close(self, ws, code, reason) -> None:
         with self._lock:
-            was_active = self._is_active_status()
             self._status = ZerodhaWebSocketStatus.DISCONNECTED
-            if was_active:
-                self._disconnection_count += 1
-                self._last_disconnected_at = self._now()
+            self._account_disconnect()
 
     def _on_error(self, ws, code, reason) -> None:
         with self._lock:
@@ -332,6 +328,12 @@ class ZerodhaWebSocketManager:
             ZerodhaWebSocketStatus.RECONNECTING,
             ZerodhaWebSocketStatus.DISCONNECTING,
         }
+
+    def _account_disconnect(self) -> None:
+        if self._disconnect_count_available:
+            self._disconnection_count += 1
+            self._last_disconnected_at = self._now()
+            self._disconnect_count_available = False
 
     def _safe_error(self, exc: Exception) -> str:
         message = f"{exc.__class__.__name__}: {exc}"
