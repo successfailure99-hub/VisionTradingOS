@@ -88,8 +88,8 @@ class HistoricalWarmupCoordinator:
         previous_day_end_at: datetime | None = None,
     ) -> HistoricalWarmupSnapshot:
         with self._lock:
-            self._begin_operation(HistoricalWarmupOperation.WARMUP)
             try:
+                self._begin_operation(HistoricalWarmupOperation.WARMUP)
                 self._require_running()
                 self._validate_range(start_at, end_at)
                 if (previous_day_start_at is None) != (previous_day_end_at is None):
@@ -111,7 +111,7 @@ class HistoricalWarmupCoordinator:
                 self._finish_with_results(tuple(results))
                 return self._snapshot_unlocked()
             except Exception as exc:
-                self._finish_operation_error(exc)
+                self._record_operation_error(exc)
                 raise
 
     def backfill(
@@ -121,8 +121,8 @@ class HistoricalWarmupCoordinator:
         end_at: datetime,
     ) -> HistoricalWarmupSnapshot:
         with self._lock:
-            self._begin_operation(HistoricalWarmupOperation.BACKFILL)
             try:
+                self._begin_operation(HistoricalWarmupOperation.BACKFILL)
                 self._require_running()
                 if not isinstance(instrument, Instrument):
                     raise TypeError("instrument must be Instrument")
@@ -177,7 +177,7 @@ class HistoricalWarmupCoordinator:
                 self._finish_with_results((instrument_result,))
                 return self._snapshot_unlocked()
             except Exception as exc:
-                self._finish_operation_error(exc)
+                self._record_operation_error(exc)
                 raise
 
     def snapshot(self) -> HistoricalWarmupSnapshot:
@@ -297,17 +297,19 @@ class HistoricalWarmupCoordinator:
         self._status = HistoricalWarmupStatus.VALIDATING
         self._operation = operation
         self._operation_count += 1
-        self._started_at = self._now()
         self._completed_at = None
         self._last_error = None
+        started_at = self._now()
+        self._started_at = started_at
         self._results = ()
 
     def _finish_with_results(self, results: tuple[HistoricalWarmupInstrumentResult, ...]) -> None:
-        self._results = results
+        completed_at = self._now()
         completed = tuple(result.instrument for result in results if result.completed)
         failed = tuple(result.instrument for result in results if not result.completed)
         seeded = sum(result.seed_result.accepted_count for result in results)
         fetched = sum(result.historical_result.normalized_count for result in results)
+        self._results = results
         self._total_fetched_candles += fetched
         self._total_seeded_candles += seeded
         if failed and completed:
@@ -324,13 +326,16 @@ class HistoricalWarmupCoordinator:
         else:
             self._successful_operation_count += 1
             self._last_error = None
-        self._completed_at = self._now()
+        self._completed_at = completed_at
 
-    def _finish_operation_error(self, exc: Exception) -> None:
+    def _record_operation_error(self, exc: Exception) -> None:
         self._status = HistoricalWarmupStatus.ERROR
         self._failed_operation_count += 1
         self._last_error = _safe_error(exc)
-        self._completed_at = self._now()
+        try:
+            self._completed_at = self._now()
+        except Exception:
+            self._completed_at = None
 
     def _snapshot_unlocked(self) -> HistoricalWarmupSnapshot:
         completed = tuple(result.instrument for result in self._results if result.completed)

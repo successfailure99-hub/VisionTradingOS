@@ -37,6 +37,17 @@ class FakeHistoricalClient:
         return self.responses.pop(0) if self.responses else []
 
 
+class SequenceClock:
+    def __init__(self, *values):
+        self.values = list(values)
+
+    def __call__(self):
+        value = self.values.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
 def raw(offset=0, close=101.0):
     at = TS + timedelta(minutes=offset)
     return dict(date=at, open=100.0, high=103.0, low=99.0, close=close, volume=10)
@@ -47,10 +58,10 @@ def resolution(instrument=Instrument.NIFTY, token=101):
     return ZerodhaInstrumentResolution(instrument, record, ZerodhaInstrumentSubscription(token, instrument, Exchange.NSE))
 
 
-def coordinator(client=None, config=None):
+def coordinator(client=None, config=None, clock=None):
     lifecycle = ApplicationBootstrap().create_application()
     manager = ZerodhaHistoricalDataManager(client=client or FakeHistoricalClient([[raw(0), raw(1)]]), clock=lambda: TS)
-    item = HistoricalWarmupCoordinator(lifecycle=lifecycle, historical_manager=manager, resolutions=(resolution(),), configuration=config, clock=lambda: TS)
+    item = HistoricalWarmupCoordinator(lifecycle=lifecycle, historical_manager=manager, resolutions=(resolution(),), configuration=config, clock=clock or (lambda: TS))
     return lifecycle, manager, item
 
 
@@ -115,3 +126,74 @@ def test_previous_day_bounds_must_be_supplied_together_and_failures_are_safe():
     assert snapshot.status is HistoricalWarmupStatus.ERROR
     assert "{" not in snapshot.last_error
     assert "secret" not in snapshot.last_error
+
+
+@pytest.mark.parametrize(
+    ("clock_value", "expected_error"),
+    (
+        ("not-a-datetime", TypeError),
+        (datetime(2026, 7, 10, 9, 16), ValueError),
+        (RuntimeError("startup clock failed {'secret': 'payload'}"), RuntimeError),
+    ),
+)
+def test_warmup_startup_clock_failure_records_error_without_leaving_validating(clock_value, expected_error):
+    lifecycle, _, item = coordinator(clock=SequenceClock(clock_value))
+    lifecycle.start()
+
+    if isinstance(clock_value, Exception):
+        with pytest.raises(expected_error) as exc:
+            item.warm_up(start_at=TS, end_at=TS + timedelta(minutes=1))
+        assert exc.value is clock_value
+    else:
+        with pytest.raises(expected_error):
+            item.warm_up(start_at=TS, end_at=TS + timedelta(minutes=1))
+
+    snapshot = item.snapshot()
+    assert snapshot.status is HistoricalWarmupStatus.ERROR
+    assert snapshot.operation_count == 1
+    assert snapshot.failed_operation_count == 1
+    assert snapshot.successful_operation_count == 0
+    assert snapshot.started_at is None
+    assert snapshot.results == ()
+    assert snapshot.last_error is not None
+    assert "{" not in snapshot.last_error
+    assert snapshot.status is not HistoricalWarmupStatus.VALIDATING
+
+
+def test_warmup_completion_clock_failure_records_error_and_preserves_runtime_state():
+    clock_error = RuntimeError("completion clock failed {'secret': 'payload'}")
+    lifecycle, _, item = coordinator(FakeHistoricalClient([[raw(0)]]), clock=SequenceClock(TS, clock_error))
+    lifecycle.start()
+
+    with pytest.raises(RuntimeError) as exc:
+        item.warm_up(start_at=TS, end_at=TS + timedelta(minutes=1))
+
+    assert exc.value is clock_error
+    snapshot = item.snapshot()
+    assert snapshot.status is HistoricalWarmupStatus.ERROR
+    assert snapshot.operation_count == 1
+    assert snapshot.failed_operation_count == 1
+    assert snapshot.successful_operation_count == 0
+    assert snapshot.results == ()
+    assert snapshot.last_error == "RuntimeError: completion clock failed"
+    assert len(lifecycle.orchestrator.get_candle_history("NIFTY")) == 1
+
+
+def test_warmup_nested_failure_preserves_original_exception_when_error_clock_fails():
+    lifecycle, _, item = coordinator(clock=SequenceClock(TS, RuntimeError("error clock failed")))
+    lifecycle.start()
+
+    with pytest.raises(ValueError, match="previous-day bounds"):
+        item.warm_up(
+            start_at=TS,
+            end_at=TS + timedelta(minutes=1),
+            previous_day_start_at=TS - timedelta(days=1),
+        )
+
+    snapshot = item.snapshot()
+    assert snapshot.status is HistoricalWarmupStatus.ERROR
+    assert snapshot.operation_count == 1
+    assert snapshot.failed_operation_count == 1
+    assert snapshot.successful_operation_count == 0
+    assert snapshot.last_error == "ValueError: previous-day bounds must be supplied together"
+    assert snapshot.completed_at is None
