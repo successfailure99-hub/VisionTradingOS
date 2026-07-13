@@ -8,6 +8,7 @@ from application.symbol_runtime import SymbolRuntime
 from brokers.zerodha.adapter import ZerodhaBrokerAdapter
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.enums.instrument import Instrument
+from core.models.candle import Candle
 from core.models.daily_ohlc import DailyOHLC
 from core.models.tick import Tick
 from engines.market_data.market_data_engine import MarketDataEngine
@@ -92,6 +93,25 @@ class ApplicationOrchestrator:
     def process_daily_ohlc(self, instrument: str | RuntimeInstrument, daily_ohlc: DailyOHLC):
         self._require_running()
         return self.get_runtime(instrument).process_daily_ohlc(daily_ohlc)
+
+    def warm_up_candles(
+        self,
+        instrument: str | RuntimeInstrument,
+        candles: tuple[Candle, ...],
+        *,
+        replace: bool = False,
+    ) -> tuple[tuple[Candle, ...], RuntimeSnapshot]:
+        self._require_running()
+        runtime = self.get_runtime(instrument)
+        accepted = runtime.warm_up_candles(candles, replace=replace)
+        return accepted, runtime.snapshot(self._latest_journal_record_for(runtime.instrument))
+
+    def get_candle_history(
+        self,
+        instrument: str | RuntimeInstrument,
+    ) -> tuple[Candle, ...]:
+        runtime = self.get_runtime(instrument)
+        return runtime.get_candle_history()
 
     def process_option_chain(self, instrument: str | RuntimeInstrument, snapshot):
         self._require_running()
