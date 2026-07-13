@@ -4,6 +4,7 @@ Per-symbol Application Orchestrator runtime.
 
 from core.enums.instrument import Instrument
 from core.enums.timeframe import TimeFrame
+from core.models.candle import Candle
 from core.models.daily_ohlc import DailyOHLC
 from core.models.tick import Tick
 from engines.ai_reasoning.ai_reasoning_engine import AIReasoningEngine
@@ -111,6 +112,46 @@ class SymbolRuntime:
         cpr = self.cpr_engine.update(daily_ohlc)
         camarilla = self.camarilla_engine.update(daily_ohlc)
         return cpr, camarilla
+
+    def warm_up_candles(
+        self,
+        candles: tuple[Candle, ...],
+        *,
+        replace: bool = False,
+    ) -> tuple[Candle, ...]:
+        self._require_running()
+        normalized = tuple(candles)
+        for candle in normalized:
+            if not isinstance(candle, Candle):
+                raise TypeError("warm-up candles must contain Candle values.")
+            if candle.symbol != self._core_instrument.value:
+                raise ValueError("Warm-up candle instrument does not match SymbolRuntime.")
+            if candle.timeframe != TimeFrame.ONE_MINUTE.value:
+                raise ValueError("Historical warm-up supports only one-minute candles.")
+
+        accepted = self.candle_engine.seed_history(
+            self._core_instrument,
+            normalized,
+            replace=replace,
+        )
+
+        if replace and accepted:
+            self.price_action_engine.reset()
+            for candle in self.candle_engine.get_history(self._core_instrument):
+                self.price_action_engine.process(candle)
+        else:
+            for candle in accepted:
+                self.price_action_engine.process(candle)
+
+        self._last_processed_history_count = len(
+            self.candle_engine.get_history(self._core_instrument)
+        )
+        if accepted:
+            self._updated_at = accepted[-1].end_time
+        return accepted
+
+    def get_candle_history(self) -> tuple[Candle, ...]:
+        return tuple(self.candle_engine.get_history(self._core_instrument))
 
     def process_option_chain(self, snapshot: OptionChainSnapshot) -> OptionChainState:
         self._require_running()
