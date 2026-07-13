@@ -42,8 +42,10 @@ def test_seed_empty_chronological_sort_duplicates_replace_and_events():
     replacement = engine.seed_history(Instrument.NIFTY, (candle(4), candle(3)), replace=True)
     assert replacement == (candle(3), candle(4))
     assert engine.get_history(Instrument.NIFTY) == [candle(3), candle(4)]
-    with pytest.raises(AttributeError):
+    assert isinstance(accepted, tuple)
+    with pytest.raises(TypeError, match="tuple"):
         accepted[0] = candle(9)
+    assert engine.get_history(Instrument.NIFTY) == [candle(3), candle(4)]
 
 
 def test_seed_rejects_invalid_conflicts_overlap_and_preserves_other_instruments():

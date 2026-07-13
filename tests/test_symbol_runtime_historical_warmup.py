@@ -53,5 +53,8 @@ def test_seeds_price_action_idempotently_and_leaves_live_state_untouched():
     assert snapshot.risk is None
     assert snapshot.latest_order is None
     assert item.warm_up_candles((candle(0), candle(1))) == ()
-    with pytest.raises(AttributeError):
-        item.get_candle_history()[0] = candle(9)
+    history = item.get_candle_history()
+    assert isinstance(history, tuple)
+    with pytest.raises(TypeError, match="tuple"):
+        history[0] = candle(9)
+    assert item.get_candle_history() == accepted
