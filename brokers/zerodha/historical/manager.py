@@ -61,8 +61,8 @@ class ZerodhaHistoricalDataManager:
             self._status = ZerodhaHistoricalStatus.FETCHING
             self._fetch_count += 1
             self._last_request = request
-            self._last_started_at = self._now()
             try:
+                self._last_started_at = self._now()
                 result = self._fetch_unlocked(request)
             except Exception as exc:
                 self._status = ZerodhaHistoricalStatus.ERROR
