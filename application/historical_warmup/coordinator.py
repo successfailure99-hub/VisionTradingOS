@@ -132,8 +132,22 @@ class HistoricalWarmupCoordinator:
                 if not history:
                     raise ValueError("No closed candle history exists; call warm_up() before backfill.")
                 start_at = history[-1].end_time
-                if end_at <= start_at:
+                if end_at < start_at:
                     raise ValueError("end_at must be later than the latest closed candle")
+                if end_at == start_at:
+                    result = self._empty_result(resolution, history[-1].start_time, end_at)
+                    snapshot = self._lifecycle.orchestrator.get_runtime(instrument.value).snapshot()
+                    instrument_result = self._make_instrument_result(
+                        instrument=instrument,
+                        historical_result=result,
+                        requested_candles=(),
+                        accepted=(),
+                        runtime_snapshot=snapshot,
+                        daily_ohlc=None,
+                        error=None,
+                    )
+                    self._finish_with_results((instrument_result,))
+                    return self._snapshot_unlocked()
                 self._status = HistoricalWarmupStatus.FETCHING
                 result = self._historical_manager.fetch_resolution(
                     resolution,
