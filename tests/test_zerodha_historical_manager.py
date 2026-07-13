@@ -37,6 +37,17 @@ class FakeClient:
         return self.responses.pop(0) if self.responses else []
 
 
+class SequenceClock:
+    def __init__(self, *values):
+        self.values = list(values)
+
+    def __call__(self):
+        value = self.values.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
 def test_initial_fetch_success_counters_gap_duplicate_and_flags():
     client = FakeClient()
     manager = ZerodhaHistoricalDataManager(client=client, clock=lambda: NOW)
@@ -95,3 +106,64 @@ def test_invalid_response_fetch_resolution_and_multiple_chunks():
     manager._client = FakeClient([[raw()]])
     result = manager.fetch_resolution(resolution, timeframe=TimeFrame.FIVE_MINUTES, start_at=NOW, end_at=NOW + timedelta(minutes=5))
     assert result.request.instrument_token == 101
+
+
+@pytest.mark.parametrize(
+    ("bad_clock_value", "expected_error"),
+    (
+        ("not-a-datetime", TypeError),
+        (datetime(2026, 7, 12, 9, 16), ValueError),
+        (RuntimeError("clock failed {'secret': 'payload'}"), RuntimeError),
+    ),
+)
+def test_startup_clock_failure_enters_error_and_preserves_previous_state(bad_clock_value, expected_error):
+    clock = SequenceClock(NOW, NOW + timedelta(seconds=1), bad_clock_value)
+    manager = ZerodhaHistoricalDataManager(client=FakeClient([[raw()]]), clock=clock)
+    previous_result = manager.fetch(request(NOW + timedelta(minutes=5)))
+    previous_snapshot = manager.snapshot()
+    attempted_request = request(NOW + timedelta(minutes=10))
+
+    if isinstance(bad_clock_value, Exception):
+        with pytest.raises(expected_error) as exc:
+            manager.fetch(attempted_request)
+        assert exc.value is bad_clock_value
+    else:
+        with pytest.raises(expected_error):
+            manager.fetch(attempted_request)
+
+    snapshot = manager.snapshot()
+    assert snapshot.status is ZerodhaHistoricalStatus.ERROR
+    assert snapshot.fetch_count == 2
+    assert snapshot.failed_fetch_count == 1
+    assert snapshot.successful_fetch_count == 1
+    assert snapshot.last_request is attempted_request
+    assert snapshot.last_result is previous_result
+    assert snapshot.last_started_at == previous_snapshot.last_started_at
+    assert snapshot.last_completed_at == previous_snapshot.last_completed_at
+    assert snapshot.total_source_records == previous_snapshot.total_source_records
+    assert snapshot.total_normalized_candles == previous_snapshot.total_normalized_candles
+    assert snapshot.last_error is not None
+    assert "{" not in snapshot.last_error
+    assert snapshot.status is not ZerodhaHistoricalStatus.FETCHING
+
+
+def test_completion_clock_failure_enters_error_without_committing_partial_result():
+    clock_error = RuntimeError("completion clock failed {'raw': 'payload'}")
+    manager = ZerodhaHistoricalDataManager(client=FakeClient([[raw()]]), clock=SequenceClock(NOW, clock_error))
+
+    with pytest.raises(RuntimeError) as exc:
+        manager.fetch(request(NOW + timedelta(minutes=5)))
+
+    assert exc.value is clock_error
+    snapshot = manager.snapshot()
+    assert snapshot.status is ZerodhaHistoricalStatus.ERROR
+    assert snapshot.fetch_count == 1
+    assert snapshot.failed_fetch_count == 1
+    assert snapshot.successful_fetch_count == 0
+    assert snapshot.total_source_records == 0
+    assert snapshot.total_normalized_candles == 0
+    assert snapshot.last_request == request(NOW + timedelta(minutes=5))
+    assert snapshot.last_result is None
+    assert snapshot.last_started_at == NOW
+    assert snapshot.last_completed_at is None
+    assert snapshot.last_error == "RuntimeError: completion clock failed"
