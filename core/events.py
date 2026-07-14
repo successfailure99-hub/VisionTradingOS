@@ -64,6 +64,8 @@ OPTION_CHAIN_READY = "option_chain_ready"
 # ==================================================
 
 AI_DECISION_READY = "ai_decision_ready"
+AI_REASONING_V2_UPDATED = "ai_reasoning_v2_updated"
+AI_REASONING_V2_READY = "ai_reasoning_v2_ready"
 
 # ==================================================
 # Strategy Events
