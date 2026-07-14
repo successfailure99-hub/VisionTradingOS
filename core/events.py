@@ -72,6 +72,8 @@ AI_REASONING_V2_READY = "ai_reasoning_v2_ready"
 # ==================================================
 
 STRATEGY_DECISION_READY = "strategy_decision_ready"
+STRATEGY_DECISION_V2_UPDATED = "strategy_decision_v2_updated"
+STRATEGY_DECISION_V2_READY = "strategy_decision_v2_ready"
 
 # ==================================================
 # Risk Management Events
