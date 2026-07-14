@@ -84,6 +84,19 @@ RISK_MANAGEMENT_V2_UPDATED = "risk_management_v2_updated"
 RISK_MANAGEMENT_V2_READY = "risk_management_v2_ready"
 
 # ==================================================
+# Execution Runtime Events
+# ==================================================
+
+EXECUTION_RUNTIME_V1_UPDATED = "execution_runtime_v1_updated"
+EXECUTION_INTENT_CREATED = "execution_intent_created"
+EXECUTION_DRY_RUN_SUBMITTED = "execution_dry_run_submitted"
+EXECUTION_DRY_RUN_ACKNOWLEDGED = "execution_dry_run_acknowledged"
+EXECUTION_DRY_RUN_PARTIALLY_FILLED = "execution_dry_run_partially_filled"
+EXECUTION_DRY_RUN_FILLED = "execution_dry_run_filled"
+EXECUTION_DRY_RUN_CANCELLED = "execution_dry_run_cancelled"
+EXECUTION_DRY_RUN_REJECTED = "execution_dry_run_rejected"
+
+# ==================================================
 # Order Management Events
 # ==================================================
 
