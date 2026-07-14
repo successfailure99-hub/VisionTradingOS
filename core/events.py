@@ -113,6 +113,13 @@ ORDER_REJECTED = "order_rejected"
 POSITION_OPENED = "position_opened"
 POSITION_UPDATED = "position_updated"
 POSITION_CLOSED = "position_closed"
+POSITION_MANAGEMENT_V1_UPDATED = "position_management_v1_updated"
+POSITION_OPENED_DRY_RUN = "position_opened_dry_run"
+POSITION_PRICE_UPDATED = "position_price_updated"
+POSITION_PARTIALLY_CLOSED_DRY_RUN = "position_partially_closed_dry_run"
+POSITION_CLOSED_DRY_RUN = "position_closed_dry_run"
+POSITION_INVALIDATED_DRY_RUN = "position_invalidated_dry_run"
+POSITION_OBJECTIVE_REACHED = "position_objective_reached"
 
 # ==================================================
 # Trade Journal Events
