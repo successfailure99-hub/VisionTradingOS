@@ -43,6 +43,8 @@ VWAP_UPDATED = "vwap_updated"
 # ==================================================
 
 MARKET_CONTEXT_UPDATED = "market_context_updated"
+MARKET_CONTEXT_V2_UPDATED = "market_context_v2_updated"
+MARKET_CONTEXT_V2_READY = "market_context_v2_ready"
 
 # ==================================================
 # Price Action Events
