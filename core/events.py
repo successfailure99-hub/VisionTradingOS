@@ -131,6 +131,11 @@ TRADE_LIFECYCLE_STAGE_CHANGED = "trade_lifecycle_stage_changed"
 TRADE_LIFECYCLE_BLOCKED = "trade_lifecycle_blocked"
 TRADE_LIFECYCLE_POSITION_OPENED = "trade_lifecycle_position_opened"
 TRADE_LIFECYCLE_POSITION_CLOSED = "trade_lifecycle_position_closed"
+TRADE_LIFECYCLE_RUNTIME_INTEGRATION_V1_UPDATED = "trade_lifecycle_runtime_integration_v1_updated"
+TRADE_LIFECYCLE_RUNTIME_INTEGRATION_V1_READY = "trade_lifecycle_runtime_integration_v1_ready"
+TRADE_LIFECYCLE_CONTEXT_ROUTED = "trade_lifecycle_context_routed"
+TRADE_LIFECYCLE_POSITION_PRICE_ROUTED = "trade_lifecycle_position_price_routed"
+TRADE_LIFECYCLE_RUNTIME_INTEGRATION_ERROR = "trade_lifecycle_runtime_integration_error"
 
 # ==================================================
 # Trade Journal Events
