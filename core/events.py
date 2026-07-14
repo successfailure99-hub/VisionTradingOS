@@ -80,6 +80,8 @@ STRATEGY_DECISION_V2_READY = "strategy_decision_v2_ready"
 # ==================================================
 
 RISK_UPDATED = "risk_updated"
+RISK_MANAGEMENT_V2_UPDATED = "risk_management_v2_updated"
+RISK_MANAGEMENT_V2_READY = "risk_management_v2_ready"
 
 # ==================================================
 # Order Management Events
