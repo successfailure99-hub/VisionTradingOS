@@ -146,6 +146,11 @@ TRADE_JOURNAL_V1_UPDATED = "trade_journal_v1_updated"
 TRADE_JOURNAL_ENTRY_RECORDED = "trade_journal_entry_recorded"
 TRADE_JOURNAL_DUPLICATE_SUPPRESSED = "trade_journal_duplicate_suppressed"
 TRADE_PERFORMANCE_ANALYTICS_UPDATED = "trade_performance_analytics_updated"
+TRADE_JOURNAL_RUNTIME_INTEGRATION_V1_UPDATED = "trade_journal_runtime_integration_v1_updated"
+TRADE_JOURNAL_RUNTIME_INTEGRATION_V1_READY = "trade_journal_runtime_integration_v1_ready"
+TRADE_JOURNAL_LIFECYCLE_ROUTED = "trade_journal_lifecycle_routed"
+TRADE_JOURNAL_TRADE_RECORDED = "trade_journal_trade_recorded"
+TRADE_JOURNAL_RUNTIME_INTEGRATION_ERROR = "trade_journal_runtime_integration_error"
 
 # ==================================================
 # Alert & Notification Events
