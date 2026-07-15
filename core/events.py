@@ -142,6 +142,10 @@ TRADE_LIFECYCLE_RUNTIME_INTEGRATION_ERROR = "trade_lifecycle_runtime_integration
 # ==================================================
 
 TRADE_RECORDED = "trade_recorded"
+TRADE_JOURNAL_V1_UPDATED = "trade_journal_v1_updated"
+TRADE_JOURNAL_ENTRY_RECORDED = "trade_journal_entry_recorded"
+TRADE_JOURNAL_DUPLICATE_SUPPRESSED = "trade_journal_duplicate_suppressed"
+TRADE_PERFORMANCE_ANALYTICS_UPDATED = "trade_performance_analytics_updated"
 
 # ==================================================
 # Alert & Notification Events
