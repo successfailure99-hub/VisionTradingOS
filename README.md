@@ -28,6 +28,31 @@ python desktop_main.py
 
 The startup path validates configuration, supported instruments, execution mode, safety mode, and core runtime dependencies before composing the application.
 
+Offline desktop mode:
+
+```powershell
+$env:LIVE_MARKET_DATA_ENABLED="false"
+python desktop_main.py
+```
+
+Live market-data desktop mode uses Zerodha Kite Connect credentials from environment variables. Obtain the API key and API secret from the Zerodha developer console, and provide a current access token for the session. Zerodha access tokens normally expire and may need renewal. Keep credentials in local environment variables only; never commit `.env` files or real secrets.
+
+Required live market-data variables are shown in `.env.example`:
+
+```powershell
+$env:ZERODHA_API_KEY="<your api key>"
+$env:ZERODHA_API_SECRET="<your api secret>"
+$env:ZERODHA_ACCESS_TOKEN="<current access token>"
+$env:NIFTY_INSTRUMENT_TOKEN="<token>"
+$env:BANKNIFTY_INSTRUMENT_TOKEN="<token>"
+$env:SENSEX_INSTRUMENT_TOKEN="<token>"
+$env:LIVE_MARKET_DATA_ENABLED="true"
+$env:LIVE_MARKET_DATA_AUTO_CONNECT="true"
+python desktop_main.py
+```
+
+Live market data enables WebSocket ticks for NIFTY, BANKNIFTY, and SENSEX only. Order execution remains protected: broker mode is `DRY_RUN`, safety mode remains `ANALYSIS_ONLY`, and live order placement is not enabled.
+
 ## Testing
 
 Full regression suite:
