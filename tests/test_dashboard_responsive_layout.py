@@ -14,6 +14,12 @@ from application import ApplicationBootstrap
 from application.enums import RuntimeInstrument
 from application.models import RuntimeConfiguration
 from dashboard.main_window import VisionMainWindow
+from dashboard.models import (
+    DashboardAIView,
+    DashboardLiveMarketDataView,
+    DashboardRuntimeView,
+    DashboardStrategyView,
+)
 from dashboard.widgets import FieldGrid, MetricCard, StatusBadge
 
 
@@ -40,6 +46,15 @@ def process_layout(window, size):
     window.resize(*size)
     window.show()
     app().processEvents()
+
+
+def long_wrapped_text():
+    return " ".join(
+        (
+            "This dashboard diagnostic message remains available to the operator inside the responsive scroll area."
+        )
+        for _ in range(18)
+    )
 
 
 def test_main_window_contains_trading_and_system_areas():
@@ -113,6 +128,144 @@ def test_reusable_widgets_have_readable_minimum_sizes():
     badge = StatusBadge("Ready")
     assert badge.minimumHeight() >= 28
     assert badge.minimumSizeHint().height() >= 24
+
+
+def test_field_grid_wrapped_value_can_expand_without_fixed_maximum_height():
+    app()
+    grid = FieldGrid(("Explanation",))
+    value = grid.labels["Explanation"]
+    grid.resize(280, 80)
+    value.setText(long_wrapped_text())
+    grid.show()
+    app().processEvents()
+    assert value.sizeHint().height() > value.minimumHeight()
+    assert grid.sizeHint().height() > value.minimumHeight()
+    assert grid.maximumHeight() > 1_000_000
+
+
+def test_long_ai_explanation_remains_accessible_inside_scroll_area():
+    app()
+    window = three_instrument_window()
+    process_layout(window, (1366, 768))
+    panels = window._instrument_panels["NIFTY"]
+    sections = panels["sections"]
+    sections.setCurrentIndex(3)
+    explanation = long_wrapped_text()
+    panels["ai"].render(
+        DashboardAIView(
+            symbol="NIFTY",
+            market_summary="Summary",
+            confidence="Neutral",
+            agreement="Neutral",
+            conflict="None",
+            trading_suitability="Neutral",
+            explanation=explanation,
+            missing_information=(),
+        )
+    )
+    app().processEvents()
+    scroll = sections.widget(3)
+    assert isinstance(scroll, QScrollArea)
+    assert panels["ai"]._labels["Explanation"].text() == explanation
+    assert panels["ai"]._labels["Explanation"].sizeHint().height() > panels["ai"]._labels["Explanation"].minimumHeight()
+    assert scroll.verticalScrollBar().maximum() > 0
+
+
+def test_long_strategy_block_reason_remains_accessible_inside_scroll_area():
+    app()
+    window = three_instrument_window()
+    process_layout(window, (1366, 768))
+    panels = window._instrument_panels["NIFTY"]
+    sections = panels["sections"]
+    sections.setCurrentIndex(4)
+    block_reason = long_wrapped_text()
+    panels["strategy"].render(
+        DashboardStrategyView(
+            symbol="NIFTY",
+            decision="Blocked",
+            direction="Neutral",
+            setup_quality="Waiting",
+            entry_reference="-",
+            stop_reference="-",
+            target_reference="-",
+            block_reason=block_reason,
+            risk_decision="Blocked",
+            approved_quantity=0,
+            risk_amount=0.0,
+            reward_risk=0.0,
+            latest_order_status="None",
+        )
+    )
+    app().processEvents()
+    scroll = sections.widget(4)
+    assert isinstance(scroll, QScrollArea)
+    assert panels["strategy"]._labels["Block"].text() == block_reason
+    assert panels["strategy"]._labels["Block"].sizeHint().height() > panels["strategy"]._labels["Block"].minimumHeight()
+    assert scroll.verticalScrollBar().maximum() > 0
+
+
+def test_long_runtime_and_live_feed_errors_remain_accessible_inside_scroll_areas():
+    app()
+    window = three_instrument_window()
+    process_layout(window, (1366, 768))
+    runtime_error = long_wrapped_text()
+    live_error = long_wrapped_text()
+    window._runtime_panel.render(
+        DashboardRuntimeView(
+            application_status="Error",
+            broker_mode="Dry Run",
+            safety_mode="Analysis Only",
+            configured_instruments=("NIFTY", "BANKNIFTY", "SENSEX"),
+            market_data_ready=False,
+            trade_journal_ready=False,
+            start_count=0,
+            stop_count=0,
+            restart_count=0,
+            last_started_at=None,
+            last_stopped_at=None,
+            last_error=runtime_error,
+        )
+    )
+    window._live_market_data_panel.render(
+        DashboardLiveMarketDataView(
+            available=True,
+            runtime_status="Error",
+            ready=False,
+            running=False,
+            websocket_status="Disconnected",
+            connected=False,
+            configured_instruments=("NIFTY",),
+            configured_tokens=(1,),
+            subscription_count=0,
+            subscription_rows=(),
+            connection_count=0,
+            disconnection_count=1,
+            reconnect_count=0,
+            raw_tick_count=0,
+            normalized_tick_count=0,
+            delivered_tick_count=0,
+            rejected_tick_count=0,
+            start_count=0,
+            stop_count=0,
+            last_connected_at=None,
+            last_disconnected_at=None,
+            last_tick_at=None,
+            last_started_at=None,
+            last_stopped_at=None,
+            last_error=live_error,
+        )
+    )
+    app().processEvents()
+    runtime_scroll = window._system_tabs.widget(0)
+    live_scroll = window._system_tabs.widget(1)
+    assert isinstance(runtime_scroll, QScrollArea)
+    assert isinstance(live_scroll, QScrollArea)
+    assert window._runtime_panel._labels["Last Error"].text() == runtime_error
+    assert window._live_market_data_panel._labels["Last Error"].text() == live_error
+    assert window._runtime_panel._labels["Last Error"].sizeHint().height() > window._runtime_panel._labels["Last Error"].minimumHeight()
+    assert window._live_market_data_panel._labels["Last Error"].sizeHint().height() > window._live_market_data_panel._labels["Last Error"].minimumHeight()
+    assert runtime_scroll.verticalScrollBar().maximum() > 0
+    assert live_scroll.verticalScrollBar().maximum() > 0
 
 
 def test_runtime_live_feed_and_journal_labels_have_readable_minimum_height():

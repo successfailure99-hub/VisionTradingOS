@@ -86,4 +86,3 @@ class FieldGrid(QWidget):
             layout.setRowMinimumHeight(row, 28)
             self.labels[field] = value
             self.name_labels[field] = name
-        self.setMaximumHeight((len(fields) * 38) + 8)
