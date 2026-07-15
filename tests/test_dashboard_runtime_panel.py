@@ -54,7 +54,7 @@ def test_counters_and_readiness_render():
     assert panel._labels["Market Data"].text() == "Ready"
     assert panel._labels["Journal"].text() == "Not Ready"
     assert panel._labels["Market Data"].property("status") == "positive"
-    assert panel._labels["Journal"].property("status") == "neutral"
+    assert panel._labels["Journal"].property("status") == "warning"
 
 
 def test_last_error_and_missing_timestamps_render_safely():

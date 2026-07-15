@@ -2,7 +2,10 @@
 Deterministic dashboard presentation formatters.
 """
 
+import math
+import re
 from datetime import datetime
+from numbers import Real
 
 
 MISSING = "-"
@@ -25,19 +28,19 @@ def ready(value: bool) -> str:
 
 
 def quantity(value: int | None) -> str:
-    return str(value) if value is not None else MISSING
+    return str(value) if _finite_number(value) else MISSING
 
 
 def integer(value: int | None) -> str:
-    return str(value) if value is not None else MISSING
+    return str(value) if _finite_number(value) else MISSING
 
 
 def price(value: float | None) -> str:
-    return f"{value:.2f}" if value is not None else MISSING
+    return f"{value:.2f}" if _finite_number(value) else MISSING
 
 
 def ratio(value: float | None) -> str:
-    return f"{value:.4f}" if value is not None else MISSING
+    return f"{value:.4f}" if _finite_number(value) else MISSING
 
 
 def timestamp(value: datetime | None) -> str:
@@ -45,19 +48,44 @@ def timestamp(value: datetime | None) -> str:
 
 
 def semantic_kind(value) -> str:
-    normalized = text(value).lower()
-    if normalized in {"-", "none", "not ready", "no", "offline", "stopped", "created"}:
-        return "neutral"
-    if any(token in normalized for token in ("error", "rejected", "failed", "conflict", "not suitable")):
-        return "negative"
-    if any(token in normalized for token in ("warning", "starting", "stopping", "blocked", "not ready")):
-        return "warning"
-    if any(token in normalized for token in ("running", "ready", "connected", "yes", "approved", "bullish", "suitable", "aligned")):
+    normalized = _status_key(value)
+    if normalized in {
+        "RUNNING",
+        "READY",
+        "HEALTHY",
+        "CONNECTED",
+        "ALLOW",
+        "APPROVED",
+        "BULLISH",
+        "PROFIT",
+        "SUITABLE",
+        "ALIGNED",
+        "YES",
+    }:
         return "positive"
+    if normalized in {"STOPPED", "WAITING", "CREATED", "NEUTRAL", "NO_POSITION", "NONE", "NO", "-"}:
+        return "neutral"
+    if normalized in {"DEGRADED", "WARNING", "STARTING", "STOPPING", "CONFLICT", "PARTIAL", "RECOVERY_PENDING", "NOT_READY"}:
+        return "warning"
+    if normalized in {"ERROR", "LOCKED", "BLOCKED", "REJECTED", "FAILED", "BEARISH", "LOSS", "DISCONNECTED", "NOT_SUITABLE"}:
+        return "negative"
     return "neutral"
 
 
 def pnl_kind(value: float | None) -> str:
-    if value is None or value == 0:
+    if not _finite_number(value) or value == 0:
         return "neutral"
     return "positive" if value > 0 else "negative"
+
+
+def _finite_number(value) -> bool:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return False
+    return math.isfinite(float(value))
+
+
+def _status_key(value) -> str:
+    normalized = text(value).strip().upper()
+    if normalized == MISSING:
+        return MISSING
+    return "_".join(part for part in re.split(r"[\s_-]+", normalized) if part)
