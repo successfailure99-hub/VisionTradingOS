@@ -31,3 +31,34 @@ class BreakType(str, Enum):
     BEARISH_BOS = "bearish_bos"
     BULLISH_CHOCH = "bullish_choch"
     BEARISH_CHOCH = "bearish_choch"
+
+
+class BreakDirection(str, Enum):
+    NONE = "none"
+    BULLISH = "bullish"
+    BEARISH = "bearish"
+
+
+class MarketStructure(str, Enum):
+    UNKNOWN = "unknown"
+    BULLISH = "bullish"
+    BEARISH = "bearish"
+    RANGE = "range"
+
+
+class PullbackState(str, Enum):
+    NONE = "none"
+    BULLISH_PULLBACK = "bullish_pullback"
+    BEARISH_PULLBACK = "bearish_pullback"
+
+
+class RangeState(str, Enum):
+    NOT_RANGE = "not_range"
+    RANGE = "range"
+
+
+class LiquiditySweep(str, Enum):
+    NONE = "none"
+    BUY_SIDE = "buy_side"
+    SELL_SIDE = "sell_side"
+    BOTH_SIDES = "both_sides"

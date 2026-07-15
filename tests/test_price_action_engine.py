@@ -10,8 +10,13 @@ from core.events import PRICE_ACTION_READY
 from core.models.candle import Candle
 from engines.price_action import (
     BreakType,
+    BreakDirection,
+    LiquiditySweep,
+    MarketStructure,
     PriceActionEngine,
     PriceActionState,
+    PullbackState,
+    RangeState,
     StructureBreak,
     StructureType,
     SwingPoint,
@@ -129,6 +134,22 @@ def test_enum_values_match_contract():
     assert BreakType.BEARISH_BOS.value == "bearish_bos"
     assert BreakType.BULLISH_CHOCH.value == "bullish_choch"
     assert BreakType.BEARISH_CHOCH.value == "bearish_choch"
+    assert BreakDirection.NONE.value == "none"
+    assert BreakDirection.BULLISH.value == "bullish"
+    assert BreakDirection.BEARISH.value == "bearish"
+    assert MarketStructure.UNKNOWN.value == "unknown"
+    assert MarketStructure.BULLISH.value == "bullish"
+    assert MarketStructure.BEARISH.value == "bearish"
+    assert MarketStructure.RANGE.value == "range"
+    assert PullbackState.NONE.value == "none"
+    assert PullbackState.BULLISH_PULLBACK.value == "bullish_pullback"
+    assert PullbackState.BEARISH_PULLBACK.value == "bearish_pullback"
+    assert RangeState.NOT_RANGE.value == "not_range"
+    assert RangeState.RANGE.value == "range"
+    assert LiquiditySweep.NONE.value == "none"
+    assert LiquiditySweep.BUY_SIDE.value == "buy_side"
+    assert LiquiditySweep.SELL_SIDE.value == "sell_side"
+    assert LiquiditySweep.BOTH_SIDES.value == "both_sides"
 
 
 def test_models_are_immutable_and_slotted():
@@ -425,6 +446,16 @@ def test_structure_classification_and_previous_latest_references():
     assert state.latest_swing_low.price == 6
     assert state.latest_swing_low.structure_type is StructureType.HIGHER_LOW
     assert state.trend is Trend.BULLISH
+    assert state.market_structure is MarketStructure.BULLISH
+    assert state.latest_hh == state.latest_swing_high
+    assert state.latest_hl == state.latest_swing_low
+    assert state.latest_lh is None
+    assert state.latest_ll is None
+    assert state.swing_high == state.latest_swing_high
+    assert state.swing_low == state.latest_swing_low
+    assert state.current_structure_high == 13
+    assert state.current_structure_low == 6
+    assert state.updated_at == state.last_candle.end_time
 
 
 def test_lower_and_equal_structure_classifications():
@@ -434,6 +465,9 @@ def test_lower_and_equal_structure_classifications():
     assert bearish_state.latest_swing_high.structure_type is StructureType.LOWER_HIGH
     assert bearish_state.latest_swing_low.structure_type is StructureType.LOWER_LOW
     assert bearish_state.trend is Trend.BEARISH
+    assert bearish_state.market_structure is MarketStructure.BEARISH
+    assert bearish_state.latest_lh == bearish_state.latest_swing_high
+    assert bearish_state.latest_ll == bearish_state.latest_swing_low
 
     equal_high = engine(left_bars=1, right_bars=1)
     equal_high_state = feed(equal_high, [
@@ -468,6 +502,8 @@ def test_range_trends_for_mixed_or_equal_structure():
         make_candle(5, high=14, low=8, open=9, close=10),
     ])
     assert state.trend is Trend.RANGE
+    assert state.market_structure is MarketStructure.RANGE
+    assert state.range_state is RangeState.RANGE
 
     lh_hl = engine(left_bars=1, right_bars=1)
     state = feed(lh_hl, [
@@ -479,6 +515,7 @@ def test_range_trends_for_mixed_or_equal_structure():
         make_candle(5, high=14, low=8, open=9, close=10),
     ])
     assert state.trend is Trend.RANGE
+    assert state.range_state is RangeState.RANGE
 
 
 def test_unknown_trend_until_both_sides_are_classified():
@@ -496,6 +533,8 @@ def test_bullish_breaks_use_close_and_do_not_repeat_same_level():
     repeat_state = pa.update(make_candle(7, high=16, low=10, open=11, close=15))
 
     assert break_state.latest_break.break_type is BreakType.BULLISH_BOS
+    assert break_state.bos_direction is BreakDirection.BULLISH
+    assert break_state.choch_direction is BreakDirection.NONE
     assert break_state.latest_break.broken_price == 13
     assert break_state.latest_break.break_price == 14
     assert break_state.latest_break.candle_start_time == make_candle(6).start_time
@@ -518,6 +557,8 @@ def test_bearish_breaks_use_close_and_do_not_repeat_same_level():
     repeat_state = pa.update(make_candle(7, high=4, low=1, open=3, close=2))
 
     assert break_state.latest_break.break_type is BreakType.BEARISH_BOS
+    assert break_state.bos_direction is BreakDirection.BEARISH
+    assert break_state.choch_direction is BreakDirection.NONE
     assert break_state.latest_break.broken_price == 3
     assert break_state.latest_break.break_price == 2.5
     assert repeat_state.latest_break == break_state.latest_break
@@ -537,11 +578,13 @@ def test_choch_and_unknown_or_range_break_classification():
     feed(bullish, bullish_structure_sequence())
     bearish_choch = bullish.update(make_candle(6, high=8, low=5, open=7, close=5.5))
     assert bearish_choch.latest_break.break_type is BreakType.BEARISH_CHOCH
+    assert bearish_choch.choch_direction is BreakDirection.BEARISH
 
     bearish = engine(left_bars=1, right_bars=1)
     feed(bearish, bearish_structure_sequence())
     bullish_choch = bearish.update(make_candle(6, high=13, low=8, open=9, close=12))
     assert bullish_choch.latest_break.break_type is BreakType.BULLISH_CHOCH
+    assert bullish_choch.choch_direction is BreakDirection.BULLISH
 
     unknown = engine(left_bars=1, right_bars=1)
     feed(unknown, [
@@ -577,6 +620,45 @@ def test_new_structural_level_can_later_trigger_new_break():
     assert first_break.latest_break.broken_price == 13
     assert second_break.latest_break.broken_price == 16
     assert second_break.latest_break != first_break.latest_break
+
+
+def test_pullback_detection_uses_existing_trend_and_structure_levels():
+    bullish = engine(left_bars=1, right_bars=1)
+    feed(bullish, bullish_structure_sequence())
+    pullback = bullish.update(make_candle(6, high=13.5, low=9, open=12, close=12))
+    assert pullback.trend is Trend.BULLISH
+    assert pullback.pullback_state is PullbackState.BULLISH_PULLBACK
+
+    bearish = engine(left_bars=1, right_bars=1)
+    feed(bearish, bearish_structure_sequence())
+    pullback = bearish.update(make_candle(6, high=6, low=3.2, open=4, close=4))
+    assert pullback.trend is Trend.BEARISH
+    assert pullback.pullback_state is PullbackState.BEARISH_PULLBACK
+
+
+def test_liquidity_sweep_detection_without_structure_break():
+    buy_side = engine(left_bars=1, right_bars=1)
+    feed(buy_side, bullish_structure_sequence())
+    swept_high = buy_side.update(make_candle(6, high=14, low=9, open=10, close=12))
+    assert swept_high.liquidity_sweep is LiquiditySweep.BUY_SIDE
+    assert swept_high.latest_break is None
+
+    sell_side = engine(left_bars=1, right_bars=1)
+    feed(sell_side, bearish_structure_sequence())
+    swept_low = sell_side.update(make_candle(6, high=5, low=2.5, open=4, close=4))
+    assert swept_low.liquidity_sweep is LiquiditySweep.SELL_SIDE
+    assert swept_low.latest_break is None
+
+
+def test_deterministic_replay_preserves_price_action_evidence():
+    first = engine(left_bars=1, right_bars=1)
+    second = engine(left_bars=1, right_bars=1)
+    candles = bullish_structure_sequence() + [make_candle(6, high=15, low=9, open=10, close=14)]
+    first_state = feed(first, candles)
+    second_state = feed(second, candles)
+    assert first_state == second_state
+    assert first_state.latest_hh == second_state.latest_hh
+    assert first_state.bos_direction is BreakDirection.BULLISH
 
 
 def test_events_payloads_are_immutable_and_no_intermediate_replay_events():
@@ -650,4 +732,9 @@ def test_package_exports_public_api():
         "StructureType",
         "Trend",
         "BreakType",
+        "BreakDirection",
+        "MarketStructure",
+        "PullbackState",
+        "RangeState",
+        "LiquiditySweep",
     ]

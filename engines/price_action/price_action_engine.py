@@ -11,7 +11,17 @@ from numbers import Real
 from core.base_engine import BaseEngine
 from core.events import PRICE_ACTION_READY
 from core.models.candle import Candle
-from engines.price_action.enums import BreakType, StructureType, SwingType, Trend
+from engines.price_action.enums import (
+    BreakDirection,
+    BreakType,
+    LiquiditySweep,
+    MarketStructure,
+    PullbackState,
+    RangeState,
+    StructureType,
+    SwingType,
+    Trend,
+)
 from engines.price_action.models import PriceActionState, StructureBreak, SwingPoint
 from engines.price_action.swing_detector import SwingDetector
 
@@ -53,6 +63,11 @@ class PriceActionEngine(BaseEngine):
         self._latest_swing_low: SwingPoint | None = None
         self._previous_swing_low: SwingPoint | None = None
         self._latest_break: StructureBreak | None = None
+        self._latest_hh: SwingPoint | None = None
+        self._latest_hl: SwingPoint | None = None
+        self._latest_lh: SwingPoint | None = None
+        self._latest_ll: SwingPoint | None = None
+        self._latest_liquidity_sweep = LiquiditySweep.NONE
         self._trend = Trend.UNKNOWN
         self._broken_swing_levels: set[tuple[SwingType, int, float]] = set()
 
@@ -133,11 +148,13 @@ class PriceActionEngine(BaseEngine):
 
     def _accept_new_candle(self, candle: Candle) -> PriceActionState:
         new_break = self._detect_break(candle)
+        liquidity_sweep = self._detect_liquidity_sweep(candle, new_break)
         self._candles.append(candle)
         self._process_confirmable_swing()
         self._trend = self._determine_trend()
         if new_break is not None:
             self._latest_break = new_break
+        self._latest_liquidity_sweep = liquidity_sweep
 
         state = self._make_state(candle)
         self._data = state
@@ -170,11 +187,19 @@ class PriceActionEngine(BaseEngine):
             classified = self._classify_swing_high(swing)
             self._previous_swing_high = self._latest_swing_high
             self._latest_swing_high = classified
+            if classified.structure_type is StructureType.HIGHER_HIGH:
+                self._latest_hh = classified
+            elif classified.structure_type is StructureType.LOWER_HIGH:
+                self._latest_lh = classified
             return
 
         classified = self._classify_swing_low(swing)
         self._previous_swing_low = self._latest_swing_low
         self._latest_swing_low = classified
+        if classified.structure_type is StructureType.HIGHER_LOW:
+            self._latest_hl = classified
+        elif classified.structure_type is StructureType.LOWER_LOW:
+            self._latest_ll = classified
 
     def _classify_swing_high(self, swing: SwingPoint) -> SwingPoint:
         structure_type = None
@@ -301,10 +326,35 @@ class PriceActionEngine(BaseEngine):
             candle_end_time=candle.end_time,
         )
 
+    def _detect_liquidity_sweep(
+        self,
+        candle: Candle,
+        new_break: StructureBreak | None,
+    ) -> LiquiditySweep:
+        buy_side = False
+        sell_side = False
+        if self._latest_swing_high is not None and candle.high > self._latest_swing_high.price:
+            buy_side = candle.close <= self._latest_swing_high.price
+        if self._latest_swing_low is not None and candle.low < self._latest_swing_low.price:
+            sell_side = candle.close >= self._latest_swing_low.price
+        if new_break is not None:
+            if new_break.break_type in {BreakType.BULLISH_BOS, BreakType.BULLISH_CHOCH}:
+                buy_side = False
+            if new_break.break_type in {BreakType.BEARISH_BOS, BreakType.BEARISH_CHOCH}:
+                sell_side = False
+        if buy_side and sell_side:
+            return LiquiditySweep.BOTH_SIDES
+        if buy_side:
+            return LiquiditySweep.BUY_SIDE
+        if sell_side:
+            return LiquiditySweep.SELL_SIDE
+        return LiquiditySweep.NONE
+
     def _swing_key(self, swing: SwingPoint) -> tuple[SwingType, int, float]:
         return (swing.swing_type, swing.candle_index, swing.price)
 
     def _make_state(self, candle: Candle) -> PriceActionState:
+        bos_direction, choch_direction = self._break_directions(self._latest_break)
         return PriceActionState(
             symbol=self._symbol,
             timeframe=self._timeframe,
@@ -316,7 +366,56 @@ class PriceActionEngine(BaseEngine):
             previous_swing_high=self._previous_swing_high,
             previous_swing_low=self._previous_swing_low,
             latest_break=self._latest_break,
+            market_structure=self._market_structure(),
+            latest_hh=self._latest_hh,
+            latest_hl=self._latest_hl,
+            latest_lh=self._latest_lh,
+            latest_ll=self._latest_ll,
+            swing_high=self._latest_swing_high,
+            swing_low=self._latest_swing_low,
+            bos_direction=bos_direction,
+            choch_direction=choch_direction,
+            pullback_state=self._pullback_state(candle),
+            range_state=RangeState.RANGE if self._trend is Trend.RANGE else RangeState.NOT_RANGE,
+            liquidity_sweep=self._latest_liquidity_sweep,
+            current_structure_high=getattr(self._latest_swing_high, "price", None),
+            current_structure_low=getattr(self._latest_swing_low, "price", None),
+            updated_at=candle.end_time,
         )
+
+    def _market_structure(self) -> MarketStructure:
+        if self._trend is Trend.BULLISH:
+            return MarketStructure.BULLISH
+        if self._trend is Trend.BEARISH:
+            return MarketStructure.BEARISH
+        if self._trend is Trend.RANGE:
+            return MarketStructure.RANGE
+        return MarketStructure.UNKNOWN
+
+    def _break_directions(
+        self,
+        latest_break: StructureBreak | None,
+    ) -> tuple[BreakDirection, BreakDirection]:
+        if latest_break is None:
+            return BreakDirection.NONE, BreakDirection.NONE
+        if latest_break.break_type is BreakType.BULLISH_BOS:
+            return BreakDirection.BULLISH, BreakDirection.NONE
+        if latest_break.break_type is BreakType.BEARISH_BOS:
+            return BreakDirection.BEARISH, BreakDirection.NONE
+        if latest_break.break_type is BreakType.BULLISH_CHOCH:
+            return BreakDirection.NONE, BreakDirection.BULLISH
+        if latest_break.break_type is BreakType.BEARISH_CHOCH:
+            return BreakDirection.NONE, BreakDirection.BEARISH
+        return BreakDirection.NONE, BreakDirection.NONE
+
+    def _pullback_state(self, candle: Candle) -> PullbackState:
+        if self._trend is Trend.BULLISH and self._latest_swing_high is not None:
+            if candle.close < self._latest_swing_high.price:
+                return PullbackState.BULLISH_PULLBACK
+        if self._trend is Trend.BEARISH and self._latest_swing_low is not None:
+            if candle.close > self._latest_swing_low.price:
+                return PullbackState.BEARISH_PULLBACK
+        return PullbackState.NONE
 
     def _publish_state(self, state: PriceActionState) -> None:
         self._event_bus.publish(PRICE_ACTION_READY, state)
@@ -327,6 +426,11 @@ class PriceActionEngine(BaseEngine):
         self._latest_swing_low = None
         self._previous_swing_low = None
         self._latest_break = None
+        self._latest_hh = None
+        self._latest_hl = None
+        self._latest_lh = None
+        self._latest_ll = None
+        self._latest_liquidity_sweep = LiquiditySweep.NONE
         self._trend = Trend.UNKNOWN
         self._broken_swing_levels.clear()
 
