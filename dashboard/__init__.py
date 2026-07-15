@@ -11,13 +11,17 @@ __all__ = [
     "DashboardRuntimeView",
     "DashboardLiveMarketDataView",
     "DashboardLiveSubscriptionView",
+    "DashboardOptionChainView",
+    "DashboardOptionChainStrikeView",
     "DashboardMarketView",
     "DashboardAIView",
     "DashboardStrategyView",
     "DashboardPositionView",
     "DashboardJournalView",
+    "OptionChainPanel",
     "build_dashboard_view",
     "build_live_market_data_view",
+    "build_option_chain_view",
 ]
 
 
@@ -30,6 +34,10 @@ def __getattr__(name):
         from dashboard.main_window import VisionMainWindow
 
         return VisionMainWindow
+    if name == "OptionChainPanel":
+        from dashboard.panels.option_chain_panel import OptionChainPanel
+
+        return OptionChainPanel
     if name == "build_dashboard_view":
         from dashboard.presenters import build_dashboard_view
 
@@ -38,11 +46,17 @@ def __getattr__(name):
         from dashboard.presenters import build_live_market_data_view
 
         return build_live_market_data_view
+    if name == "build_option_chain_view":
+        from dashboard.presenters import build_option_chain_view
+
+        return build_option_chain_view
     if name in {
         "DashboardView",
         "DashboardRuntimeView",
         "DashboardLiveMarketDataView",
         "DashboardLiveSubscriptionView",
+        "DashboardOptionChainView",
+        "DashboardOptionChainStrikeView",
         "DashboardMarketView",
         "DashboardAIView",
         "DashboardStrategyView",

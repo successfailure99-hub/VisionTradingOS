@@ -12,6 +12,7 @@ from dashboard.panels.ai_panel import AIPanel
 from dashboard.panels.journal_panel import JournalPanel
 from dashboard.panels.live_market_data_panel import LiveMarketDataPanel
 from dashboard.panels.market_panel import MarketPanel
+from dashboard.panels.option_chain_panel import OptionChainPanel
 from dashboard.panels.position_panel import PositionPanel
 from dashboard.panels.runtime_panel import RuntimePanel
 from dashboard.panels.strategy_panel import StrategyPanel
@@ -82,6 +83,7 @@ class VisionMainWindow(QMainWindow):
         for index, market in enumerate(view.markets):
             panels = self._instrument_panels[market.symbol]
             panels["market"].render(market)
+            panels["option_chain"].render(view.option_chains[index])
             panels["ai"].render(view.ai[index])
             panels["strategy"].render(view.strategies[index])
             panels["position"].render(view.positions[index])
@@ -156,13 +158,15 @@ class VisionMainWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
 
         market = MarketPanel()
+        option_chain = OptionChainPanel()
         ai = AIPanel()
         strategy = StrategyPanel()
         position = PositionPanel()
         journal = JournalPanel()
 
         left_layout.addWidget(market)
-        left_layout.addWidget(ai)
+        left_layout.addWidget(option_chain)
+        right_layout.addWidget(ai)
         right_layout.addWidget(strategy)
         right_layout.addWidget(position)
         right_layout.addWidget(journal)
@@ -173,6 +177,7 @@ class VisionMainWindow(QMainWindow):
         self._instrument_panels[symbol] = {
             "tab": tab,
             "market": market,
+            "option_chain": option_chain,
             "ai": ai,
             "strategy": strategy,
             "position": position,

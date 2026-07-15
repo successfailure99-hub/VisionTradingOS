@@ -3,7 +3,7 @@ Immutable dashboard presentation models.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 
 
 def _require_non_negative(value: int, field_name: str) -> None:
@@ -135,6 +135,121 @@ def unavailable_live_market_data_view() -> DashboardLiveMarketDataView:
 
 
 @dataclass(frozen=True, slots=True)
+class DashboardOptionChainStrikeView:
+    strike_price: float
+    is_atm: bool
+    call_last_price: float | None
+    call_open_interest: int | None
+    call_change_open_interest: int | None
+    call_volume: int | None
+    call_bid_price: float | None
+    call_ask_price: float | None
+    put_last_price: float | None
+    put_open_interest: int | None
+    put_change_open_interest: int | None
+    put_volume: int | None
+    put_bid_price: float | None
+    put_ask_price: float | None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.is_atm, bool) is False:
+            raise TypeError("is_atm must be a bool")
+        for name in ("call_open_interest", "call_volume", "put_open_interest", "put_volume"):
+            value = getattr(self, name)
+            if value is not None:
+                _require_non_negative(value, name)
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardOptionChainView:
+    symbol: str
+    available: bool
+    exchange: str
+    expiry_date: date | None
+    timestamp: datetime | None
+    underlying_price: float | None
+    atm_strike: float | None
+    strike_count: int
+    total_call_oi: int
+    total_put_oi: int
+    total_call_change_oi: int
+    total_put_change_oi: int
+    oi_pcr: float | None
+    change_oi_pcr: float | None
+    max_call_oi_strike: float | None
+    max_call_oi_value: int | None
+    max_put_oi_strike: float | None
+    max_put_oi_value: int | None
+    max_call_change_oi_strike: float | None
+    max_call_change_oi_value: int | None
+    max_put_change_oi_strike: float | None
+    max_put_change_oi_value: int | None
+    resistance_strike: float | None
+    support_strike: float | None
+    max_pain_strike: float | None
+    call_pressure: str
+    put_pressure: str
+    positioning_bias: str
+    strikes: tuple[DashboardOptionChainStrikeView, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "strikes", tuple(self.strikes))
+        _require_non_negative(self.strike_count, "strike_count")
+        for name in (
+            "total_call_oi",
+            "total_put_oi",
+            "max_call_oi_value",
+            "max_put_oi_value",
+            "max_call_change_oi_value",
+            "max_put_change_oi_value",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                _require_non_negative(value, name)
+        _require_aware(self.timestamp, "timestamp")
+        for strike in self.strikes:
+            if not isinstance(strike, DashboardOptionChainStrikeView):
+                raise TypeError("strikes must contain DashboardOptionChainStrikeView values")
+        if self.strike_count != len(self.strikes):
+            raise ValueError("strike_count must match strikes")
+        object.__setattr__(self, "strikes", tuple(sorted(self.strikes, key=lambda strike: strike.strike_price)))
+
+
+def unavailable_option_chain_view(symbol: str = "-") -> DashboardOptionChainView:
+    return DashboardOptionChainView(
+        symbol=symbol,
+        available=False,
+        exchange="-",
+        expiry_date=None,
+        timestamp=None,
+        underlying_price=None,
+        atm_strike=None,
+        strike_count=0,
+        total_call_oi=0,
+        total_put_oi=0,
+        total_call_change_oi=0,
+        total_put_change_oi=0,
+        oi_pcr=None,
+        change_oi_pcr=None,
+        max_call_oi_strike=None,
+        max_call_oi_value=None,
+        max_put_oi_strike=None,
+        max_put_oi_value=None,
+        max_call_change_oi_strike=None,
+        max_call_change_oi_value=None,
+        max_put_change_oi_strike=None,
+        max_put_change_oi_value=None,
+        resistance_strike=None,
+        support_strike=None,
+        max_pain_strike=None,
+        call_pressure="-",
+        put_pressure="-",
+        positioning_bias="-",
+        strikes=(),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class DashboardMarketView:
     symbol: str
     timeframe: str
@@ -228,4 +343,5 @@ class DashboardView:
     strategies: tuple[DashboardStrategyView, ...]
     positions: tuple[DashboardPositionView, ...]
     journals: tuple[DashboardJournalView, ...]
+    option_chains: tuple[DashboardOptionChainView, ...] = field(default_factory=tuple)
     live_market_data: DashboardLiveMarketDataView = field(default_factory=unavailable_live_market_data_view)

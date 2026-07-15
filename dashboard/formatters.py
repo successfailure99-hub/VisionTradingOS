@@ -4,7 +4,7 @@ Deterministic dashboard presentation formatters.
 
 import math
 import re
-from datetime import datetime
+from datetime import date, datetime
 from numbers import Real
 
 
@@ -47,6 +47,12 @@ def timestamp(value: datetime | None) -> str:
     return value.isoformat(sep=" ", timespec="seconds") if value is not None else MISSING
 
 
+def date_text(value: date | None) -> str:
+    if value is None or isinstance(value, datetime) or not isinstance(value, date):
+        return MISSING
+    return value.isoformat()
+
+
 def semantic_kind(value) -> str:
     normalized = _status_key(value)
     if normalized in {
@@ -65,7 +71,7 @@ def semantic_kind(value) -> str:
         return "positive"
     if normalized in {"STOPPED", "WAITING", "CREATED", "NEUTRAL", "NO_POSITION", "NONE", "NO", "-"}:
         return "neutral"
-    if normalized in {"DEGRADED", "WARNING", "STARTING", "STOPPING", "CONFLICT", "PARTIAL", "RECOVERY_PENDING", "NOT_READY"}:
+    if normalized in {"DEGRADED", "WARNING", "STARTING", "STOPPING", "CONFLICT", "PARTIAL", "RECOVERY_PENDING", "NOT_READY", "MIXED"}:
         return "warning"
     if normalized in {"ERROR", "LOCKED", "BLOCKED", "REJECTED", "FAILED", "BEARISH", "LOSS", "DISCONNECTED", "NOT_SUITABLE"}:
         return "negative"

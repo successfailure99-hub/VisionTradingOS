@@ -12,6 +12,7 @@ from dashboard.models import DashboardLiveMarketDataView
 PRODUCTION_PATHS = tuple(Path("dashboard").rglob("*.py")) + (Path("desktop_main.py"),)
 FORBIDDEN_IMPORT_ROOTS = {
     "asyncio",
+    "threading",
     "multiprocessing",
     "queue",
     "requests",
@@ -25,10 +26,16 @@ FORBIDDEN_IMPORT_ROOTS = {
 }
 FORBIDDEN_CALLS = {
     "Thread",
+    "QThread",
     "start_new_thread",
     "create_task",
     "run_until_complete",
     "sleep",
+    "fetch",
+    "request",
+    "calculate",
+    "classify",
+    "process_snapshot",
     "authenticate",
     "restore_session",
     "create_login_request",
@@ -129,6 +136,16 @@ def test_no_order_or_subscription_controls_and_no_private_backend_access():
         tree = ast.parse(text)
         attrs = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
         assert attrs.isdisjoint(private_backend_attrs)
+
+
+def test_option_chain_dashboard_remains_presenter_driven_and_read_only():
+    panel_text = Path("dashboard/panels/option_chain_panel.py").read_text(encoding="utf-8")
+    presenter_text = Path("dashboard/presenters.py").read_text(encoding="utf-8")
+    assert "engines.option_chain" not in panel_text
+    assert "OptionChainEngine" not in panel_text
+    assert "OptionChainAnalyticsEngine" not in panel_text
+    assert "runtime_snapshot.option_chain" in presenter_text
+    assert "OptionChainPanel" in Path("dashboard/main_window.py").read_text(encoding="utf-8")
 
 
 def test_desktop_main_remains_offline():

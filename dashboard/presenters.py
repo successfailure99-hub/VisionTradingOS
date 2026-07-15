@@ -11,11 +11,14 @@ from dashboard.models import (
     DashboardLiveMarketDataView,
     DashboardLiveSubscriptionView,
     DashboardMarketView,
+    DashboardOptionChainStrikeView,
+    DashboardOptionChainView,
     DashboardPositionView,
     DashboardRuntimeView,
     DashboardStrategyView,
     DashboardView,
     unavailable_live_market_data_view,
+    unavailable_option_chain_view,
 )
 
 
@@ -35,6 +38,7 @@ def build_dashboard_view(
         strategies=tuple(build_strategy_view(snapshot) for snapshot in runtime_snapshots),
         positions=tuple(build_position_view(snapshot) for snapshot in runtime_snapshots),
         journals=tuple(build_journal_view(snapshot) for snapshot in runtime_snapshots),
+        option_chains=tuple(build_option_chain_view(snapshot) for snapshot in runtime_snapshots),
         live_market_data=build_live_market_data_view(live_market_data_snapshot),
     )
 
@@ -142,6 +146,47 @@ def build_market_view(runtime_snapshot: RuntimeSnapshot) -> DashboardMarketView:
     )
 
 
+def build_option_chain_view(runtime_snapshot: RuntimeSnapshot) -> DashboardOptionChainView:
+    state = runtime_snapshot.option_chain
+    if state is None:
+        return unavailable_option_chain_view(_enum_text(runtime_snapshot.symbol))
+    strikes = tuple(
+        _build_option_chain_strike_view(strike, state.atm_strike)
+        for strike in sorted(tuple(state.strikes), key=lambda strike: strike.strike_price)
+    )
+    return DashboardOptionChainView(
+        symbol=_enum_text(state.symbol),
+        available=True,
+        exchange=_enum_text(state.exchange),
+        expiry_date=state.expiry_date,
+        timestamp=state.timestamp,
+        underlying_price=state.underlying_price,
+        atm_strike=state.atm_strike,
+        strike_count=state.strike_count,
+        total_call_oi=state.total_call_oi,
+        total_put_oi=state.total_put_oi,
+        total_call_change_oi=state.total_call_change_oi,
+        total_put_change_oi=state.total_put_change_oi,
+        oi_pcr=state.oi_pcr,
+        change_oi_pcr=state.change_oi_pcr,
+        max_call_oi_strike=_metric_strike(state.max_call_oi),
+        max_call_oi_value=_metric_value(state.max_call_oi),
+        max_put_oi_strike=_metric_strike(state.max_put_oi),
+        max_put_oi_value=_metric_value(state.max_put_oi),
+        max_call_change_oi_strike=_metric_strike(state.max_call_change_oi),
+        max_call_change_oi_value=_metric_value(state.max_call_change_oi),
+        max_put_change_oi_strike=_metric_strike(state.max_put_change_oi),
+        max_put_change_oi_value=_metric_value(state.max_put_change_oi),
+        resistance_strike=state.resistance_strike,
+        support_strike=state.support_strike,
+        max_pain_strike=state.max_pain_strike,
+        call_pressure=_enum_text(state.call_pressure),
+        put_pressure=_enum_text(state.put_pressure),
+        positioning_bias=_enum_text(state.positioning_bias),
+        strikes=strikes,
+    )
+
+
 def build_ai_view(runtime_snapshot: RuntimeSnapshot) -> DashboardAIView:
     ai = runtime_snapshot.ai_reasoning
     return DashboardAIView(
@@ -224,6 +269,35 @@ def _safe_error(value) -> str | None:
     if not isinstance(value, str):
         return value.__class__.__name__
     return value
+
+
+def _build_option_chain_strike_view(strike, atm_strike: float | None) -> DashboardOptionChainStrikeView:
+    call = strike.call
+    put = strike.put
+    return DashboardOptionChainStrikeView(
+        strike_price=strike.strike_price,
+        is_atm=atm_strike is not None and strike.strike_price == atm_strike,
+        call_last_price=getattr(call, "last_price", None),
+        call_open_interest=getattr(call, "open_interest", None),
+        call_change_open_interest=getattr(call, "change_in_open_interest", None),
+        call_volume=getattr(call, "volume", None),
+        call_bid_price=getattr(call, "bid_price", None),
+        call_ask_price=getattr(call, "ask_price", None),
+        put_last_price=getattr(put, "last_price", None),
+        put_open_interest=getattr(put, "open_interest", None),
+        put_change_open_interest=getattr(put, "change_in_open_interest", None),
+        put_volume=getattr(put, "volume", None),
+        put_bid_price=getattr(put, "bid_price", None),
+        put_ask_price=getattr(put, "ask_price", None),
+    )
+
+
+def _metric_strike(metric) -> float | None:
+    return getattr(metric, "strike_price", None)
+
+
+def _metric_value(metric) -> int | None:
+    return getattr(metric, "value", None)
 
 
 def _stable_runtime_snapshots(runtime_snapshots) -> tuple[RuntimeSnapshot, ...]:
