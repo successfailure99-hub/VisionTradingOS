@@ -2,6 +2,7 @@
 Trade journal dashboard panel.
 """
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGroupBox, QVBoxLayout
 
 from dashboard import formatters
@@ -14,6 +15,9 @@ class JournalPanel(QGroupBox):
         super().__init__("Journal", parent)
         self._labels = {}
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 18, 14, 14)
+        layout.setSpacing(12)
+        layout.setAlignment(Qt.AlignTop)
         grid = FieldGrid(("Trade ID", "Exit Type", "Realized P&L", "Opened", "Closed"))
         layout.addWidget(grid)
         self._labels.update(grid.labels)

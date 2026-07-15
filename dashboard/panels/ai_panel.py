@@ -2,6 +2,7 @@
 AI reasoning dashboard panel.
 """
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGroupBox, QLabel, QVBoxLayout
 
 from dashboard import formatters
@@ -14,6 +15,9 @@ class AIPanel(QGroupBox):
         super().__init__("AI Reasoning", parent)
         self._labels = {}
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 18, 14, 14)
+        layout.setSpacing(12)
+        layout.setAlignment(Qt.AlignTop)
         grid = FieldGrid(("Summary", "Confidence", "Agreement", "Conflict", "Suitability", "Missing", "Explanation"))
         layout.addWidget(grid)
         self._labels.update(grid.labels)

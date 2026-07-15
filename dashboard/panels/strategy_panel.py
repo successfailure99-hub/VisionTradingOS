@@ -2,6 +2,7 @@
 Strategy and risk dashboard panel.
 """
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGroupBox, QVBoxLayout
 
 from dashboard import formatters
@@ -14,6 +15,9 @@ class StrategyPanel(QGroupBox):
         super().__init__("Strategy", parent)
         self._labels = {}
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 18, 14, 14)
+        layout.setSpacing(12)
+        layout.setAlignment(Qt.AlignTop)
         self._fields = (
             "Decision", "Direction", "Setup", "Entry", "Stop",
             "Target", "Block", "Risk", "Approved Qty",

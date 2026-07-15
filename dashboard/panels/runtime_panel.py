@@ -2,6 +2,7 @@
 Runtime status dashboard panel.
 """
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QVBoxLayout
 
 from dashboard import formatters
@@ -19,7 +20,11 @@ class RuntimePanel(QGroupBox):
             "Broker": MetricCard("Broker"),
         }
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 18, 14, 14)
+        layout.setSpacing(12)
+        layout.setAlignment(Qt.AlignTop)
         cards = QHBoxLayout()
+        cards.setSpacing(10)
         for card in self._cards.values():
             cards.addWidget(card)
         layout.addLayout(cards)

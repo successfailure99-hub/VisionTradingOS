@@ -45,10 +45,15 @@ class OptionChainPanel(QGroupBox):
         self._table.setSelectionMode(QAbstractItemView.SingleSelection)
         self._table.setContextMenuPolicy(Qt.NoContextMenu)
         self._table.setAlternatingRowColors(True)
+        self._table.verticalHeader().setDefaultSectionSize(30)
+        self._table.horizontalHeader().setMinimumHeight(34)
+        self._table.setMinimumHeight(260)
 
         root = QVBoxLayout(self)
-        root.setSpacing(10)
+        root.setContentsMargins(14, 18, 14, 14)
+        root.setSpacing(12)
         cards = QHBoxLayout()
+        cards.setSpacing(10)
         for card in self._cards.values():
             cards.addWidget(card)
         root.addLayout(cards)

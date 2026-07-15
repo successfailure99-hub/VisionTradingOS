@@ -2,6 +2,7 @@
 Position dashboard panel.
 """
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGroupBox, QVBoxLayout
 
 from dashboard import formatters
@@ -14,6 +15,9 @@ class PositionPanel(QGroupBox):
         super().__init__("Position", parent)
         self._labels = {}
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 18, 14, 14)
+        layout.setSpacing(12)
+        layout.setAlignment(Qt.AlignTop)
         self._fields = ("Active", "Side", "Quantity", "Average", "Last", "Unrealized", "Realized", "Stop", "Target")
         grid = FieldGrid(self._fields)
         layout.addWidget(grid)

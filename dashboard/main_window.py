@@ -3,7 +3,17 @@ Vision Trading OS desktop main window.
 """
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QScrollArea,
+    QSizePolicy,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from application.lifecycle_manager import ApplicationLifecycleManager
 from application.live_market_data import LiveMarketDataRuntime
@@ -43,14 +53,16 @@ class VisionMainWindow(QMainWindow):
         self._current_view: DashboardView | None = None
         self._runtime_panel = RuntimePanel()
         self._live_market_data_panel = LiveMarketDataPanel()
+        self._main_tabs = QTabWidget()
         self._tabs = QTabWidget()
+        self._system_tabs = QTabWidget()
         self._instrument_panels = {}
         self._timer = QTimer(self)
         self._timer.setInterval(refresh_interval_ms)
         self._timer.timeout.connect(self.refresh)
 
         self.setWindowTitle("Vision Trading OS")
-        self.setMinimumSize(1100, 720)
+        self.setMinimumSize(1100, 680)
         self.setStyleSheet(dashboard_stylesheet())
         self._build_layout()
         self.statusBar().showMessage("Application created")
@@ -105,10 +117,25 @@ class VisionMainWindow(QMainWindow):
         layout.setContentsMargins(14, 14, 14, 10)
         layout.setSpacing(12)
         layout.addWidget(self._build_header())
-        layout.addWidget(self._runtime_panel)
-        layout.addWidget(self._live_market_data_panel)
-        layout.addWidget(self._tabs, 1)
+        layout.addWidget(self._build_main_tabs(), 1)
         self.setCentralWidget(root)
+
+    def _build_main_tabs(self) -> QTabWidget:
+        trading = QWidget()
+        trading_layout = QVBoxLayout(trading)
+        trading_layout.setContentsMargins(0, 0, 0, 0)
+        trading_layout.addWidget(self._tabs, 1)
+
+        system = QWidget()
+        system_layout = QVBoxLayout(system)
+        system_layout.setContentsMargins(0, 0, 0, 0)
+        self._system_tabs.addTab(self._scroll_area(self._runtime_panel), "Runtime")
+        self._system_tabs.addTab(self._scroll_area(self._live_market_data_panel), "Live Feed")
+        system_layout.addWidget(self._system_tabs, 1)
+
+        self._main_tabs.addTab(trading, "Trading")
+        self._main_tabs.addTab(system, "System")
+        return self._main_tabs
 
     def _build_header(self) -> QWidget:
         header = QFrame()
@@ -165,6 +192,7 @@ class VisionMainWindow(QMainWindow):
     def _add_instrument_tab(self, symbol: str) -> None:
         tab = QWidget()
         root = QVBoxLayout(tab)
+        root.setContentsMargins(0, 0, 0, 0)
         sections = QTabWidget()
 
         market = MarketPanel()
@@ -175,13 +203,13 @@ class VisionMainWindow(QMainWindow):
         position = PositionPanel()
         journal = JournalPanel()
 
-        sections.addTab(market, "Market")
-        sections.addTab(price_action, "Price Action")
+        sections.addTab(self._scroll_area(market), "Market")
+        sections.addTab(self._scroll_area(price_action), "Price Action")
         sections.addTab(option_chain, "Option Chain")
-        sections.addTab(ai, "AI")
-        sections.addTab(strategy, "Strategy")
-        sections.addTab(position, "Position")
-        sections.addTab(journal, "Journal")
+        sections.addTab(self._scroll_area(ai), "AI")
+        sections.addTab(self._scroll_area(strategy), "Strategy")
+        sections.addTab(self._scroll_area(position), "Position")
+        sections.addTab(self._scroll_area(journal), "Journal")
         root.addWidget(sections)
         self._tabs.addTab(tab, symbol)
         self._instrument_panels[symbol] = {
@@ -195,3 +223,14 @@ class VisionMainWindow(QMainWindow):
             "position": position,
             "journal": journal,
         }
+
+    def _scroll_area(self, widget: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+        scroll.setWidget(widget)
+        return scroll

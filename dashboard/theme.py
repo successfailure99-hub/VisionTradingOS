@@ -11,6 +11,13 @@ def dashboard_stylesheet() -> str:
             font-family: Segoe UI, Arial, sans-serif;
             font-size: 13px;
         }
+        QScrollArea {
+            background: #101418;
+            border: none;
+        }
+        QScrollArea > QWidget > QWidget {
+            background: #101418;
+        }
         QStatusBar {
             background: #0b0f13;
             color: #9aa7b4;
@@ -23,25 +30,28 @@ def dashboard_stylesheet() -> str:
         }
         QLabel#HeaderTitle {
             color: #f4f7fa;
-            font-size: 22px;
+            font-size: 23px;
             font-weight: 700;
         }
         QLabel#HeaderSubtitle {
             color: #9aa7b4;
+            font-size: 13px;
         }
         QGroupBox {
             background: #151b21;
             border: 1px solid #27313c;
             border-radius: 8px;
-            margin-top: 22px;
-            padding: 14px 12px 12px 12px;
+            margin-top: 24px;
+            padding: 16px 12px 12px 12px;
             font-weight: 650;
+            font-size: 14px;
         }
         QGroupBox::title {
             subcontrol-origin: margin;
             subcontrol-position: top left;
-            padding: 0 8px;
+            padding: 0 8px 2px 8px;
             color: #d8dee6;
+            font-size: 14px;
         }
         QSplitter::handle {
             background: #101418;
@@ -58,8 +68,10 @@ def dashboard_stylesheet() -> str:
             color: #9aa7b4;
             border: 1px solid #27313c;
             border-bottom: none;
-            padding: 10px 20px;
-            min-width: 120px;
+            padding: 9px 18px;
+            min-width: 118px;
+            min-height: 28px;
+            font-size: 13px;
         }
         QTabBar::tab:selected {
             background: #1d252d;
@@ -71,15 +83,16 @@ def dashboard_stylesheet() -> str:
         }
         QLabel[role="field-name"], QLabel[role="metric-title"] {
             color: #8f9ba8;
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 500;
         }
         QLabel[role="field-value"], QLabel[role="metric-value"] {
             color: #e8edf2;
+            font-size: 13px;
             font-weight: 600;
         }
         QLabel[role="metric-value"] {
-            font-size: 20px;
+            font-size: 18px;
         }
         QFrame[role="metric-card"] {
             background: #10161c;
@@ -88,8 +101,9 @@ def dashboard_stylesheet() -> str:
         }
         QLabel[role="status-badge"] {
             border-radius: 8px;
-            padding: 4px 10px;
+            padding: 6px 12px;
             font-weight: 700;
+            font-size: 13px;
         }
         QLabel[status="positive"] {
             color: #7ee2a8;
@@ -119,13 +133,15 @@ def dashboard_stylesheet() -> str:
             gridline-color: #27313c;
             selection-background-color: #1f5f8b;
             selection-color: #ffffff;
+            font-size: 13px;
         }
         QHeaderView::section {
             background: #1d252d;
             color: #c8d1dc;
             border: none;
             border-right: 1px solid #27313c;
-            padding: 6px 8px;
+            padding: 8px 8px;
             font-weight: 650;
+            font-size: 13px;
         }
     """

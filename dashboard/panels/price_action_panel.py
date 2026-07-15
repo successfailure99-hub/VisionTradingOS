@@ -2,6 +2,7 @@
 Read-only price-action evidence dashboard panel.
 """
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGroupBox, QHBoxLayout, QVBoxLayout
 
 from dashboard import formatters
@@ -20,8 +21,11 @@ class PriceActionPanel(QGroupBox):
             "CHoCH": MetricCard("Change Of Character"),
         }
         root = QVBoxLayout(self)
-        root.setSpacing(10)
+        root.setContentsMargins(14, 18, 14, 14)
+        root.setSpacing(12)
+        root.setAlignment(Qt.AlignTop)
         cards = QHBoxLayout()
+        cards.setSpacing(10)
         for card in self._cards.values():
             cards.addWidget(card)
         root.addLayout(cards)

@@ -22,6 +22,8 @@ class LiveMarketDataPanel(QGroupBox):
         }
         self._offline_label = QLabel("Live market data not configured")
         self._offline_label.setProperty("status", "warning")
+        self._offline_label.setMinimumHeight(30)
+        self._offline_label.setWordWrap(True)
         self._table = QTableWidget(0, 4)
         self._table.setHorizontalHeaderLabels(("Instrument", "Exchange", "Token", "Mode"))
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -29,10 +31,16 @@ class LiveMarketDataPanel(QGroupBox):
         self._table.setSelectionMode(QAbstractItemView.SingleSelection)
         self._table.setContextMenuPolicy(Qt.NoContextMenu)
         self._table.setAlternatingRowColors(True)
+        self._table.verticalHeader().setDefaultSectionSize(30)
+        self._table.horizontalHeader().setMinimumHeight(34)
+        self._table.setMinimumHeight(150)
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(14, 18, 14, 14)
+        root.setSpacing(12)
         root.addWidget(self._offline_label)
         cards = QHBoxLayout()
+        cards.setSpacing(10)
         for card in self._cards.values():
             cards.addWidget(card)
         root.addLayout(cards)
