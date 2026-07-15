@@ -166,3 +166,17 @@ NOTIFICATION = "notification"
 SYSTEM_STARTED = "system_started"
 SYSTEM_STOPPED = "system_stopped"
 SYSTEM_ERROR = "system_error"
+
+# ==================================================
+# Production Safety Events
+# ==================================================
+
+PRODUCTION_SAFETY_V1_UPDATED = "production_safety_v1_updated"
+PRODUCTION_SAFETY_V1_READY = "production_safety_v1_ready"
+PRODUCTION_SAFETY_V1_DEGRADED = "production_safety_v1_degraded"
+PRODUCTION_SAFETY_V1_LOCKED = "production_safety_v1_locked"
+PRODUCTION_SAFETY_INCIDENT_OPENED = "production_safety_incident_opened"
+PRODUCTION_SAFETY_INCIDENT_RESOLVED = "production_safety_incident_resolved"
+PRODUCTION_SAFETY_RECOVERY_PENDING = "production_safety_recovery_pending"
+PRODUCTION_SAFETY_RECOVERED = "production_safety_recovered"
+PRODUCTION_SAFETY_ERROR = "production_safety_error"
