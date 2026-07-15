@@ -114,6 +114,16 @@ def test_runtime_order_is_preserved_and_sources_are_not_mutated():
     assert first.latest_tick.last_price == 100.0
 
 
+def test_runtime_views_use_stable_professional_instrument_order():
+    banknifty = empty_runtime(RuntimeInstrument.BANKNIFTY)
+    sensex = empty_runtime(RuntimeInstrument.SENSEX)
+    nifty = full_runtime()
+    view = build_dashboard_view(lifecycle(sensex, banknifty, nifty))
+    assert tuple(market.symbol for market in view.markets) == ("NIFTY", "BANKNIFTY", "SENSEX")
+    assert tuple(ai.symbol for ai in view.ai) == ("NIFTY", "BANKNIFTY", "SENSEX")
+    assert tuple(strategy.symbol for strategy in view.strategies) == ("NIFTY", "BANKNIFTY", "SENSEX")
+
+
 def test_runtime_view_maps_lifecycle_metadata():
     view = build_runtime_view(lifecycle(full_runtime()))
     assert view.application_status == "Running"

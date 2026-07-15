@@ -10,10 +10,12 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from application import ApplicationBootstrap
+from application.enums import RuntimeInstrument
 from application.lifecycle_manager import ApplicationLifecycleManager
+from application.models import RuntimeConfiguration
 from core.event_bus import EventBus
 from dashboard.main_window import VisionMainWindow
 
@@ -47,6 +49,8 @@ def test_window_title_timer_default_and_tabs_match_runtime_snapshots():
     assert window.windowTitle() == "Vision Trading OS"
     assert window._timer.interval() == 500
     assert window._tabs.count() == len(view.markets)
+    assert window.findChild(QLabel, "HeaderTitle").text() == "Vision Trading OS"
+    assert window.styleSheet()
 
 
 def test_refresh_calls_lifecycle_snapshot_once_and_stores_view():
@@ -64,6 +68,21 @@ def test_render_updates_all_panels():
     symbol = view.markets[0].symbol
     assert symbol in window._instrument_panels
     assert window._instrument_panels[symbol]["market"]._labels["Symbol"].text() == symbol
+
+
+def test_selected_tab_is_preserved_across_refreshes():
+    lifecycle = ApplicationBootstrap(
+        RuntimeConfiguration(
+            instruments=(RuntimeInstrument.SENSEX, RuntimeInstrument.BANKNIFTY, RuntimeInstrument.NIFTY)
+        )
+    ).create_application()
+    window = VisionMainWindow(lifecycle)
+    view = window.refresh()
+    assert [window._tabs.tabText(index) for index in range(window._tabs.count())] == ["NIFTY", "BANKNIFTY", "SENSEX"]
+    selected = "BANKNIFTY"
+    window._tabs.setCurrentWidget(window._instrument_panels[selected]["tab"])
+    window.refresh()
+    assert window._tabs.tabText(window._tabs.currentIndex()) == selected
 
 
 def test_start_stop_refresh_are_idempotent_and_close_stops_timer():

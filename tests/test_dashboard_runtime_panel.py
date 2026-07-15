@@ -42,6 +42,7 @@ def test_runtime_status_safety_and_broker_render():
     assert panel._labels["Application"].text() == "Running"
     assert panel._labels["Safety"].text() == "Analysis Only"
     assert panel._labels["Broker"].text() == "Dry Run"
+    assert panel._labels["Application"].property("status") == "positive"
 
 
 def test_counters_and_readiness_render():
@@ -52,6 +53,8 @@ def test_counters_and_readiness_render():
     assert panel._labels["Restarts"].text() == "3"
     assert panel._labels["Market Data"].text() == "Ready"
     assert panel._labels["Journal"].text() == "Not Ready"
+    assert panel._labels["Market Data"].property("status") == "positive"
+    assert panel._labels["Journal"].property("status") == "neutral"
 
 
 def test_last_error_and_missing_timestamps_render_safely():

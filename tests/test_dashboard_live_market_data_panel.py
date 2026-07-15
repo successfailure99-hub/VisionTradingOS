@@ -71,6 +71,8 @@ def test_running_view_renders_status_counters_and_timestamps():
     assert panel._labels["Runtime Status"].text() == "Running"
     assert panel._labels["Connected"].text() == "Yes"
     assert panel._labels["Raw Ticks"].text() == "4"
+    assert panel._labels["Delivered Ticks"].text() == "6"
+    assert panel._labels["Rejected Ticks"].property("status") == "negative"
     assert panel._labels["Last Tick"].text().startswith("2026-07-12 09:15:00")
 
 

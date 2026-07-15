@@ -2,58 +2,62 @@
 Runtime status dashboard panel.
 """
 
-from PySide6.QtWidgets import QGridLayout, QGroupBox, QLabel
+from PySide6.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QVBoxLayout
 
+from dashboard import formatters
 from dashboard.models import DashboardRuntimeView
+from dashboard.widgets import FieldGrid, MetricCard, StatusBadge
 
 
 class RuntimePanel(QGroupBox):
     def __init__(self, parent=None):
         super().__init__("Runtime", parent)
         self._labels = {}
-        layout = QGridLayout(self)
-        fields = (
-            "Application",
-            "Safety",
-            "Broker",
-            "Instruments",
-            "Market Data",
-            "Journal",
-            "Starts",
-            "Stops",
-            "Restarts",
-            "Started At",
-            "Stopped At",
-            "Last Error",
+        self._cards = {
+            "Application": MetricCard("Application"),
+            "Safety": MetricCard("Safety"),
+            "Broker": MetricCard("Broker"),
+        }
+        layout = QVBoxLayout(self)
+        cards = QHBoxLayout()
+        for card in self._cards.values():
+            cards.addWidget(card)
+        layout.addLayout(cards)
+        grid = FieldGrid(
+            (
+                "Instruments",
+                "Market Data",
+                "Journal",
+                "Starts",
+                "Stops",
+                "Restarts",
+                "Started At",
+                "Stopped At",
+                "Last Error",
+            )
         )
-        for row, field in enumerate(fields):
-            layout.addWidget(QLabel(field), row, 0)
-            label = QLabel("-")
-            layout.addWidget(label, row, 1)
-            self._labels[field] = label
+        layout.addWidget(grid)
+        self._labels.update(grid.labels)
+        for field in ("Application", "Safety", "Broker"):
+            self._labels[field] = self._cards[field].value_label
+        self._labels["Market Data"] = StatusBadge()
+        self._labels["Journal"] = StatusBadge()
+        detail_grid = grid.layout()
+        detail_grid.replaceWidget(grid.labels["Market Data"], self._labels["Market Data"])
+        grid.labels["Market Data"].deleteLater()
+        detail_grid.replaceWidget(grid.labels["Journal"], self._labels["Journal"])
+        grid.labels["Journal"].deleteLater()
 
     def render(self, view: DashboardRuntimeView) -> None:
-        self._labels["Application"].setText(_text(view.application_status))
-        self._labels["Safety"].setText(_text(view.safety_mode))
-        self._labels["Broker"].setText(_text(view.broker_mode))
-        self._labels["Instruments"].setText(", ".join(view.configured_instruments) or "-")
-        self._labels["Market Data"].setText(_bool(view.market_data_ready))
-        self._labels["Journal"].setText(_bool(view.trade_journal_ready))
-        self._labels["Starts"].setText(str(view.start_count))
-        self._labels["Stops"].setText(str(view.stop_count))
-        self._labels["Restarts"].setText(str(view.restart_count))
-        self._labels["Started At"].setText(_timestamp(view.last_started_at))
-        self._labels["Stopped At"].setText(_timestamp(view.last_stopped_at))
-        self._labels["Last Error"].setText(_text(view.last_error))
-
-
-def _bool(value: bool) -> str:
-    return "Ready" if value else "Not Ready"
-
-
-def _text(value) -> str:
-    return str(value) if value not in (None, "") else "-"
-
-
-def _timestamp(value) -> str:
-    return value.isoformat(sep=" ", timespec="seconds") if value is not None else "-"
+        self._cards["Application"].set_value(view.application_status)
+        self._cards["Safety"].set_value(view.safety_mode)
+        self._cards["Broker"].set_value(view.broker_mode)
+        self._labels["Instruments"].setText(formatters.joined(view.configured_instruments))
+        self._labels["Market Data"].set_status_text(formatters.ready(view.market_data_ready))
+        self._labels["Journal"].set_status_text(formatters.ready(view.trade_journal_ready))
+        self._labels["Starts"].setText(formatters.integer(view.start_count))
+        self._labels["Stops"].setText(formatters.integer(view.stop_count))
+        self._labels["Restarts"].setText(formatters.integer(view.restart_count))
+        self._labels["Started At"].setText(formatters.timestamp(view.last_started_at))
+        self._labels["Stopped At"].setText(formatters.timestamp(view.last_stopped_at))
+        self._labels["Last Error"].setText(formatters.text(view.last_error))

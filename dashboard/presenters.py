@@ -20,13 +20,14 @@ from dashboard.models import (
 
 
 MISSING = "-"
+INSTRUMENT_ORDER = ("NIFTY", "BANKNIFTY", "SENSEX")
 
 
 def build_dashboard_view(
     lifecycle_snapshot: LifecycleSnapshot,
     live_market_data_snapshot: LiveMarketDataRuntimeSnapshot | None = None,
 ) -> DashboardView:
-    runtime_snapshots = lifecycle_snapshot.orchestrator_snapshot.runtime_snapshots
+    runtime_snapshots = _stable_runtime_snapshots(lifecycle_snapshot.orchestrator_snapshot.runtime_snapshots)
     return DashboardView(
         runtime=build_runtime_view(lifecycle_snapshot),
         markets=tuple(build_market_view(snapshot) for snapshot in runtime_snapshots),
@@ -223,3 +224,13 @@ def _safe_error(value) -> str | None:
     if not isinstance(value, str):
         return value.__class__.__name__
     return value
+
+
+def _stable_runtime_snapshots(runtime_snapshots) -> tuple[RuntimeSnapshot, ...]:
+    order = {symbol: index for index, symbol in enumerate(INSTRUMENT_ORDER)}
+    return tuple(
+        sorted(
+            tuple(runtime_snapshots),
+            key=lambda snapshot: (order.get(_enum_text(snapshot.symbol), len(order)), _enum_text(snapshot.symbol)),
+        )
+    )

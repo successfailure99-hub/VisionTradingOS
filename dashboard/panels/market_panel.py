@@ -2,73 +2,79 @@
 Market dashboard panel.
 """
 
-from PySide6.QtWidgets import QGridLayout, QGroupBox, QLabel
+from PySide6.QtWidgets import QGroupBox, QHBoxLayout, QVBoxLayout
 
+from dashboard import formatters
 from dashboard.models import DashboardMarketView
+from dashboard.widgets import FieldGrid, MetricCard, StatusBadge
 
 
 class MarketPanel(QGroupBox):
     def __init__(self, parent=None):
         super().__init__("Market", parent)
         self._labels = {}
-        layout = QGridLayout(self)
+        self._cards = {
+            "Last": MetricCard("Last"),
+            "Bid": MetricCard("Bid"),
+            "Ask": MetricCard("Ask"),
+        }
+        layout = QVBoxLayout(self)
+        cards = QHBoxLayout()
+        for card in self._cards.values():
+            cards.addWidget(card)
+        layout.addLayout(cards)
         self._fields = (
-            "Symbol", "Timeframe", "Status", "Last", "Bid", "Ask",
+            "Symbol", "Timeframe", "Status",
             "Session High", "Session Low", "Candle O", "Candle H",
             "Candle L", "Candle C", "VWAP", "CPR Pivot", "CPR BC",
             "CPR TC", "Cam H3", "Cam H4", "Cam H5", "Cam H6",
             "Cam L3", "Cam L4", "Cam L5", "Cam L6", "Bias",
             "Phase", "Strength", "Options", "Updated",
         )
-        for row, field in enumerate(self._fields):
-            layout.addWidget(QLabel(field), row, 0)
-            label = QLabel("-")
-            layout.addWidget(label, row, 1)
-            self._labels[field] = label
+        grid = FieldGrid(self._fields)
+        layout.addWidget(grid)
+        self._labels.update(grid.labels)
+        for field, card in self._cards.items():
+            self._labels[field] = card.value_label
+        status = StatusBadge()
+        grid.layout().replaceWidget(grid.labels["Status"], status)
+        grid.labels["Status"].deleteLater()
+        self._labels["Status"] = status
 
     def render(self, view: DashboardMarketView) -> None:
+        self._cards["Last"].set_value(formatters.price(view.last_price))
+        self._cards["Bid"].set_value(formatters.price(view.bid_price))
+        self._cards["Ask"].set_value(formatters.price(view.ask_price))
         values = {
             "Symbol": view.symbol,
             "Timeframe": view.timeframe,
             "Status": view.runtime_status,
-            "Last": _price(view.last_price),
-            "Bid": _price(view.bid_price),
-            "Ask": _price(view.ask_price),
-            "Session High": _price(view.session_high),
-            "Session Low": _price(view.session_low),
-            "Candle O": _price(view.latest_candle_open),
-            "Candle H": _price(view.latest_candle_high),
-            "Candle L": _price(view.latest_candle_low),
-            "Candle C": _price(view.latest_candle_close),
-            "VWAP": _price(view.vwap),
-            "CPR Pivot": _price(view.cpr_pivot),
-            "CPR BC": _price(view.cpr_bc),
-            "CPR TC": _price(view.cpr_tc),
-            "Cam H3": _price(view.camarilla_h3),
-            "Cam H4": _price(view.camarilla_h4),
-            "Cam H5": _price(view.camarilla_h5),
-            "Cam H6": _price(view.camarilla_h6),
-            "Cam L3": _price(view.camarilla_l3),
-            "Cam L4": _price(view.camarilla_l4),
-            "Cam L5": _price(view.camarilla_l5),
-            "Cam L6": _price(view.camarilla_l6),
+            "Session High": formatters.price(view.session_high),
+            "Session Low": formatters.price(view.session_low),
+            "Candle O": formatters.price(view.latest_candle_open),
+            "Candle H": formatters.price(view.latest_candle_high),
+            "Candle L": formatters.price(view.latest_candle_low),
+            "Candle C": formatters.price(view.latest_candle_close),
+            "VWAP": formatters.price(view.vwap),
+            "CPR Pivot": formatters.price(view.cpr_pivot),
+            "CPR BC": formatters.price(view.cpr_bc),
+            "CPR TC": formatters.price(view.cpr_tc),
+            "Cam H3": formatters.price(view.camarilla_h3),
+            "Cam H4": formatters.price(view.camarilla_h4),
+            "Cam H5": formatters.price(view.camarilla_h5),
+            "Cam H6": formatters.price(view.camarilla_h6),
+            "Cam L3": formatters.price(view.camarilla_l3),
+            "Cam L4": formatters.price(view.camarilla_l4),
+            "Cam L5": formatters.price(view.camarilla_l5),
+            "Cam L6": formatters.price(view.camarilla_l6),
             "Bias": view.market_bias,
             "Phase": view.market_phase,
             "Strength": view.context_strength,
             "Options": view.option_chain_direction,
-            "Updated": _timestamp(view.updated_at),
+            "Updated": formatters.timestamp(view.updated_at),
         }
         for field, value in values.items():
-            self._labels[field].setText(_text(value))
-
-
-def _price(value) -> str:
-    return f"{value:.2f}" if value is not None else "-"
-
-
-def _text(value) -> str:
-    return str(value) if value not in (None, "") else "-"
-
-
-def _timestamp(value) -> str:
-    return value.isoformat(sep=" ", timespec="seconds") if value is not None else "-"
+            if isinstance(self._labels[field], StatusBadge):
+                self._labels[field].set_status_text(value)
+            else:
+                self._labels[field].setText(formatters.text(value))
