@@ -5,6 +5,7 @@ Application Bootstrap V1 composition root.
 from application.lifecycle_manager import ApplicationLifecycleManager
 from application.models import RuntimeConfiguration
 from application.orchestrator import ApplicationOrchestrator
+from application.startup_validation import StartupValidationResult, validate_startup
 from core.event_bus import EventBus
 
 
@@ -40,16 +41,22 @@ class ApplicationBootstrap:
         self._event_bus: EventBus | None = None
         self._orchestrator: ApplicationOrchestrator | None = None
         self._manager: ApplicationLifecycleManager | None = None
+        self._startup_validation: StartupValidationResult | None = None
 
     @property
     def configuration(self) -> RuntimeConfiguration:
         return self._configuration
+
+    @property
+    def startup_validation(self) -> StartupValidationResult | None:
+        return self._startup_validation
 
     def create_application(self) -> ApplicationLifecycleManager:
         if self._manager is not None:
             return self._manager
 
         self._event_bus = self._injected_event_bus or EventBus()
+        self._startup_validation = validate_startup(self._configuration, event_bus=self._event_bus)
         self._orchestrator = self._create_orchestrator(self._event_bus)
         self._manager = ApplicationLifecycleManager(self._orchestrator)
         return self._manager

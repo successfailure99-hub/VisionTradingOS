@@ -7,6 +7,8 @@ from application.enums import ExecutionSafetyMode, RuntimeInstrument, RuntimeSta
 from application.lifecycle_manager import ApplicationLifecycleManager, LifecycleSnapshot
 from application.models import OrchestratorSnapshot, RuntimeConfiguration, RuntimeSnapshot
 from application.orchestrator import ApplicationOrchestrator
+from application.release import VERSION
+from application.startup_validation import StartupValidationResult, validate_startup
 from application.symbol_runtime import SymbolRuntime
 
 __all__ = [
@@ -21,4 +23,7 @@ __all__ = [
     "ApplicationBootstrap",
     "ApplicationLifecycleManager",
     "LifecycleSnapshot",
+    "VERSION",
+    "StartupValidationResult",
+    "validate_startup",
 ]
