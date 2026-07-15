@@ -20,6 +20,7 @@ from application.models import RuntimeConfiguration
 from core.event_bus import EventBus
 from dashboard.main_window import VisionMainWindow
 from dashboard.panels.option_chain_panel import OptionChainPanel
+from dashboard.panels.price_action_panel import PriceActionPanel
 
 
 def app():
@@ -71,6 +72,7 @@ def test_render_updates_all_panels():
     symbol = view.markets[0].symbol
     assert symbol in window._instrument_panels
     assert window._instrument_panels[symbol]["market"]._labels["Symbol"].text() == symbol
+    assert window._instrument_panels[symbol]["price_action"]._labels["Symbol"].text() == view.price_actions[0].symbol
     assert window._instrument_panels[symbol]["option_chain"]._labels["Symbol"].text() == view.option_chains[0].symbol
     assert window._instrument_panels[symbol]["ai"]._labels["Summary"].text() == view.ai[0].market_summary
 
@@ -90,6 +92,26 @@ def test_selected_tab_is_preserved_across_refreshes():
     assert window._tabs.tabText(window._tabs.currentIndex()) == selected
 
 
+def test_instrument_section_tabs_match_price_action_milestone_order_and_preserve_selection():
+    lifecycle = ApplicationBootstrap().create_application()
+    window = VisionMainWindow(lifecycle)
+    view = window.refresh()
+    symbol = view.markets[0].symbol
+    sections = window._instrument_panels[symbol]["sections"]
+    assert [sections.tabText(index) for index in range(sections.count())] == [
+        "Market",
+        "Price Action",
+        "Option Chain",
+        "AI",
+        "Strategy",
+        "Position",
+        "Journal",
+    ]
+    sections.setCurrentIndex(1)
+    window.refresh()
+    assert window._instrument_panels[symbol]["sections"].tabText(sections.currentIndex()) == "Price Action"
+
+
 def test_each_instrument_tab_has_one_option_chain_panel_and_tabs_are_reused():
     lifecycle = ApplicationBootstrap(
         RuntimeConfiguration(
@@ -100,14 +122,19 @@ def test_each_instrument_tab_has_one_option_chain_panel_and_tabs_are_reused():
     view = window.refresh()
     tabs = {symbol: window._instrument_panels[symbol]["tab"] for symbol in ("NIFTY", "BANKNIFTY", "SENSEX")}
     option_panels = {symbol: window._instrument_panels[symbol]["option_chain"] for symbol in tabs}
+    price_action_panels = {symbol: window._instrument_panels[symbol]["price_action"] for symbol in tabs}
     assert tuple(chain.symbol for chain in view.option_chains) == ("NIFTY", "BANKNIFTY", "SENSEX")
+    assert tuple(price_action.symbol for price_action in view.price_actions) == ("NIFTY", "BANKNIFTY", "SENSEX")
     for symbol in tabs:
         assert isinstance(option_panels[symbol], OptionChainPanel)
+        assert isinstance(price_action_panels[symbol], PriceActionPanel)
         assert len(tabs[symbol].findChildren(OptionChainPanel)) == 1
+        assert len(tabs[symbol].findChildren(PriceActionPanel)) == 1
     window.refresh()
     for symbol in tabs:
         assert window._instrument_panels[symbol]["tab"] is tabs[symbol]
         assert window._instrument_panels[symbol]["option_chain"] is option_panels[symbol]
+        assert window._instrument_panels[symbol]["price_action"] is price_action_panels[symbol]
 
 
 def test_start_stop_refresh_are_idempotent_and_close_stops_timer():

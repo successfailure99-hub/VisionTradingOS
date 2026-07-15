@@ -283,6 +283,47 @@ class DashboardMarketView:
 
 
 @dataclass(frozen=True, slots=True)
+class DashboardPriceActionView:
+    symbol: str
+    available: bool
+    trend: str
+    market_structure: str
+    latest_hh: float | None
+    latest_hl: float | None
+    latest_lh: float | None
+    latest_ll: float | None
+    swing_high: float | None
+    swing_low: float | None
+    bos_direction: str
+    choch_direction: str
+    pullback_state: str
+    range_state: str
+    liquidity_sweep: str
+    updated_at: datetime | None
+
+
+def unavailable_price_action_view(symbol: str = "-") -> DashboardPriceActionView:
+    return DashboardPriceActionView(
+        symbol=symbol,
+        available=False,
+        trend="-",
+        market_structure="-",
+        latest_hh=None,
+        latest_hl=None,
+        latest_lh=None,
+        latest_ll=None,
+        swing_high=None,
+        swing_low=None,
+        bos_direction="-",
+        choch_direction="-",
+        pullback_state="-",
+        range_state="-",
+        liquidity_sweep="-",
+        updated_at=None,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class DashboardAIView:
     symbol: str
     market_summary: str
@@ -343,5 +384,6 @@ class DashboardView:
     strategies: tuple[DashboardStrategyView, ...]
     positions: tuple[DashboardPositionView, ...]
     journals: tuple[DashboardJournalView, ...]
+    price_actions: tuple[DashboardPriceActionView, ...] = field(default_factory=tuple)
     option_chains: tuple[DashboardOptionChainView, ...] = field(default_factory=tuple)
     live_market_data: DashboardLiveMarketDataView = field(default_factory=unavailable_live_market_data_view)

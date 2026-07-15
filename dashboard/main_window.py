@@ -3,7 +3,7 @@ Vision Trading OS desktop main window.
 """
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QSplitter, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget
 
 from application.lifecycle_manager import ApplicationLifecycleManager
 from application.live_market_data import LiveMarketDataRuntime
@@ -14,6 +14,7 @@ from dashboard.panels.live_market_data_panel import LiveMarketDataPanel
 from dashboard.panels.market_panel import MarketPanel
 from dashboard.panels.option_chain_panel import OptionChainPanel
 from dashboard.panels.position_panel import PositionPanel
+from dashboard.panels.price_action_panel import PriceActionPanel
 from dashboard.panels.runtime_panel import RuntimePanel
 from dashboard.panels.strategy_panel import StrategyPanel
 from dashboard.presenters import build_dashboard_view
@@ -83,6 +84,7 @@ class VisionMainWindow(QMainWindow):
         for index, market in enumerate(view.markets):
             panels = self._instrument_panels[market.symbol]
             panels["market"].render(market)
+            panels["price_action"].render(view.price_actions[index])
             panels["option_chain"].render(view.option_chains[index])
             panels["ai"].render(view.ai[index])
             panels["strategy"].render(view.strategies[index])
@@ -129,6 +131,11 @@ class VisionMainWindow(QMainWindow):
 
     def _sync_tabs(self, view: DashboardView) -> None:
         selected_symbol = self._tabs.tabText(self._tabs.currentIndex()) if self._tabs.currentIndex() >= 0 else None
+        selected_inner_tabs = {
+            symbol: panels["sections"].tabText(panels["sections"].currentIndex())
+            for symbol, panels in self._instrument_panels.items()
+            if panels["sections"].currentIndex() >= 0
+        }
         existing = set(self._instrument_panels)
         required = tuple(market.symbol for market in view.markets)
         for symbol in required:
@@ -147,36 +154,41 @@ class VisionMainWindow(QMainWindow):
                 self._tabs.insertTab(target_index, widget, symbol)
         if selected_symbol in self._instrument_panels:
             self._tabs.setCurrentWidget(self._instrument_panels[selected_symbol]["tab"])
+        for symbol, tab_name in selected_inner_tabs.items():
+            if symbol in self._instrument_panels:
+                sections = self._instrument_panels[symbol]["sections"]
+                for index in range(sections.count()):
+                    if sections.tabText(index) == tab_name:
+                        sections.setCurrentIndex(index)
+                        break
 
     def _add_instrument_tab(self, symbol: str) -> None:
         tab = QWidget()
-        root = QHBoxLayout(tab)
-        splitter = QSplitter()
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
+        root = QVBoxLayout(tab)
+        sections = QTabWidget()
 
         market = MarketPanel()
+        price_action = PriceActionPanel()
         option_chain = OptionChainPanel()
         ai = AIPanel()
         strategy = StrategyPanel()
         position = PositionPanel()
         journal = JournalPanel()
 
-        left_layout.addWidget(market)
-        left_layout.addWidget(option_chain)
-        right_layout.addWidget(ai)
-        right_layout.addWidget(strategy)
-        right_layout.addWidget(position)
-        right_layout.addWidget(journal)
-        splitter.addWidget(left)
-        splitter.addWidget(right)
-        root.addWidget(splitter)
+        sections.addTab(market, "Market")
+        sections.addTab(price_action, "Price Action")
+        sections.addTab(option_chain, "Option Chain")
+        sections.addTab(ai, "AI")
+        sections.addTab(strategy, "Strategy")
+        sections.addTab(position, "Position")
+        sections.addTab(journal, "Journal")
+        root.addWidget(sections)
         self._tabs.addTab(tab, symbol)
         self._instrument_panels[symbol] = {
             "tab": tab,
+            "sections": sections,
             "market": market,
+            "price_action": price_action,
             "option_chain": option_chain,
             "ai": ai,
             "strategy": strategy,

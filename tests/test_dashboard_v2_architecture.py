@@ -148,6 +148,15 @@ def test_option_chain_dashboard_remains_presenter_driven_and_read_only():
     assert "OptionChainPanel" in Path("dashboard/main_window.py").read_text(encoding="utf-8")
 
 
+def test_price_action_dashboard_remains_presenter_driven_and_read_only():
+    panel_text = Path("dashboard/panels/price_action_panel.py").read_text(encoding="utf-8")
+    presenter_text = Path("dashboard/presenters.py").read_text(encoding="utf-8")
+    assert "engines.price_action" not in panel_text
+    assert "PriceActionEngine" not in panel_text
+    assert "runtime_snapshot.price_action" in presenter_text
+    assert "PriceActionPanel" in Path("dashboard/main_window.py").read_text(encoding="utf-8")
+
+
 def test_desktop_main_remains_offline():
     text = Path("desktop_main.py").read_text(encoding="utf-8")
     assert "LiveMarketDataRuntime" not in text

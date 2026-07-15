@@ -19,6 +19,7 @@ from dashboard.presenters import (
     build_journal_view,
     build_market_view,
     build_position_view,
+    build_price_action_view,
     build_runtime_view,
     build_strategy_view,
 )
@@ -32,6 +33,8 @@ from engines.order_management.enums import OrderRejectionReason, OrderSide, Orde
 from engines.order_management.models import OrderState
 from engines.position.enums import PositionSide, PositionStatus, PositionUpdateType
 from engines.position.models import PositionState
+from engines.price_action.enums import BreakDirection, LiquiditySweep, MarketStructure, PullbackState, RangeState, StructureType, SwingType, Trend
+from engines.price_action.models import PriceActionState, SwingPoint
 from engines.risk.enums import RiskDecision, RiskReductionReason, RiskRejectionReason, RiskTier
 from engines.risk.models import RiskDecisionState
 from engines.strategy.enums import BlockReason, EntryReference, SetupQuality, StopReference, StrategyDecision, TargetReference, TradeDirection
@@ -46,6 +49,45 @@ TS = datetime(2026, 7, 12, 9, 15)
 
 def empty_runtime(symbol=RuntimeInstrument.NIFTY):
     return RuntimeSnapshot(symbol, "1m", RuntimeStatus.CREATED, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None)
+
+
+def swing(swing_type, structure_type, price):
+    return SwingPoint("NIFTY", "1m", swing_type, structure_type, price, TS, TS, 1)
+
+
+def price_action_state():
+    hh = swing(SwingType.HIGH, StructureType.HIGHER_HIGH, 111.0)
+    hl = swing(SwingType.LOW, StructureType.HIGHER_LOW, 101.0)
+    lh = swing(SwingType.HIGH, StructureType.LOWER_HIGH, 109.0)
+    ll = swing(SwingType.LOW, StructureType.LOWER_LOW, 99.0)
+    candle = BuildingCandle(Instrument.NIFTY, TimeFrame.ONE_MINUTE, TS, TS, 100.0, 112.0, 98.0, 110.0, 10)
+    return PriceActionState(
+        "NIFTY",
+        "1m",
+        5,
+        candle,
+        Trend.BULLISH,
+        hh,
+        hl,
+        lh,
+        ll,
+        None,
+        MarketStructure.BULLISH,
+        hh,
+        hl,
+        lh,
+        ll,
+        hh,
+        hl,
+        BreakDirection.BULLISH,
+        BreakDirection.NONE,
+        PullbackState.BULLISH_PULLBACK,
+        RangeState.NOT_RANGE,
+        LiquiditySweep.BUY_SIDE,
+        111.0,
+        101.0,
+        TS,
+    )
 
 
 def full_runtime():
@@ -63,7 +105,7 @@ def full_runtime():
         VWAPLevels(Instrument.NIFTY, date(2026, 7, 12), TS, 100.25, 10, 1002.5),
         CPRLevels(date(2026, 7, 12), 105.0, 95.0, 100.0, 100.0, 98.0, 102.0, 4.0, 4.0),
         CamarillaLevels(date(2026, 7, 12), 105.0, 95.0, 100.0, 100.0, 101.0, 102.0, 103.0, 104.0, 99.0, 98.0, 97.0, 96.0),
-        None, None, context, ai, strategy, risk, order, position, journal, TS,
+        price_action_state(), None, context, ai, strategy, risk, order, position, journal, TS,
     )
 
 
@@ -77,6 +119,9 @@ def test_empty_runtime_snapshot_produces_safe_values():
     assert market.last_price is None
     assert market.market_bias == "-"
     assert build_ai_view(empty_runtime()).explanation == "-"
+    price_action = build_price_action_view(empty_runtime())
+    assert price_action.available is False
+    assert price_action.trend == "-"
 
 
 def test_tick_candle_vwap_cpr_camarilla_and_context_map_correctly():
@@ -89,6 +134,26 @@ def test_tick_candle_vwap_cpr_camarilla_and_context_map_correctly():
     assert market.camarilla_h6 == 104.0
     assert market.session_high == 108.0
     assert market.market_bias == "Bullish"
+
+
+def test_price_action_maps_complete_state():
+    view = build_price_action_view(full_runtime())
+    assert view.available is True
+    assert view.symbol == "NIFTY"
+    assert view.trend == "Bullish"
+    assert view.market_structure == "Bullish"
+    assert view.latest_hh == 111.0
+    assert view.latest_hl == 101.0
+    assert view.latest_lh == 109.0
+    assert view.latest_ll == 99.0
+    assert view.swing_high == 111.0
+    assert view.swing_low == 101.0
+    assert view.bos_direction == "Bullish"
+    assert view.choch_direction == "None"
+    assert view.pullback_state == "Bullish Pullback"
+    assert view.range_state == "Not Range"
+    assert view.liquidity_sweep == "Buy Side"
+    assert view.updated_at is TS
 
 
 def test_ai_strategy_risk_order_position_and_journal_map_correctly():
@@ -120,6 +185,7 @@ def test_runtime_views_use_stable_professional_instrument_order():
     nifty = full_runtime()
     view = build_dashboard_view(lifecycle(sensex, banknifty, nifty))
     assert tuple(market.symbol for market in view.markets) == ("NIFTY", "BANKNIFTY", "SENSEX")
+    assert tuple(price_action.symbol for price_action in view.price_actions) == ("NIFTY", "BANKNIFTY", "SENSEX")
     assert tuple(ai.symbol for ai in view.ai) == ("NIFTY", "BANKNIFTY", "SENSEX")
     assert tuple(strategy.symbol for strategy in view.strategies) == ("NIFTY", "BANKNIFTY", "SENSEX")
 

@@ -142,5 +142,6 @@ def test_dashboard_tuple_alignment_and_stable_instrument_order_include_option_ch
     nifty = runtime(RuntimeInstrument.NIFTY, state("NIFTY"))
     view = build_dashboard_view(lifecycle(sensex, banknifty, nifty))
     assert tuple(market.symbol for market in view.markets) == ("NIFTY", "BANKNIFTY", "SENSEX")
+    assert tuple(price_action.symbol for price_action in view.price_actions) == ("NIFTY", "BANKNIFTY", "SENSEX")
     assert tuple(chain.symbol for chain in view.option_chains) == ("NIFTY", "BANKNIFTY", "SENSEX")
-    assert len(view.option_chains) == len(view.markets) == len(view.ai) == len(view.strategies) == len(view.positions) == len(view.journals)
+    assert len(view.price_actions) == len(view.option_chains) == len(view.markets) == len(view.ai) == len(view.strategies) == len(view.positions) == len(view.journals)

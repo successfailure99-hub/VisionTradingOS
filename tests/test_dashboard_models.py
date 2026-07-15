@@ -11,6 +11,7 @@ from dashboard.models import (
     DashboardJournalView,
     DashboardMarketView,
     DashboardPositionView,
+    DashboardPriceActionView,
     DashboardRuntimeView,
     DashboardStrategyView,
     DashboardView,
@@ -21,17 +22,22 @@ def test_presentation_models_are_frozen():
     view = DashboardRuntimeView("Created", "Dry Run", "Analysis Only", ("NIFTY",), False, False, 0, 0, 0, None, None, None)
     with pytest.raises(FrozenInstanceError):
         view.application_status = "Running"
+    price_action = DashboardPriceActionView("NIFTY", False, "-", "-", None, None, None, None, None, None, "-", "-", "-", "-", "-", None)
+    with pytest.raises(FrozenInstanceError):
+        price_action.trend = "Bullish"
 
 
 def test_models_accept_optional_values_and_tuples_are_immutable():
     runtime = DashboardRuntimeView("Created", "Dry Run", "Analysis Only", ("NIFTY",), False, False, 0, 0, 0, None, None, None)
     market = DashboardMarketView("NIFTY", "1m", "Created", None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, "-", "-", "-", "-", None)
+    price_action = DashboardPriceActionView("NIFTY", False, "-", "-", None, None, None, None, None, None, "-", "-", "-", "-", "-", None)
     ai = DashboardAIView("NIFTY", "-", "-", "-", "-", "-", "-", ())
     strategy = DashboardStrategyView("NIFTY", "-", "-", "-", "-", "-", "-", "-", "-", None, None, None, "-")
     position = DashboardPositionView("NIFTY", False, "-", None, None, None, None, None, None, None)
     journal = DashboardJournalView("NIFTY", None, "-", None, None, None)
-    dashboard = DashboardView(runtime, (market,), (ai,), (strategy,), (position,), (journal,))
+    dashboard = DashboardView(runtime, (market,), (ai,), (strategy,), (position,), (journal,), (price_action,))
     assert dashboard.markets == (market,)
+    assert dashboard.price_actions == (price_action,)
     assert isinstance(dashboard.markets, tuple)
 
 

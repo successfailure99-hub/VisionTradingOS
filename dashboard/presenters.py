@@ -13,12 +13,14 @@ from dashboard.models import (
     DashboardMarketView,
     DashboardOptionChainStrikeView,
     DashboardOptionChainView,
+    DashboardPriceActionView,
     DashboardPositionView,
     DashboardRuntimeView,
     DashboardStrategyView,
     DashboardView,
     unavailable_live_market_data_view,
     unavailable_option_chain_view,
+    unavailable_price_action_view,
 )
 
 
@@ -34,6 +36,7 @@ def build_dashboard_view(
     return DashboardView(
         runtime=build_runtime_view(lifecycle_snapshot),
         markets=tuple(build_market_view(snapshot) for snapshot in runtime_snapshots),
+        price_actions=tuple(build_price_action_view(snapshot) for snapshot in runtime_snapshots),
         ai=tuple(build_ai_view(snapshot) for snapshot in runtime_snapshots),
         strategies=tuple(build_strategy_view(snapshot) for snapshot in runtime_snapshots),
         positions=tuple(build_position_view(snapshot) for snapshot in runtime_snapshots),
@@ -143,6 +146,31 @@ def build_market_view(runtime_snapshot: RuntimeSnapshot) -> DashboardMarketView:
         context_strength=_enum_text(getattr(context, "context_strength", None)),
         option_chain_direction=_enum_text(getattr(context, "option_chain_direction", None)),
         updated_at=runtime_snapshot.updated_at,
+    )
+
+
+def build_price_action_view(runtime_snapshot: RuntimeSnapshot) -> DashboardPriceActionView:
+    price_action = runtime_snapshot.price_action
+    symbol = _enum_text(runtime_snapshot.symbol)
+    if price_action is None:
+        return unavailable_price_action_view(symbol)
+    return DashboardPriceActionView(
+        symbol=_enum_text(price_action.symbol),
+        available=True,
+        trend=_enum_text(price_action.trend),
+        market_structure=_enum_text(price_action.market_structure),
+        latest_hh=_swing_price(price_action.latest_hh),
+        latest_hl=_swing_price(price_action.latest_hl),
+        latest_lh=_swing_price(price_action.latest_lh),
+        latest_ll=_swing_price(price_action.latest_ll),
+        swing_high=_swing_price(price_action.swing_high),
+        swing_low=_swing_price(price_action.swing_low),
+        bos_direction=_enum_text(price_action.bos_direction),
+        choch_direction=_enum_text(price_action.choch_direction),
+        pullback_state=_enum_text(price_action.pullback_state),
+        range_state=_enum_text(price_action.range_state),
+        liquidity_sweep=_enum_text(price_action.liquidity_sweep),
+        updated_at=price_action.updated_at,
     )
 
 
@@ -298,6 +326,10 @@ def _metric_strike(metric) -> float | None:
 
 def _metric_value(metric) -> int | None:
     return getattr(metric, "value", None)
+
+
+def _swing_price(swing) -> float | None:
+    return getattr(swing, "price", None)
 
 
 def _stable_runtime_snapshots(runtime_snapshots) -> tuple[RuntimeSnapshot, ...]:
