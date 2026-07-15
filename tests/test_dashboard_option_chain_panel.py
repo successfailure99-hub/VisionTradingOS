@@ -142,6 +142,44 @@ def test_complete_view_renders_headline_analytics_and_deterministic_columns():
     assert [panel._table.horizontalHeaderItem(index).text() for index in range(panel._table.columnCount())] == list(STRIKE_COLUMNS)
 
 
+@pytest.mark.parametrize(
+    ("pressure", "expected"),
+    (
+        ("Put Writing", "positive"),
+        ("Call Unwinding", "positive"),
+        ("Call Writing", "negative"),
+        ("Put Unwinding", "negative"),
+        ("Balanced", "neutral"),
+        ("Unknown", "neutral"),
+        ("-", "neutral"),
+    ),
+)
+def test_pressure_badges_use_required_semantic_mapping(pressure, expected):
+    app()
+    panel = OptionChainPanel()
+    panel.render(view(call_pressure=pressure, put_pressure=pressure))
+    assert panel._labels["Call Pressure"].property("status") == expected
+    assert panel._labels["Put Pressure"].property("status") == expected
+
+
+@pytest.mark.parametrize(
+    ("pressure", "expected"),
+    (
+        ("PUT_WRITING", "positive"),
+        ("put-writing", "positive"),
+        ("put writing", "positive"),
+        ("call_unwinding", "positive"),
+        ("CALL-UNWINDING", "positive"),
+    ),
+)
+def test_pressure_badges_normalize_case_spaces_hyphens_and_underscores(pressure, expected):
+    app()
+    panel = OptionChainPanel()
+    panel.render(view(call_pressure=pressure, put_pressure=pressure))
+    assert panel._labels["Call Pressure"].property("status") == expected
+    assert panel._labels["Put Pressure"].property("status") == expected
+
+
 def test_table_cells_are_read_only_repeated_render_replaces_rows_and_values_are_safe():
     app()
     panel = OptionChainPanel()

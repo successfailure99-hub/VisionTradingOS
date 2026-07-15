@@ -177,12 +177,15 @@ def _strike_metric(strike_price: float | None, value: int | None) -> str:
 
 
 def _pressure_kind(value: str) -> str:
-    key = value.strip().lower().replace(" ", "_")
-    if key in {"call_writing", "put_writing"}:
+    normalized = value.strip().lower()
+    if normalized == "-":
+        return "neutral"
+    key = "_".join(part for part in normalized.replace("-", "_").replace(" ", "_").split("_") if part)
+    if key in {"put_writing", "call_unwinding"}:
         return "positive"
-    if key in {"call_unwinding", "put_unwinding"}:
+    if key in {"call_writing", "put_unwinding"}:
         return "negative"
-    if key in {"balanced", "-"}:
+    if key in {"balanced", "unknown", "-"}:
         return "neutral"
     return "warning"
 
