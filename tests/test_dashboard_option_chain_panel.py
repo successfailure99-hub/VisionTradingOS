@@ -12,10 +12,15 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QAbstractItemView, QApplication, QPushButton
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QLabel, QPushButton
 
+from application import ApplicationBootstrap
+from application.enums import RuntimeInstrument
+from application.models import RuntimeConfiguration
 from dashboard.models import DashboardOptionChainStrikeView, DashboardOptionChainView, unavailable_option_chain_view
 from dashboard.panels.option_chain_panel import OptionChainPanel, STRIKE_COLUMNS, select_display_strikes
+from dashboard.widgets import MetricCard
+from dashboard.main_window import VisionMainWindow
 
 
 NOW = datetime(2026, 7, 12, 9, 15, tzinfo=UTC)
@@ -142,6 +147,70 @@ def test_complete_view_renders_headline_analytics_and_deterministic_columns():
     assert [panel._table.horizontalHeaderItem(index).text() for index in range(panel._table.columnCount())] == list(STRIKE_COLUMNS)
 
 
+def test_summary_uses_readable_grouped_metric_rows_without_missing_labels_or_values():
+    app()
+    panel = OptionChainPanel()
+    panel.render(view())
+    expected = {
+        "Positioning Bias", "OI PCR", "Change OI PCR", "ATM Strike",
+        "Support", "Resistance", "Max Pain", "Expiry",
+        "Call Pressure", "Put Pressure", "Total Call OI", "Total Put OI",
+        "Max Call OI", "Max Put OI", "Max Call Change OI", "Max Put Change OI",
+        "Available", "Symbol", "Exchange", "Underlying",
+        "Timestamp", "Strike Count", "Total Call Change OI", "Total Put Change OI",
+    }
+    assert set(panel._cards) == expected
+    assert set(panel._labels) == expected
+    title_text = {
+        label.text()
+        for card in panel._cards.values()
+        for label in card.findChildren(QLabel)
+        if label.property("role") == "metric-title"
+    }
+    assert expected.issubset(title_text)
+    assert all(panel._labels[field].isVisibleTo(panel) or not panel.isVisible() for field in expected)
+    assert all(panel._labels[field].text() != "" for field in expected)
+    assert panel._labels["Underlying"].text() == "101.00"
+    assert panel._labels["Call Pressure"].property("status") == "negative"
+    assert panel._labels["Put Pressure"].property("status") == "positive"
+
+
+def test_summary_missing_values_render_placeholders_in_grouped_layout():
+    app()
+    panel = OptionChainPanel()
+    panel.render(unavailable_option_chain_view("NIFTY"))
+    for field in ("OI PCR", "Change OI PCR", "ATM Strike", "Support", "Resistance", "Max Pain", "Underlying", "Timestamp"):
+        assert panel._labels[field].text() == "-"
+
+
+@pytest.mark.parametrize("size", ((1320, 580), (1554, 712), (1874, 892)))
+def test_summary_layout_is_responsive_without_overlapping_widgets(size):
+    app()
+    panel = OptionChainPanel()
+    panel.render(view())
+    panel.resize(*size)
+    panel.show()
+    app().processEvents()
+    cards = panel.findChildren(MetricCard)
+    assert len(cards) == len(panel._cards)
+    for card in cards:
+        assert card.isVisibleTo(panel)
+        assert card.geometry().width() > 120
+        assert card.geometry().height() >= card.minimumHeight()
+    geometries = [(card, card.geometry()) for card in cards]
+    for index, (left_card, left_rect) in enumerate(geometries):
+        for right_card, right_rect in geometries[index + 1:]:
+            if left_rect.intersects(right_rect):
+                intersection = left_rect.intersected(right_rect)
+                assert intersection.width() == 0 or intersection.height() == 0, (
+                    left_card.findChild(QLabel).text(),
+                    right_card.findChild(QLabel).text(),
+                    intersection,
+                )
+    assert panel._table.isVisibleTo(panel)
+    assert panel._table.height() >= panel._table.minimumHeight()
+
+
 @pytest.mark.parametrize(
     ("pressure", "expected"),
     (
@@ -199,6 +268,22 @@ def test_table_cells_are_read_only_repeated_render_replaces_rows_and_values_are_
     assert panel._table.item(1, 0).text() == "-"
 
 
+def test_repeated_render_does_not_duplicate_summary_widgets_and_table_remains_usable():
+    app()
+    panel = OptionChainPanel()
+    card_count = len(panel.findChildren(MetricCard))
+    first = view(rows=(strike(90), strike(100, is_atm=True), strike(110)))
+    second = view(rows=(strike(100, is_atm=True), strike(110)), strike_count=2)
+    panel.render(first)
+    panel.render(second)
+    assert len(panel.findChildren(MetricCard)) == card_count
+    assert len(panel._cards) == card_count
+    assert panel._table.rowCount() == 2
+    assert panel._table.columnCount() == len(STRIKE_COLUMNS)
+    assert panel._table.editTriggers() == QAbstractItemView.NoEditTriggers
+    assert panel._table.selectionBehavior() == QAbstractItemView.SelectRows
+
+
 def test_row_and_change_oi_styling_markers_are_applied():
     app()
     rows = (
@@ -228,3 +313,21 @@ def test_panel_has_no_buttons_fetching_or_analytics_calculation_calls():
         if isinstance(node, ast.Call) and (isinstance(node.func, ast.Attribute) or isinstance(node.func, ast.Name))
     }
     assert called.isdisjoint({"process", "process_snapshot", "calculate", "classify", "fetch", "request", "login", "place_order"})
+
+
+def test_selected_option_chain_tab_survives_refresh_after_layout_repair():
+    app()
+    lifecycle = ApplicationBootstrap(
+        RuntimeConfiguration(
+            instruments=(RuntimeInstrument.SENSEX, RuntimeInstrument.BANKNIFTY, RuntimeInstrument.NIFTY)
+        )
+    ).create_application()
+    window = VisionMainWindow(lifecycle)
+    window.refresh()
+    panels = window._instrument_panels["BANKNIFTY"]
+    window._tabs.setCurrentWidget(panels["tab"])
+    panels["sections"].setCurrentIndex(2)
+    window.refresh()
+    assert window._tabs.tabText(window._tabs.currentIndex()) == "BANKNIFTY"
+    assert panels["sections"].tabText(panels["sections"].currentIndex()) == "Option Chain"
+    assert window._instrument_panels["BANKNIFTY"]["option_chain"] is panels["option_chain"]

@@ -4,11 +4,11 @@ Read-only option-chain analytics dashboard panel.
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QAbstractItemView, QGroupBox, QHBoxLayout, QTableWidget, QTableWidgetItem, QVBoxLayout
+from PySide6.QtWidgets import QAbstractItemView, QGridLayout, QGroupBox, QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout
 
 from dashboard import formatters
 from dashboard.models import DashboardOptionChainStrikeView, DashboardOptionChainView
-from dashboard.widgets import FieldGrid, MetricCard, StatusBadge
+from dashboard.widgets import MetricCard
 
 
 STRIKE_COLUMNS = (
@@ -32,12 +32,15 @@ class OptionChainPanel(QGroupBox):
     def __init__(self, parent=None):
         super().__init__("Option Chain Analytics", parent)
         self._labels = {}
-        self._cards = {
-            "Positioning Bias": MetricCard("Positioning Bias"),
-            "OI PCR": MetricCard("OI PCR"),
-            "Change OI PCR": MetricCard("Change OI PCR"),
-            "ATM Strike": MetricCard("ATM Strike"),
-        }
+        self._summary_fields = (
+            ("Positioning Bias", "OI PCR", "Change OI PCR", "ATM Strike"),
+            ("Support", "Resistance", "Max Pain", "Expiry"),
+            ("Call Pressure", "Put Pressure", "Total Call OI", "Total Put OI"),
+            ("Max Call OI", "Max Put OI", "Max Call Change OI", "Max Put Change OI"),
+            ("Available", "Symbol", "Exchange", "Underlying"),
+            ("Timestamp", "Strike Count", "Total Call Change OI", "Total Put Change OI"),
+        )
+        self._cards = {field: MetricCard(field) for row in self._summary_fields for field in row}
         self._table = QTableWidget(0, len(STRIKE_COLUMNS))
         self._table.setHorizontalHeaderLabels(STRIKE_COLUMNS)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -52,44 +55,20 @@ class OptionChainPanel(QGroupBox):
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 18, 14, 14)
         root.setSpacing(12)
-        cards = QHBoxLayout()
-        cards.setSpacing(10)
-        for card in self._cards.values():
-            cards.addWidget(card)
-        root.addLayout(cards)
 
-        fields = (
-            "Available",
-            "Symbol",
-            "Exchange",
-            "Expiry",
-            "Timestamp",
-            "Underlying",
-            "Strike Count",
-            "Call Pressure",
-            "Put Pressure",
-            "Support",
-            "Resistance",
-            "Max Pain",
-            "Max Call OI",
-            "Max Put OI",
-            "Max Call Change OI",
-            "Max Put Change OI",
-            "Total Call OI",
-            "Total Put OI",
-            "Total Call Change OI",
-            "Total Put Change OI",
-        )
-        grid = FieldGrid(fields)
-        root.addWidget(grid)
-        self._labels.update(grid.labels)
-        for field in ("Available", "Call Pressure", "Put Pressure"):
-            badge = StatusBadge()
-            grid.layout().replaceWidget(grid.labels[field], badge)
-            grid.labels[field].deleteLater()
-            self._labels[field] = badge
-        for field, card in self._cards.items():
-            self._labels[field] = card.value_label
+        summary = QGridLayout()
+        summary.setContentsMargins(0, 0, 0, 0)
+        summary.setHorizontalSpacing(10)
+        summary.setVerticalSpacing(10)
+        for column in range(4):
+            summary.setColumnStretch(column, 1)
+        for row, fields in enumerate(self._summary_fields):
+            for column, field in enumerate(fields):
+                card = self._cards[field]
+                card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+                summary.addWidget(card, row, column)
+                self._labels[field] = card.value_label
+        root.addLayout(summary)
 
         root.addWidget(self._table, 1)
 
@@ -100,26 +79,26 @@ class OptionChainPanel(QGroupBox):
         self._cards["OI PCR"].set_value(formatters.ratio(view.oi_pcr), kind="neutral")
         self._cards["Change OI PCR"].set_value(formatters.ratio(view.change_oi_pcr), kind="neutral")
         self._cards["ATM Strike"].set_value(formatters.price(view.atm_strike), kind="neutral")
-        self._labels["Available"].set_status_text(formatters.yes_no(view.available))
-        self._labels["Symbol"].setText(formatters.text(view.symbol))
-        self._labels["Exchange"].setText(formatters.text(view.exchange))
-        self._labels["Expiry"].setText(formatters.date_text(view.expiry_date))
-        self._labels["Timestamp"].setText(formatters.timestamp(view.timestamp))
-        self._labels["Underlying"].setText(formatters.price(view.underlying_price))
-        self._labels["Strike Count"].setText(formatters.integer(view.strike_count))
-        self._labels["Call Pressure"].set_status_text(view.call_pressure, kind=_pressure_kind(view.call_pressure))
-        self._labels["Put Pressure"].set_status_text(view.put_pressure, kind=_pressure_kind(view.put_pressure))
-        self._labels["Support"].setText(formatters.price(view.support_strike))
-        self._labels["Resistance"].setText(formatters.price(view.resistance_strike))
-        self._labels["Max Pain"].setText(formatters.price(view.max_pain_strike))
-        self._labels["Max Call OI"].setText(_strike_metric(view.max_call_oi_strike, view.max_call_oi_value))
-        self._labels["Max Put OI"].setText(_strike_metric(view.max_put_oi_strike, view.max_put_oi_value))
-        self._labels["Max Call Change OI"].setText(_strike_metric(view.max_call_change_oi_strike, view.max_call_change_oi_value))
-        self._labels["Max Put Change OI"].setText(_strike_metric(view.max_put_change_oi_strike, view.max_put_change_oi_value))
-        self._labels["Total Call OI"].setText(formatters.integer(view.total_call_oi))
-        self._labels["Total Put OI"].setText(formatters.integer(view.total_put_oi))
-        self._labels["Total Call Change OI"].setText(formatters.integer(view.total_call_change_oi))
-        self._labels["Total Put Change OI"].setText(formatters.integer(view.total_put_change_oi))
+        self._cards["Available"].set_value(formatters.yes_no(view.available))
+        self._cards["Symbol"].set_value(view.symbol, kind="neutral")
+        self._cards["Exchange"].set_value(view.exchange, kind="neutral")
+        self._cards["Expiry"].set_value(formatters.date_text(view.expiry_date), kind="neutral")
+        self._cards["Timestamp"].set_value(formatters.timestamp(view.timestamp), kind="neutral")
+        self._cards["Underlying"].set_value(formatters.price(view.underlying_price), kind="neutral")
+        self._cards["Strike Count"].set_value(formatters.integer(view.strike_count), kind="neutral")
+        self._cards["Call Pressure"].set_value(view.call_pressure, kind=_pressure_kind(view.call_pressure))
+        self._cards["Put Pressure"].set_value(view.put_pressure, kind=_pressure_kind(view.put_pressure))
+        self._cards["Support"].set_value(formatters.price(view.support_strike), kind="neutral")
+        self._cards["Resistance"].set_value(formatters.price(view.resistance_strike), kind="neutral")
+        self._cards["Max Pain"].set_value(formatters.price(view.max_pain_strike), kind="neutral")
+        self._cards["Max Call OI"].set_value(_strike_metric(view.max_call_oi_strike, view.max_call_oi_value), kind="neutral")
+        self._cards["Max Put OI"].set_value(_strike_metric(view.max_put_oi_strike, view.max_put_oi_value), kind="neutral")
+        self._cards["Max Call Change OI"].set_value(_strike_metric(view.max_call_change_oi_strike, view.max_call_change_oi_value), kind="neutral")
+        self._cards["Max Put Change OI"].set_value(_strike_metric(view.max_put_change_oi_strike, view.max_put_change_oi_value), kind="neutral")
+        self._cards["Total Call OI"].set_value(formatters.integer(view.total_call_oi), kind="neutral")
+        self._cards["Total Put OI"].set_value(formatters.integer(view.total_put_oi), kind="neutral")
+        self._cards["Total Call Change OI"].set_value(formatters.integer(view.total_call_change_oi), kind="neutral")
+        self._cards["Total Put Change OI"].set_value(formatters.integer(view.total_put_change_oi), kind="neutral")
         self._render_strikes(view)
 
     def _render_strikes(self, view: DashboardOptionChainView) -> None:
