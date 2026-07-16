@@ -18,6 +18,7 @@ class DashboardApplication:
         live_market_data_runtime: LiveMarketDataRuntime | None = None,
         argv: list[str] | None = None,
         refresh_interval_ms: int = 500,
+        clock=None,
     ):
         if not isinstance(lifecycle, ApplicationLifecycleManager):
             raise TypeError("lifecycle must be an ApplicationLifecycleManager.")
@@ -30,6 +31,7 @@ class DashboardApplication:
             lifecycle,
             live_market_data_runtime=live_market_data_runtime,
             refresh_interval_ms=refresh_interval_ms,
+            clock=clock,
         )
         self._shutdown = False
 

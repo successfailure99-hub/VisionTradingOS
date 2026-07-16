@@ -2,6 +2,9 @@
 Pure dashboard presentation builders.
 """
 
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
+
 from application.lifecycle_manager import LifecycleSnapshot
 from application.live_market_data import LiveMarketDataRuntimeSnapshot
 from application.models import RuntimeSnapshot
@@ -10,6 +13,7 @@ from dashboard.models import (
     DashboardJournalView,
     DashboardLiveMarketDataView,
     DashboardLiveSubscriptionView,
+    DashboardMarketSessionView,
     DashboardMarketView,
     DashboardOptionChainStrikeView,
     DashboardOptionChainView,
@@ -26,11 +30,17 @@ from dashboard.models import (
 
 MISSING = "-"
 INSTRUMENT_ORDER = ("NIFTY", "BANKNIFTY", "SENSEX")
+IST = ZoneInfo("Asia/Kolkata")
+PRE_OPEN_TIME = time(9, 0)
+MARKET_OPEN_TIME = time(9, 15)
+MARKET_CLOSE_TIME = time(15, 30)
 
 
 def build_dashboard_view(
     lifecycle_snapshot: LifecycleSnapshot,
     live_market_data_snapshot: LiveMarketDataRuntimeSnapshot | None = None,
+    *,
+    clock=None,
 ) -> DashboardView:
     runtime_snapshots = _stable_runtime_snapshots(lifecycle_snapshot.orchestrator_snapshot.runtime_snapshots)
     return DashboardView(
@@ -42,12 +52,14 @@ def build_dashboard_view(
         positions=tuple(build_position_view(snapshot) for snapshot in runtime_snapshots),
         journals=tuple(build_journal_view(snapshot) for snapshot in runtime_snapshots),
         option_chains=tuple(build_option_chain_view(snapshot) for snapshot in runtime_snapshots),
-        live_market_data=build_live_market_data_view(live_market_data_snapshot),
+        live_market_data=build_live_market_data_view(live_market_data_snapshot, clock=clock),
     )
 
 
 def build_live_market_data_view(
     snapshot: LiveMarketDataRuntimeSnapshot | None,
+    *,
+    clock=None,
 ) -> DashboardLiveMarketDataView:
     if snapshot is None:
         return unavailable_live_market_data_view()
@@ -88,6 +100,38 @@ def build_live_market_data_view(
         last_started_at=snapshot.last_started_at,
         last_stopped_at=snapshot.last_stopped_at,
         last_error=_safe_error(snapshot.last_error or getattr(websocket, "last_error", None)),
+        market_session=build_market_session_view(snapshot, clock=clock),
+    )
+
+
+def build_market_session_view(
+    snapshot: LiveMarketDataRuntimeSnapshot,
+    *,
+    clock=None,
+) -> DashboardMarketSessionView:
+    now = _clock_now(clock)
+    market_status, session, next_open = _market_status(now)
+    websocket = snapshot.websocket
+    connected = bool(getattr(websocket, "connected", False))
+    delivered_tick_count = getattr(websocket, "delivered_tick_count", 0) if websocket is not None else 0
+    last_tick_at = getattr(websocket, "last_tick_at", None) if websocket is not None else None
+    if not connected:
+        websocket_text = "Disconnected"
+        live_ticks = "Offline"
+    elif delivered_tick_count > 0 or last_tick_at is not None:
+        websocket_text = "Connected"
+        live_ticks = "Receiving"
+    else:
+        websocket_text = "Connected"
+        live_ticks = "Waiting"
+    return DashboardMarketSessionView(
+        market_status=market_status,
+        current_time=_time_text(now),
+        session=session,
+        websocket=websocket_text,
+        live_ticks=live_ticks,
+        last_tick=_time_text(last_tick_at) if last_tick_at is not None else MISSING,
+        next_open=next_open,
     )
 
 
@@ -330,6 +374,56 @@ def _metric_value(metric) -> int | None:
 
 def _swing_price(swing) -> float | None:
     return getattr(swing, "price", None)
+
+
+def _clock_now(clock) -> datetime:
+    if clock is None:
+        raise ValueError("clock is required for market session rendering")
+    value = clock()
+    if not isinstance(value, datetime):
+        raise TypeError("clock result must be datetime")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("clock result must be timezone-aware")
+    return value.astimezone(IST)
+
+
+def _market_status(now: datetime) -> tuple[str, str, str]:
+    if now.weekday() >= 5:
+        next_open = _next_open(now)
+        return "NSE closed - weekend", "Closed", _next_open_text(next_open, include_day=True)
+    current = now.time()
+    today_open = now.replace(hour=MARKET_OPEN_TIME.hour, minute=MARKET_OPEN_TIME.minute, second=0, microsecond=0)
+    if current < PRE_OPEN_TIME:
+        return "Waiting for NSE to open", "Closed", _next_open_text(today_open)
+    if PRE_OPEN_TIME <= current < MARKET_OPEN_TIME:
+        return "NSE pre-open", "Pre-Open", _next_open_text(today_open)
+    if MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME:
+        return "NSE market open", "Live", MISSING
+    next_open = _next_open(now)
+    return "NSE closed for the day", "Closed", _next_open_text(next_open, include_day=next_open.date() != now.date())
+
+
+def _next_open(now: datetime) -> datetime:
+    candidate = now.replace(hour=MARKET_OPEN_TIME.hour, minute=MARKET_OPEN_TIME.minute, second=0, microsecond=0)
+    if now.weekday() < 5 and now.time() < MARKET_OPEN_TIME:
+        return candidate
+    candidate = candidate + timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _next_open_text(value: datetime, *, include_day: bool = False) -> str:
+    prefix = f"{value.strftime('%A')} " if include_day else ""
+    return f"{prefix}{value.strftime('%H:%M')} IST"
+
+
+def _time_text(value: datetime) -> str:
+    if not isinstance(value, datetime):
+        return MISSING
+    if value.tzinfo is None or value.utcoffset() is None:
+        return MISSING
+    return f"{value.astimezone(IST).strftime('%H:%M')} IST"
 
 
 def _stable_runtime_snapshots(runtime_snapshots) -> tuple[RuntimeSnapshot, ...]:

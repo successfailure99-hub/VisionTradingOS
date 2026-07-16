@@ -11,7 +11,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QPushButton
 
-from dashboard.models import DashboardLiveMarketDataView, DashboardLiveSubscriptionView, unavailable_live_market_data_view
+from dashboard.models import (
+    DashboardLiveMarketDataView,
+    DashboardLiveSubscriptionView,
+    DashboardMarketSessionView,
+    unavailable_live_market_data_view,
+)
 from dashboard.panels.live_market_data_panel import LiveMarketDataPanel
 
 
@@ -50,6 +55,15 @@ def view(rows=None, **overrides):
         last_started_at=NOW,
         last_stopped_at=NOW,
         last_error=None,
+        market_session=DashboardMarketSessionView(
+            market_status="NSE market open",
+            current_time="09:15 IST",
+            session="Live",
+            websocket="Connected",
+            live_ticks="Receiving",
+            last_tick="09:15 IST",
+            next_open="-",
+        ),
     )
     values.update(overrides)
     return DashboardLiveMarketDataView(**values)
@@ -73,7 +87,43 @@ def test_running_view_renders_status_counters_and_timestamps():
     assert panel._labels["Raw Ticks"].text() == "4"
     assert panel._labels["Delivered Ticks"].text() == "6"
     assert panel._labels["Rejected Ticks"].property("status") == "negative"
-    assert panel._labels["Last Tick"].text().startswith("2026-07-12 09:15:00")
+    assert panel._labels["Last Tick"].text() == "09:15 IST"
+    assert panel._labels["Market Status"].text() == "NSE market open"
+    assert panel._labels["Current Time"].text() == "09:15 IST"
+    assert panel._labels["Session"].text() == "Live"
+    assert panel._labels["WebSocket"].text() == "Connected"
+    assert panel._labels["Live Ticks"].text() == "Receiving"
+    assert panel._labels["Next Open"].text() == "-"
+
+
+def test_market_session_block_renders_waiting_and_disconnected_states():
+    app()
+    panel = LiveMarketDataPanel()
+    panel.render(
+        view(
+            connected=False,
+            websocket_status="Disconnected",
+            delivered_tick_count=0,
+            last_tick_at=None,
+            market_session=DashboardMarketSessionView(
+                market_status="Waiting for NSE to open",
+                current_time="06:53 IST",
+                session="Closed",
+                websocket="Disconnected",
+                live_ticks="Offline",
+                last_tick="-",
+                next_open="09:15 IST",
+            ),
+        )
+    )
+    assert panel._labels["Market Status"].text() == "Waiting for NSE to open"
+    assert panel._labels["Market Status"].property("status") == "warning"
+    assert panel._labels["Session"].text() == "Closed"
+    assert panel._labels["WebSocket"].text() == "Disconnected"
+    assert panel._labels["WebSocket"].property("status") == "negative"
+    assert panel._labels["Live Ticks"].text() == "Offline"
+    assert panel._labels["Last Tick"].text() == "-"
+    assert "1970" not in panel._labels["Last Tick"].text()
 
 
 def test_subscriptions_render_in_order_and_table_is_read_only():

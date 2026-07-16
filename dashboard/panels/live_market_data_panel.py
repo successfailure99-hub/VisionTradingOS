@@ -24,6 +24,15 @@ class LiveMarketDataPanel(QGroupBox):
         self._offline_label.setProperty("status", "warning")
         self._offline_label.setMinimumHeight(30)
         self._offline_label.setWordWrap(True)
+        self._session_fields = (
+            "Market Status",
+            "Current Time",
+            "Session",
+            "WebSocket",
+            "Live Ticks",
+            "Last Tick",
+            "Next Open",
+        )
         self._table = QTableWidget(0, 4)
         self._table.setHorizontalHeaderLabels(("Instrument", "Exchange", "Token", "Mode"))
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -39,6 +48,14 @@ class LiveMarketDataPanel(QGroupBox):
         root.setContentsMargins(14, 18, 14, 14)
         root.setSpacing(12)
         root.addWidget(self._offline_label)
+        session_grid = FieldGrid(self._session_fields)
+        root.addWidget(session_grid)
+        self._labels.update(session_grid.labels)
+        for field in ("Market Status", "Session", "WebSocket", "Live Ticks"):
+            badge = StatusBadge()
+            session_grid.layout().replaceWidget(session_grid.labels[field], badge)
+            session_grid.labels[field].deleteLater()
+            self._labels[field] = badge
         cards = QHBoxLayout()
         cards.setSpacing(10)
         for card in self._cards.values():
@@ -57,7 +74,6 @@ class LiveMarketDataPanel(QGroupBox):
             "Stops",
             "Last Connected",
             "Last Disconnected",
-            "Last Tick",
             "Last Started",
             "Last Stopped",
             "Last Error",
@@ -78,6 +94,14 @@ class LiveMarketDataPanel(QGroupBox):
         if not isinstance(view, DashboardLiveMarketDataView):
             raise TypeError("view must be DashboardLiveMarketDataView")
         self._offline_label.setVisible(not view.available)
+        session = view.market_session
+        self._labels["Market Status"].set_status_text(session.market_status, kind=_market_status_kind(session.session))
+        self._labels["Current Time"].setText(formatters.text(session.current_time))
+        self._labels["Session"].set_status_text(session.session, kind=_session_kind(session.session))
+        self._labels["WebSocket"].set_status_text(session.websocket, kind=_websocket_kind(session.websocket))
+        self._labels["Live Ticks"].set_status_text(session.live_ticks, kind=_live_ticks_kind(session.live_ticks))
+        self._labels["Last Tick"].setText(formatters.text(session.last_tick))
+        self._labels["Next Open"].setText(formatters.text(session.next_open))
         self._cards["Runtime Status"].set_value(view.runtime_status)
         self._cards["WebSocket Status"].set_value(view.websocket_status)
         self._cards["Delivered Ticks"].set_value(formatters.integer(view.delivered_tick_count), kind="positive")
@@ -94,7 +118,6 @@ class LiveMarketDataPanel(QGroupBox):
         self._labels["Stops"].setText(formatters.integer(view.stop_count))
         self._labels["Last Connected"].setText(formatters.timestamp(view.last_connected_at))
         self._labels["Last Disconnected"].setText(formatters.timestamp(view.last_disconnected_at))
-        self._labels["Last Tick"].setText(formatters.timestamp(view.last_tick_at))
         self._labels["Last Started"].setText(formatters.timestamp(view.last_started_at))
         self._labels["Last Stopped"].setText(formatters.timestamp(view.last_stopped_at))
         self._labels["Last Error"].setText(formatters.text(view.last_error))
@@ -114,3 +137,27 @@ class LiveMarketDataPanel(QGroupBox):
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 self._table.setItem(row, column, item)
         self._table.resizeColumnsToContents()
+
+
+def _market_status_kind(session: str) -> str:
+    return "positive" if session == "Live" else "warning"
+
+
+def _session_kind(session: str) -> str:
+    if session == "Live":
+        return "positive"
+    if session == "Pre-Open":
+        return "warning"
+    return "neutral"
+
+
+def _websocket_kind(value: str) -> str:
+    return "positive" if value == "Connected" else "negative"
+
+
+def _live_ticks_kind(value: str) -> str:
+    if value == "Receiving":
+        return "positive"
+    if value == "Waiting":
+        return "warning"
+    return "neutral"

@@ -48,6 +48,29 @@ class DashboardLiveSubscriptionView:
 
 
 @dataclass(frozen=True, slots=True)
+class DashboardMarketSessionView:
+    market_status: str
+    current_time: str
+    session: str
+    websocket: str
+    live_ticks: str
+    last_tick: str
+    next_open: str
+
+
+def default_market_session_view() -> DashboardMarketSessionView:
+    return DashboardMarketSessionView(
+        market_status="-",
+        current_time="-",
+        session="Closed",
+        websocket="Offline",
+        live_ticks="Offline",
+        last_tick="-",
+        next_open="-",
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class DashboardLiveMarketDataView:
     available: bool
     runtime_status: str
@@ -74,8 +97,11 @@ class DashboardLiveMarketDataView:
     last_started_at: datetime | None
     last_stopped_at: datetime | None
     last_error: str | None
+    market_session: DashboardMarketSessionView = field(default_factory=default_market_session_view)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.market_session, DashboardMarketSessionView):
+            raise TypeError("market_session must be DashboardMarketSessionView")
         object.__setattr__(self, "configured_instruments", tuple(self.configured_instruments))
         object.__setattr__(self, "configured_tokens", tuple(self.configured_tokens))
         object.__setattr__(self, "subscription_rows", tuple(self.subscription_rows))
@@ -131,6 +157,15 @@ def unavailable_live_market_data_view() -> DashboardLiveMarketDataView:
         last_started_at=None,
         last_stopped_at=None,
         last_error=None,
+        market_session=DashboardMarketSessionView(
+            market_status="Live market data not configured",
+            current_time="-",
+            session="Closed",
+            websocket="Offline",
+            live_ticks="Offline",
+            last_tick="-",
+            next_open="-",
+        ),
     )
 
 

@@ -2,6 +2,8 @@
 Vision Trading OS desktop main window.
 """
 
+from datetime import UTC, datetime
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QFrame,
@@ -32,6 +34,10 @@ from dashboard.theme import dashboard_stylesheet
 from dashboard.widgets import StatusBadge
 
 
+def _default_clock() -> datetime:
+    return datetime.now(UTC)
+
+
 class VisionMainWindow(QMainWindow):
     def __init__(
         self,
@@ -39,6 +45,7 @@ class VisionMainWindow(QMainWindow):
         *,
         live_market_data_runtime: LiveMarketDataRuntime | None = None,
         refresh_interval_ms: int = 500,
+        clock=None,
         parent=None,
     ):
         if not isinstance(lifecycle, ApplicationLifecycleManager):
@@ -51,6 +58,7 @@ class VisionMainWindow(QMainWindow):
         self._lifecycle = lifecycle
         self._live_market_data_runtime = live_market_data_runtime
         self._current_view: DashboardView | None = None
+        self._clock = clock or _default_clock
         self._runtime_panel = RuntimePanel()
         self._live_market_data_panel = LiveMarketDataPanel()
         self._main_tabs = QTabWidget()
@@ -82,7 +90,7 @@ class VisionMainWindow(QMainWindow):
             if self._live_market_data_runtime is not None
             else None
         )
-        view = build_dashboard_view(lifecycle_snapshot, live_snapshot)
+        view = build_dashboard_view(lifecycle_snapshot, live_snapshot, clock=self._clock)
         self.render(view)
         self._current_view = view
         return view

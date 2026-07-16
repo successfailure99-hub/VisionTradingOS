@@ -221,7 +221,7 @@ def create_dashboard_application(
         runtime_factory=runtime_factory,
         ticker_client=ticker_client,
     )
-    return DashboardApplication(lifecycle, live_market_data_runtime=runtime)
+    return DashboardApplication(lifecycle, live_market_data_runtime=runtime, clock=clock)
 
 
 def _parse_bool(value: str | None, variable_name: str) -> bool:
