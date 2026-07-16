@@ -14,8 +14,15 @@ from application.enums import RuntimeInstrument
 from application.lifecycle_manager import ApplicationLifecycleManager
 from application.live_market_data import LiveMarketDataConfiguration, LiveMarketDataRuntime, LiveMarketDataRuntimeFactory
 from application.models import RuntimeConfiguration
+from application.desktop_option_chain import (
+    DesktopOptionChainConfigurationError,
+    DesktopOptionChainRuntimeManager,
+    DesktopOptionChainSettings,
+    InstrumentClientFactory,
+    create_instrument_client,
+)
 from brokers.zerodha.auth import KiteConnectAuthClient, ZerodhaCredentials, ZerodhaSessionManager
-from brokers.zerodha.market_data import ZerodhaInstrumentSubscription, ZerodhaSubscriptionMode
+from brokers.zerodha.market_data import KiteTickerClient, ZerodhaInstrumentSubscription, ZerodhaSubscriptionMode
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
 from dashboard.application import DashboardApplication
@@ -40,6 +47,10 @@ ENV_ZERODHA_API_SECRET = "ZERODHA_API_SECRET"
 ENV_ZERODHA_ACCESS_TOKEN = "ZERODHA_ACCESS_TOKEN"
 ENV_LIVE_MARKET_DATA_ENABLED = "LIVE_MARKET_DATA_ENABLED"
 ENV_LIVE_MARKET_DATA_AUTO_CONNECT = "LIVE_MARKET_DATA_AUTO_CONNECT"
+ENV_LIVE_OPTION_CHAIN_ENABLED = "LIVE_OPTION_CHAIN_ENABLED"
+ENV_LIVE_OPTION_CHAIN_AUTO_START = "LIVE_OPTION_CHAIN_AUTO_START"
+ENV_OPTION_CHAIN_REFRESH_SECONDS = "OPTION_CHAIN_REFRESH_SECONDS"
+ENV_OPTION_CHAIN_STRIKES_EACH_SIDE = "OPTION_CHAIN_STRIKES_EACH_SIDE"
 
 INSTRUMENT_TOKEN_ENV = (
     (Instrument.NIFTY, "NIFTY_INSTRUMENT_TOKEN", Exchange.NSE),
@@ -56,13 +67,15 @@ class DesktopLiveDataSettings:
     api_secret: str | None
     access_token: str | None
     subscriptions: tuple[ZerodhaInstrumentSubscription, ...]
+    option_chain: DesktopOptionChainSettings
 
     def __repr__(self) -> str:
         return (
             "DesktopLiveDataSettings("
             f"enabled={self.enabled}, "
             f"auto_connect={self.auto_connect}, "
-            f"subscriptions={len(self.subscriptions)})"
+            f"subscriptions={len(self.subscriptions)}, "
+            f"option_chain_enabled={self.option_chain.enabled})"
         )
 
     __str__ = __repr__
@@ -73,7 +86,10 @@ def load_desktop_live_configuration(
 ) -> DesktopLiveDataSettings:
     enabled = _parse_bool(environ.get(ENV_LIVE_MARKET_DATA_ENABLED, "false"), ENV_LIVE_MARKET_DATA_ENABLED)
     auto_connect = _parse_bool(environ.get(ENV_LIVE_MARKET_DATA_AUTO_CONNECT, "true"), ENV_LIVE_MARKET_DATA_AUTO_CONNECT)
+    option_chain = _load_option_chain_settings(environ)
     if not enabled:
+        if option_chain.enabled:
+            raise DesktopLiveDataConfigurationError("LIVE_OPTION_CHAIN_ENABLED requires LIVE_MARKET_DATA_ENABLED")
         return DesktopLiveDataSettings(
             enabled=False,
             auto_connect=auto_connect,
@@ -81,6 +97,7 @@ def load_desktop_live_configuration(
             api_secret=None,
             access_token=None,
             subscriptions=(),
+            option_chain=option_chain,
         )
 
     missing = [
@@ -114,6 +131,7 @@ def load_desktop_live_configuration(
         api_secret=_text(environ[ENV_ZERODHA_API_SECRET]),
         access_token=_text(environ[ENV_ZERODHA_ACCESS_TOKEN]),
         subscriptions=subscriptions,
+        option_chain=option_chain,
     )
 
 
@@ -194,6 +212,7 @@ def create_dashboard_application(
     environ: Mapping[str, str],
     auth_client_factory: AuthClientFactory | None = None,
     session_manager_factory: SessionManagerFactory | None = None,
+    instrument_client_factory: InstrumentClientFactory | None = None,
     runtime_factory: LiveMarketDataRuntimeFactory | None = None,
     ticker_client=None,
     clock=None,
@@ -214,14 +233,77 @@ def create_dashboard_application(
         session_manager_factory=session_manager_factory,
         clock=clock,
     )
+    if settings.enabled and session_manager is not None:
+        session = session_manager.session
+        if session is None:
+            raise DesktopLiveDataConfigurationError("authenticated Zerodha session is required")
+        shared_ticker = ticker_client or KiteTickerClient(api_key=settings.api_key, access_token=session.access_token)
+        ticker_router = _DesktopTickerRouter(
+            shared_ticker,
+            spot_tokens=tuple(subscription.instrument_token for subscription in settings.subscriptions),
+        )
+    else:
+        ticker_router = ticker_client
     runtime = create_desktop_live_runtime(
         lifecycle=lifecycle,
         settings=settings,
         session_manager=session_manager,
         runtime_factory=runtime_factory,
-        ticker_client=ticker_client,
+        ticker_client=ticker_router,
     )
-    return DashboardApplication(lifecycle, live_market_data_runtime=runtime, clock=clock)
+    option_chain_manager = None
+    if settings.option_chain.enabled and session_manager is not None and ticker_router is not None:
+        option_chain_manager = _create_desktop_option_chain_manager(
+            lifecycle=lifecycle,
+            settings=settings,
+            session_manager=session_manager,
+            live_market_data_runtime=runtime,
+            ticker_router=ticker_router,
+            instrument_client_factory=instrument_client_factory,
+            clock=clock,
+        )
+        if settings.option_chain.auto_start:
+            try:
+                option_chain_manager.start()
+            except DesktopOptionChainConfigurationError:
+                option_chain_manager = None
+    return DashboardApplication(
+        lifecycle,
+        live_market_data_runtime=runtime,
+        live_option_chain_runtime=option_chain_manager,
+        clock=clock,
+    )
+
+
+def _create_desktop_option_chain_manager(
+    *,
+    lifecycle: ApplicationLifecycleManager,
+    settings: DesktopLiveDataSettings,
+    session_manager: ZerodhaSessionManager,
+    live_market_data_runtime: LiveMarketDataRuntime | None,
+    ticker_router,
+    instrument_client_factory: InstrumentClientFactory | None,
+    clock=None,
+) -> DesktopOptionChainRuntimeManager:
+    session = session_manager.session
+    if session is None or not session_manager.is_authenticated():
+        raise DesktopLiveDataConfigurationError("authenticated Zerodha session is required")
+    factory = instrument_client_factory or create_instrument_client
+    try:
+        instrument_client = factory(api_key=settings.api_key, access_token=session.access_token)
+        manager = DesktopOptionChainRuntimeManager(
+            lifecycle=lifecycle,
+            live_market_data_runtime=live_market_data_runtime,
+            ticker_client=ticker_router,
+            instrument_client=instrument_client,
+            settings=settings.option_chain,
+            spot_subscriptions=settings.subscriptions,
+            clock=clock,
+        )
+    except Exception as exc:
+        raise DesktopLiveDataConfigurationError(f"Live option-chain startup failed: {_safe_message(exc, settings)}") from exc
+    ticker_router.set_option_chain_manager(manager)
+    return manager
 
 
 def _parse_bool(value: str | None, variable_name: str) -> bool:
@@ -241,6 +323,45 @@ def _parse_token(value: str, variable_name: str) -> int:
     if token <= 0:
         raise DesktopLiveDataConfigurationError(f"{variable_name} must be a positive integer")
     return token
+
+
+def _load_option_chain_settings(environ: Mapping[str, str]) -> DesktopOptionChainSettings:
+    enabled = _parse_bool(environ.get(ENV_LIVE_OPTION_CHAIN_ENABLED, "false"), ENV_LIVE_OPTION_CHAIN_ENABLED)
+    auto_start = _parse_bool(environ.get(ENV_LIVE_OPTION_CHAIN_AUTO_START, "true"), ENV_LIVE_OPTION_CHAIN_AUTO_START)
+    refresh_seconds = _parse_positive_int(
+        environ.get(ENV_OPTION_CHAIN_REFRESH_SECONDS, "15"),
+        ENV_OPTION_CHAIN_REFRESH_SECONDS,
+    )
+    strikes_each_side = _parse_non_negative_int(
+        environ.get(ENV_OPTION_CHAIN_STRIKES_EACH_SIDE, "5"),
+        ENV_OPTION_CHAIN_STRIKES_EACH_SIDE,
+    )
+    return DesktopOptionChainSettings(
+        enabled=enabled,
+        auto_start=auto_start,
+        refresh_seconds=refresh_seconds,
+        strikes_each_side=strikes_each_side,
+    )
+
+
+def _parse_positive_int(value: str | None, variable_name: str) -> int:
+    try:
+        parsed = int(_text(value))
+    except Exception as exc:
+        raise DesktopLiveDataConfigurationError(f"{variable_name} must be a positive integer") from exc
+    if parsed <= 0:
+        raise DesktopLiveDataConfigurationError(f"{variable_name} must be a positive integer")
+    return parsed
+
+
+def _parse_non_negative_int(value: str | None, variable_name: str) -> int:
+    try:
+        parsed = int(_text(value))
+    except Exception as exc:
+        raise DesktopLiveDataConfigurationError(f"{variable_name} must be a non-negative integer") from exc
+    if parsed < 0:
+        raise DesktopLiveDataConfigurationError(f"{variable_name} must be a non-negative integer")
+    return parsed
 
 
 def _ensure_unique_tokens(subscriptions: tuple[ZerodhaInstrumentSubscription, ...]) -> None:
@@ -271,3 +392,58 @@ def _text(value) -> str:
 
 def _default_clock() -> datetime:
     return datetime.now(UTC)
+
+
+class _DesktopTickerRouter:
+    def __init__(self, client, *, spot_tokens: tuple[int, ...]):
+        self._client = client
+        self._spot_tokens = set(spot_tokens)
+        self._option_chain_manager = None
+        self._callbacks = {}
+
+    def set_option_chain_manager(self, manager: DesktopOptionChainRuntimeManager) -> None:
+        self._option_chain_manager = manager
+
+    def set_callbacks(self, **callbacks):
+        self._callbacks = callbacks
+        self._client.set_callbacks(
+            **{
+                **callbacks,
+                "on_ticks": self._on_ticks,
+            }
+        )
+
+    def connect(self, *, threaded=True):
+        self._client.connect(threaded=threaded)
+
+    def close(self):
+        self._client.close()
+
+    def subscribe(self, instrument_tokens):
+        self._client.subscribe(instrument_tokens)
+
+    def unsubscribe(self, instrument_tokens):
+        self._client.unsubscribe(instrument_tokens)
+
+    def set_mode(self, mode, instrument_tokens):
+        self._client.set_mode(mode, instrument_tokens)
+
+    def _on_ticks(self, ws, ticks) -> None:
+        rows = tuple(ticks)
+        option_tokens = self._option_chain_manager.option_tokens() if self._option_chain_manager is not None else set()
+        spot_rows = tuple(row for row in rows if _tick_token(row) in self._spot_tokens)
+        option_rows = tuple(row for row in rows if _tick_token(row) in option_tokens)
+        unknown_rows = tuple(row for row in rows if _tick_token(row) not in self._spot_tokens and _tick_token(row) not in option_tokens)
+        spot_callback = self._callbacks.get("on_ticks")
+        if spot_callback is not None and (spot_rows or unknown_rows):
+            spot_callback(ws, spot_rows + unknown_rows)
+        if self._option_chain_manager is not None:
+            if spot_rows:
+                self._option_chain_manager.deliver_spot_ticks(spot_rows)
+            if option_rows:
+                self._option_chain_manager.deliver_option_ticks(option_rows)
+
+
+def _tick_token(row) -> int | None:
+    token = row.get("instrument_token") if hasattr(row, "get") else None
+    return token if isinstance(token, int) and not isinstance(token, bool) else None

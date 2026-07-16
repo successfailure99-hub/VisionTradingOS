@@ -16,6 +16,7 @@ class DashboardApplication:
         lifecycle: ApplicationLifecycleManager,
         *,
         live_market_data_runtime: LiveMarketDataRuntime | None = None,
+        live_option_chain_runtime=None,
         argv: list[str] | None = None,
         refresh_interval_ms: int = 500,
         clock=None,
@@ -26,6 +27,7 @@ class DashboardApplication:
             raise TypeError("live_market_data_runtime must be a LiveMarketDataRuntime.")
         self._lifecycle = lifecycle
         self._live_market_data_runtime = live_market_data_runtime
+        self._live_option_chain_runtime = live_option_chain_runtime
         self._qt_app = QApplication.instance() or QApplication(argv or [])
         self._main_window = VisionMainWindow(
             lifecycle,
@@ -47,6 +49,10 @@ class DashboardApplication:
     def live_market_data_runtime(self) -> LiveMarketDataRuntime | None:
         return self._live_market_data_runtime
 
+    @property
+    def live_option_chain_runtime(self):
+        return self._live_option_chain_runtime
+
     def run(self) -> int:
         if self._lifecycle.status is not RuntimeStatus.RUNNING:
             self._lifecycle.start()
@@ -64,9 +70,14 @@ class DashboardApplication:
         first_error = None
         self._main_window.stop_refresh()
         try:
-            self._stop_live_runtime_if_needed()
+            self._stop_live_option_chain_if_needed()
         except Exception as exc:
             first_error = exc
+        try:
+            self._stop_live_runtime_if_needed()
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
         try:
             if self._lifecycle.status is RuntimeStatus.RUNNING:
                 self._lifecycle.stop()
@@ -87,3 +98,9 @@ class DashboardApplication:
             LiveMarketDataRuntimeStatus.ERROR,
         }:
             runtime.stop()
+
+    def _stop_live_option_chain_if_needed(self) -> None:
+        runtime = self._live_option_chain_runtime
+        if runtime is None:
+            return
+        runtime.stop()

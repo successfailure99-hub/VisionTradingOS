@@ -78,6 +78,10 @@ class LiveOptionChainRuntime:
         self._latest_option_chain_snapshot = None
         self._latest_option_chain_analysis = None
 
+    @property
+    def option_chain_engine(self) -> OptionChainEngine:
+        return self._option_chain_engine
+
     def start(self) -> LiveOptionChainSnapshot:
         with self._lock:
             self._validate_entries(self._universe, self._active_entries(require_active=True))
