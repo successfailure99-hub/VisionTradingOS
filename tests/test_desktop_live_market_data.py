@@ -295,6 +295,10 @@ def test_tick_delivery_reaches_orchestrator_and_rejected_tick_sets_safe_error_st
     )
     view = dashboard.main_window.refresh()
     assert view.markets[0].last_price == 25000.0
+    assert view.markets[0].market_bias != "-"
+    assert view.ai[0].market_summary != "-"
+    assert view.strategies[0].decision != "-"
+    assert view.strategies[0].risk_decision == "-"
     snapshot = runtime.snapshot()
     assert snapshot.websocket.raw_tick_count == 2
     assert snapshot.websocket.delivered_tick_count == 1

@@ -105,6 +105,7 @@ class SymbolRuntime:
         self._process_closed_candles()
         self._last_tick = tick
         self._updated_at = tick.timestamp
+        self._refresh_dashboard_analysis(tick.timestamp, tick.last_price)
         return self.snapshot()
 
     def process_daily_ohlc(self, daily_ohlc: DailyOHLC) -> tuple[CPRLevels, CamarillaLevels]:
@@ -157,6 +158,8 @@ class SymbolRuntime:
         self._require_running()
         state = self.option_chain_engine.process(snapshot)
         self._updated_at = state.timestamp
+        if self._last_tick is not None:
+            self._refresh_dashboard_analysis(state.timestamp, self._last_tick.last_price)
         return state
 
     def build_market_context(
@@ -322,6 +325,34 @@ class SymbolRuntime:
         for candle in history[self._last_processed_history_count :]:
             self.price_action_engine.process(candle)
         self._last_processed_history_count = len(history)
+
+    def _refresh_dashboard_analysis(self, timestamp, current_price: float) -> None:
+        session_high, session_low = self._session_high_low(current_price)
+        try:
+            context = self.build_market_context(
+                timestamp=timestamp,
+                current_price=current_price,
+                session_high=session_high,
+                session_low=session_low,
+            )
+            reasoning = self.run_ai_reasoning(context)
+            self.run_strategy(context, reasoning)
+        except Exception:
+            # Downstream dashboard analysis must never reject an otherwise valid
+            # market-data tick; engines keep their previous deterministic state.
+            return
+
+    def _session_high_low(self, current_price: float) -> tuple[float, float]:
+        highs = [current_price]
+        lows = [current_price]
+        current = self.candle_engine.get_current(self._core_instrument)
+        if current is not None:
+            highs.append(current.high)
+            lows.append(current.low)
+        for candle in self.candle_engine.get_history(self._core_instrument):
+            highs.append(candle.high)
+            lows.append(candle.low)
+        return max(highs), min(lows)
 
     def _require_running(self) -> None:
         if self._status is not RuntimeStatus.RUNNING:

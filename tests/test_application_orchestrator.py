@@ -30,6 +30,8 @@ from engines.ai_reasoning.enums import (
     TradingSuitability,
 )
 from engines.ai_reasoning.models import AIReasoningState
+from engines.option_chain.enums import OptionType
+from engines.option_chain.models import OptionChainSnapshot, OptionLeg, OptionStrike
 from engines.camarilla.camarilla_engine import CamarillaEngine
 from engines.cpr.cpr_engine import CPREngine
 from engines.market_context.enums import (
@@ -79,6 +81,20 @@ def tick(symbol=Instrument.NIFTY, timestamp=TS, price=100.0, volume=10):
 
 def daily_ohlc(trading_date=date(2026, 7, 12)):
     return DailyOHLC(trading_date, 95.0, 105.0, 90.0, 100.0)
+
+def option_snapshot(timestamp=TS):
+    return OptionChainSnapshot(
+        symbol="NIFTY",
+        exchange="NSE",
+        expiry_date=date(2026, 7, 30),
+        timestamp=timestamp,
+        underlying_price=101.0,
+        strikes=(
+            OptionStrike(100.0, OptionLeg(OptionType.CALL, 10.0, 1000, 25, 100), OptionLeg(OptionType.PUT, 9.0, 1200, 50, 120)),
+            OptionStrike(101.0, OptionLeg(OptionType.CALL, 11.0, 1400, 30, 110), OptionLeg(OptionType.PUT, 8.0, 900, 10, 90)),
+            OptionStrike(102.0, OptionLeg(OptionType.CALL, 12.0, 900, 10, 90), OptionLeg(OptionType.PUT, 7.0, 800, 5, 80)),
+        ),
+    )
 
 
 def bullish_context(timestamp=TS):
@@ -254,14 +270,41 @@ def test_process_tick_returns_immutable_runtime_snapshot_with_dashboard_state():
     assert snapshot.vwap is not None
     assert snapshot.updated_at == TS
     assert snapshot.cpr is None
-    assert snapshot.market_context is None
+    assert snapshot.market_context is not None
+    assert snapshot.market_context.current_price == 101.0
+    assert snapshot.market_context.session_high == 101.0
+    assert snapshot.market_context.session_low == 101.0
+    assert snapshot.ai_reasoning is not None
+    assert snapshot.strategy is not None
+    assert snapshot.risk is None
+    assert snapshot.latest_order is None
     with pytest.raises(FrozenInstanceError):
         snapshot.updated_at = TS + timedelta(minutes=1)
 
     duplicate = orchestrator.process_tick(tick(price=101.0))
     assert isinstance(duplicate, RuntimeSnapshot)
     assert duplicate.latest_tick == snapshot.latest_tick
+    assert duplicate.market_context == snapshot.market_context
+    assert duplicate.ai_reasoning == snapshot.ai_reasoning
+    assert duplicate.strategy == snapshot.strategy
 
+
+def test_option_chain_update_refreshes_dashboard_analysis_after_spot_tick():
+    orchestrator = ApplicationOrchestrator(EventBus(), RuntimeConfiguration(option_expiry_date=date(2026, 7, 30)))
+    orchestrator.start()
+    first = orchestrator.process_tick(tick(price=101.0))
+    first_context = first.market_context
+
+    state = orchestrator.process_option_chain("NIFTY", option_snapshot())
+    snapshot = orchestrator.snapshot().runtime_snapshots[0]
+
+    assert snapshot.option_chain == state
+    assert snapshot.market_context is not None
+    assert snapshot.market_context != first_context
+    assert snapshot.market_context.option_chain_direction is not EvidenceDirection.UNKNOWN
+    assert snapshot.ai_reasoning is not None
+    assert snapshot.strategy is not None
+    assert snapshot.latest_order is None
 
 def test_build_market_context_uses_explicit_session_high_and_low():
     orchestrator = ApplicationOrchestrator(EventBus())

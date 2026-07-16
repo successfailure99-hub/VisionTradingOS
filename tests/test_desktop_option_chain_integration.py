@@ -239,6 +239,11 @@ def test_enabled_mode_resolves_expiry_atm_pairs_and_populates_dashboard_option_c
     assert option_view.max_pain_strike == 25000.0
     assert len(option_view.strikes) == 3
     assert option_view.runtime_status == "Receiving"
+    market_view = view.markets[0]
+    assert market_view.option_chain_direction != "-"
+    assert market_view.market_bias != "-"
+    assert view.ai[0].market_summary != "-"
+    assert view.strategies[0].decision != "-"
     assert option_view.runtime_subscribed_contracts == 6
     assert option_view.option_ticks_received == 12
     assert option_view.health_option_feed is True
