@@ -46,6 +46,7 @@ class ZerodhaOptionContractDiscoveryService:
         self._loaded_venues: tuple[ZerodhaDerivativeVenue, ...] = ()
         self._loaded_at: datetime | None = None
         self._last_error: str | None = None
+        self._rejected_contracts: tuple[str, ...] = ()
 
     @property
     def catalogue(self) -> ZerodhaOptionContractCatalogue:
@@ -65,20 +66,25 @@ class ZerodhaOptionContractDiscoveryService:
                 for venue in venues:
                     raw_records.extend(tuple(self._client.instruments(venue.value)))
                 contracts = []
+                rejections = []
                 for record in raw_records:
-                    if is_candidate_record(record, underlyings, set(venues)):
+                    if not _is_requested_option_record(record, underlyings, set(venues)):
+                        continue
+                    try:
                         contracts.append(self._normalizer.normalize(record))
-                    elif _looks_like_requested_target(record, underlyings, set(venues)):
-                        contracts.append(self._normalizer.normalize(record))
+                    except (TypeError, ValueError) as exc:
+                        rejections.append(_rejected_contract_message(record, exc))
                 self._catalogue.replace(tuple(contracts))
                 self._record_count = len(raw_records)
                 self._loaded_venues = venues
                 self._loaded_at = require_aware(self._clock(), "clock result")
                 self._status = ZerodhaOptionDiscoveryStatus.READY if contracts else ZerodhaOptionDiscoveryStatus.EMPTY
+                self._rejected_contracts = tuple(rejections)
+                self._last_error = _discovery_message(self._status, self._rejected_contracts)
                 return self._snapshot_unlocked()
             except Exception as exc:
                 self._status = ZerodhaOptionDiscoveryStatus.ERROR
-                self._last_error = _safe_error(exc)
+                self._last_error = f"Discovery Failed: {_safe_error(exc)}"
                 raise
 
     def create_resolver(self) -> ZerodhaOptionContractResolver:
@@ -96,6 +102,7 @@ class ZerodhaOptionContractDiscoveryService:
             self._loaded_venues = ()
             self._loaded_at = None
             self._last_error = None
+            self._rejected_contracts = ()
             return self._snapshot_unlocked()
 
     def _snapshot_unlocked(self) -> ZerodhaOptionDiscoverySnapshot:
@@ -124,27 +131,62 @@ class ZerodhaOptionContractDiscoveryService:
         return values
 
 
-def _looks_like_requested_target(
+def _is_requested_option_record(
     record: object,
     underlyings: tuple[Instrument, ...],
     venues: set[ZerodhaDerivativeVenue],
 ) -> bool:
     if not isinstance(record, Mapping):
         return False
+    if is_candidate_record(record, underlyings, venues):
+        return True
+    exchange = str(record.get("exchange", "")).strip().upper()
+    segment = str(record.get("segment", "")).strip().upper()
+    instrument_type = str(record.get("instrument_type", "")).strip().upper()
     try:
-        exchange = str(record.get("exchange", "")).strip().upper()
-        instrument_type = str(record.get("instrument_type", "")).strip().upper()
-        if ZerodhaDerivativeVenue(exchange) not in venues or instrument_type not in {"CE", "PE"}:
-            return False
-        return identify_underlying(record) in underlyings
-    except Exception:
-        name = str(record.get("name", "")).strip().upper()
-        symbol = str(record.get("tradingsymbol", "")).strip().upper()
-        roots = {Instrument.NIFTY: ("NIFTY",), Instrument.BANKNIFTY: ("BANKNIFTY", "NIFTY BANK"), Instrument.SENSEX: ("SENSEX",)}
-        for underlying in underlyings:
-            if name in roots[underlying] or any(symbol.startswith(root.replace(" ", "")) for root in roots[underlying]):
-                return True
+        venue = ZerodhaDerivativeVenue(exchange)
+    except ValueError:
         return False
+    if venue not in venues or segment != f"{venue.value}-OPT" or instrument_type not in {"CE", "PE"}:
+        return False
+    name = str(record.get("name", "")).strip().upper()
+    symbol = str(record.get("tradingsymbol", "")).strip().upper()
+    roots = {Instrument.NIFTY: ("NIFTY",), Instrument.BANKNIFTY: ("BANKNIFTY", "NIFTY BANK"), Instrument.SENSEX: ("SENSEX",)}
+    for underlying in underlyings:
+        if name in roots[underlying] or any(symbol.startswith(root.replace(" ", "")) for root in roots[underlying]):
+            return True
+    return False
+
+
+def _rejected_contract_message(record: Mapping[str, object], exc: Exception) -> str:
+    return (
+        "Rejected contract: "
+        f"reason={exc}; "
+        f"tradingsymbol={_safe_field(record.get('tradingsymbol'))}; "
+        f"instrument_token={_safe_field(record.get('instrument_token'))}; "
+        f"exchange_token={_safe_field(record.get('exchange_token'))}"
+    )
+
+
+def _safe_field(value: object) -> str:
+    if value is None:
+        return "-"
+    text = str(value).strip()
+    if not text:
+        return "-"
+    if "{" in text or "}" in text:
+        return text.split("{", 1)[0].strip()
+    return text
+
+
+def _discovery_message(status: ZerodhaOptionDiscoveryStatus, rejections: tuple[str, ...]) -> str | None:
+    if status is ZerodhaOptionDiscoveryStatus.EMPTY:
+        if rejections:
+            return "No Valid Contracts: " + " | ".join(rejections[-3:])
+        return "No Contracts Found"
+    if rejections:
+        return " | ".join(rejections[-3:])
+    return None
 
 
 def _safe_error(exc: Exception) -> str:

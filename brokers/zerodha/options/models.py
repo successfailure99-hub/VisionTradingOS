@@ -89,7 +89,7 @@ def _text(value: str, field_name: str) -> str:
 @dataclass(frozen=True, slots=True)
 class ZerodhaOptionContract:
     instrument_token: int
-    exchange_token: int | None
+    exchange_token: int
     underlying: Instrument
     venue: ZerodhaDerivativeVenue
     segment: str
@@ -103,9 +103,7 @@ class ZerodhaOptionContract:
 
     def __post_init__(self) -> None:
         token = require_positive_int(self.instrument_token, "instrument_token")
-        exchange_token = self.exchange_token
-        if exchange_token is not None:
-            exchange_token = require_positive_int(exchange_token, "exchange_token")
+        exchange_token = require_positive_int(self.exchange_token, "exchange_token")
         underlying = require_supported_underlying(self.underlying)
         if not isinstance(self.venue, ZerodhaDerivativeVenue):
             raise TypeError("venue must be ZerodhaDerivativeVenue")

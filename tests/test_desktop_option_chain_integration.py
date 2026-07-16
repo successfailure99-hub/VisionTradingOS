@@ -388,3 +388,24 @@ def test_provider_failure_is_safe_and_spot_runtime_remains_operational():
     assert "desktop_api_key" not in view.live_market_data.runtime_status
     assert "desktop_access_token" not in view.live_market_data.runtime_status
     dashboard.shutdown()
+
+
+def test_invalid_option_exchange_tokens_surface_safe_discovery_error_on_dashboard():
+    records = []
+    for record in option_records():
+        broken = dict(record)
+        broken["exchange_token"] = None
+        records.append(broken)
+    dashboard, ticker = create_dashboard(records=tuple(records))
+    assert dashboard.live_option_chain_runtime is not None
+    ticker.callbacks["on_connect"](None, {})
+    ticker.callbacks["on_ticks"](None, (spot_tick(101, 25050),))
+    view = dashboard.main_window.refresh()
+    assert view.markets[0].last_price == 25050.0
+    assert view.option_chains[0].runtime_status == "Error"
+    assert view.option_chains[0].runtime_last_error is not None
+    assert "No Valid Contracts" in view.option_chains[0].runtime_last_error
+    assert "Rejected contract:" in view.option_chains[0].runtime_last_error
+    assert "TypeError" not in view.option_chains[0].runtime_last_error
+    assert "desktop_access_token" not in view.option_chains[0].runtime_last_error
+    dashboard.shutdown()

@@ -219,7 +219,7 @@ class DesktopOptionChainRuntimeManager:
             discovery = self._discovery.load(SUPPORTED_OPTION_CHAIN_INSTRUMENTS)
             self._discovery_ready = bool(discovery.available_underlyings)
             if not self._discovery_ready:
-                raise RuntimeError("option contracts are unavailable for supported instruments")
+                raise RuntimeError(discovery.last_error or "No Contracts Found")
             self._resolver = self._discovery.create_resolver()
         except Exception as exc:
             self._last_error = _safe_error(exc, self._redactions)

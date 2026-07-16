@@ -49,7 +49,7 @@ class ZerodhaOptionContractNormalizer:
         )
         return ZerodhaOptionContract(
             instrument_token=self._positive_int(raw_record.get("instrument_token"), "instrument_token"),
-            exchange_token=self._optional_positive_int(raw_record.get("exchange_token"), "exchange_token"),
+            exchange_token=self._positive_int(raw_record.get("exchange_token"), "exchange_token"),
             underlying=underlying,
             venue=venue,
             segment=segment,
@@ -105,11 +105,6 @@ class ZerodhaOptionContractNormalizer:
             raise ValueError(f"{field_name} must be positive")
         return value
 
-    def _optional_positive_int(self, value: object, field_name: str) -> int | None:
-        if value is None or value == "":
-            return None
-        return self._positive_int(value, field_name)
-
     def _positive_float(self, value: object, field_name: str) -> float:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise TypeError(f"{field_name} must be a finite positive number")
@@ -159,8 +154,10 @@ def is_candidate_record(
         return False
     try:
         exchange = str(raw_record.get("exchange", "")).strip().upper()
+        segment = str(raw_record.get("segment", "")).strip().upper()
         instrument_type = str(raw_record.get("instrument_type", "")).strip().upper()
-        if ZerodhaDerivativeVenue(exchange) not in venues or instrument_type not in {"CE", "PE"}:
+        venue = ZerodhaDerivativeVenue(exchange)
+        if venue not in venues or segment != f"{venue.value}-OPT" or instrument_type not in {"CE", "PE"}:
             return False
         return identify_underlying(raw_record) in underlyings
     except Exception:

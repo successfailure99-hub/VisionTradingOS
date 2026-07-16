@@ -66,6 +66,9 @@ def test_normalizes_supported_underlyings_rights_and_name_symbol_rules():
         dict(exchange="BFO"),
         dict(segment="NFO-FUT"),
         dict(instrument_token=True),
+        dict(exchange_token=None),
+        dict(exchange_token=0),
+        dict(exchange_token="11"),
         dict(strike=float("nan")),
         dict(strike=float("inf")),
         dict(lot_size=None),
@@ -87,3 +90,10 @@ def test_rejects_substring_matches_and_does_not_mutate_raw_mapping():
     assert source == before
     with pytest.raises(TypeError):
         normalizer.normalize("not a mapping")
+
+
+def test_missing_exchange_token_is_rejected():
+    item = raw()
+    item.pop("exchange_token")
+    with pytest.raises(TypeError):
+        ZerodhaOptionContractNormalizer().normalize(item)
