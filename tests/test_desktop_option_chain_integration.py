@@ -172,14 +172,15 @@ def option_tick(token, oi, price=10.0):
 def create_dashboard(records=None, **env_overrides):
     qt_app()
     fail_option_subscribe = env_overrides.pop("fail_option_subscribe", False)
+    clock = env_overrides.pop("clock", lambda: NOW)
     ticker = FakeTickerClient(fail_option_subscribe=fail_option_subscribe)
     dashboard = create_dashboard_application(
         environ=live_env(**env_overrides),
         auth_client_factory=auth_factory,
         instrument_client_factory=instrument_factory(option_records() if records is None else records),
-        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: NOW),
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=clock),
         ticker_client=ticker,
-        clock=lambda: NOW,
+        clock=clock,
     )
     return dashboard, ticker
 
@@ -242,9 +243,58 @@ def test_enabled_mode_resolves_expiry_atm_pairs_and_populates_dashboard_option_c
     assert option_view.option_ticks_received == 12
     assert option_view.health_option_feed is True
     assert option_view.health_analytics is True
+    assert option_view.runtime_rows[0].instrument == "NIFTY"
+    assert option_view.runtime_rows[0].state == "Receiving"
+    assert any(row.instrument == "NIFTY" and row.message == "Analytics updated" for row in option_view.event_rows)
+    panel = dashboard.main_window._instrument_panels["NIFTY"]["option_chain"]
+    assert panel._tabs.tabText(0) == "Overview"
+    assert panel._labels["Positioning Bias"].text() == "Mixed"
+    assert panel._labels["OI PCR"].text() == "1.0009"
+    assert panel._labels["Change OI PCR"].text() == "1.0000"
+    assert panel._labels["ATM Strike"].text() == "25000.00"
+    assert panel._labels["Support"].text() == "25100.00"
+    assert panel._labels["Resistance"].text() == "25100.00"
+    assert panel._labels["Max Pain"].text() == "25000.00"
+    assert panel._labels["Call Pressure"].text() == "Call Writing"
+    assert panel._labels["Put Pressure"].text() == "Put Writing"
+    assert panel._labels["Total Call OI"].text() == "3366"
+    assert panel._labels["Total Put OI"].text() == "3369"
+    assert panel._labels["Total Call Change OI"].text() == "60"
+    assert panel._labels["Total Put Change OI"].text() == "60"
+    assert panel._labels["Strike Count"].text() == "3"
+    assert panel._labels["Contracts Active"].text() == "6"
+    assert panel._labels["Option Ticks"].text() == "12"
+    assert panel._table.rowCount() == 3
+    assert panel._table.item(0, 6).text() == "24900.00"
+    assert panel._table.item(1, 6).text() == "25000.00"
+    assert panel._table.item(2, 6).text() == "25100.00"
     assert ticker.submitted_orders == []
     assert view.runtime.broker_mode == "Dry Run"
     assert view.runtime.safety_mode == "Analysis Only"
+    dashboard.shutdown()
+
+
+def test_waiting_for_option_ticks_analytics_waiting_and_stale_states_are_visible():
+    current = [NOW]
+    dashboard, ticker = create_dashboard(clock=lambda: current[0])
+    ticker.callbacks["on_connect"](None, {})
+    ticker.callbacks["on_ticks"](None, (spot_tick(101, 25050),))
+    waiting = dashboard.main_window.refresh().option_chains[0]
+    assert waiting.runtime_status == "Waiting For Option Ticks"
+    assert waiting.runtime_message == "Waiting for first option tick"
+
+    ticker.callbacks["on_ticks"](None, (option_tick(1000, 1100),))
+    partial = dashboard.main_window.refresh().option_chains[0]
+    assert partial.runtime_status == "Analytics Waiting"
+    assert partial.option_ticks_received == 1
+
+    ticker.callbacks["on_ticks"](None, tuple(option_tick(token, 120 + token, 11) for token in range(1000, 1006)))
+    receiving = dashboard.main_window.refresh().option_chains[0]
+    assert receiving.runtime_status == "Receiving"
+    current[0] = datetime(2026, 7, 15, 9, 16, 2, tzinfo=UTC)
+    stale = dashboard.main_window.refresh().option_chains[0]
+    assert stale.runtime_status == "Stale"
+    assert stale.runtime_message == "Last option tick is stale"
     dashboard.shutdown()
 
 

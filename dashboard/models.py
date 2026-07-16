@@ -196,6 +196,30 @@ class DashboardOptionChainStrikeView:
 
 
 @dataclass(frozen=True, slots=True)
+class DashboardOptionChainRuntimeRowView:
+    instrument: str
+    state: str
+    expiry: date | None
+    contracts: int
+    option_ticks: int
+    last_update: datetime | None
+    last_error: str | None
+
+    def __post_init__(self) -> None:
+        _require_non_negative(self.contracts, "contracts")
+        _require_non_negative(self.option_ticks, "option_ticks")
+        _require_aware(self.last_update, "last_update")
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardOptionChainEventView:
+    timestamp: str
+    instrument: str
+    state: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
 class DashboardOptionChainView:
     symbol: str
     available: bool
@@ -248,6 +272,8 @@ class DashboardOptionChainView:
     health_analytics: bool = False
     health_dashboard: bool = False
     runtime_events: tuple[str, ...] = ()
+    runtime_rows: tuple[DashboardOptionChainRuntimeRowView, ...] = ()
+    event_rows: tuple[DashboardOptionChainEventView, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "strikes", tuple(self.strikes))
@@ -271,6 +297,16 @@ class DashboardOptionChainView:
         _require_non_negative(self.contracts_resolved, "contracts_resolved")
         _require_non_negative(self.option_ticks_received, "option_ticks_received")
         object.__setattr__(self, "runtime_events", tuple(self.runtime_events))
+        rows = tuple(self.runtime_rows)
+        events = tuple(self.event_rows)
+        for row in rows:
+            if not isinstance(row, DashboardOptionChainRuntimeRowView):
+                raise TypeError("runtime_rows must contain DashboardOptionChainRuntimeRowView values")
+        for event in events:
+            if not isinstance(event, DashboardOptionChainEventView):
+                raise TypeError("event_rows must contain DashboardOptionChainEventView values")
+        object.__setattr__(self, "runtime_rows", rows)
+        object.__setattr__(self, "event_rows", events)
         for strike in self.strikes:
             if not isinstance(strike, DashboardOptionChainStrikeView):
                 raise TypeError("strikes must contain DashboardOptionChainStrikeView values")
