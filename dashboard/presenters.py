@@ -40,9 +40,11 @@ def build_dashboard_view(
     lifecycle_snapshot: LifecycleSnapshot,
     live_market_data_snapshot: LiveMarketDataRuntimeSnapshot | None = None,
     *,
+    live_option_chain_snapshot=None,
     clock=None,
 ) -> DashboardView:
     runtime_snapshots = _stable_runtime_snapshots(lifecycle_snapshot.orchestrator_snapshot.runtime_snapshots)
+    option_status_by_symbol = _option_status_by_symbol(live_option_chain_snapshot)
     return DashboardView(
         runtime=build_runtime_view(lifecycle_snapshot),
         markets=tuple(build_market_view(snapshot) for snapshot in runtime_snapshots),
@@ -51,7 +53,10 @@ def build_dashboard_view(
         strategies=tuple(build_strategy_view(snapshot) for snapshot in runtime_snapshots),
         positions=tuple(build_position_view(snapshot) for snapshot in runtime_snapshots),
         journals=tuple(build_journal_view(snapshot) for snapshot in runtime_snapshots),
-        option_chains=tuple(build_option_chain_view(snapshot) for snapshot in runtime_snapshots),
+        option_chains=tuple(
+            build_option_chain_view(snapshot, option_status_by_symbol.get(_enum_text(snapshot.symbol)))
+            for snapshot in runtime_snapshots
+        ),
         live_market_data=build_live_market_data_view(live_market_data_snapshot, clock=clock),
     )
 
@@ -218,15 +223,18 @@ def build_price_action_view(runtime_snapshot: RuntimeSnapshot) -> DashboardPrice
     )
 
 
-def build_option_chain_view(runtime_snapshot: RuntimeSnapshot) -> DashboardOptionChainView:
+def build_option_chain_view(runtime_snapshot: RuntimeSnapshot, runtime_status=None) -> DashboardOptionChainView:
     state = runtime_snapshot.option_chain
     if state is None:
-        return unavailable_option_chain_view(_enum_text(runtime_snapshot.symbol))
+        return _apply_option_runtime_status(
+            unavailable_option_chain_view(_enum_text(runtime_snapshot.symbol)),
+            runtime_status,
+        )
     strikes = tuple(
         _build_option_chain_strike_view(strike, state.atm_strike)
         for strike in sorted(tuple(state.strikes), key=lambda strike: strike.strike_price)
     )
-    return DashboardOptionChainView(
+    return _apply_option_runtime_status(DashboardOptionChainView(
         symbol=_enum_text(state.symbol),
         available=True,
         exchange=_enum_text(state.exchange),
@@ -256,7 +264,7 @@ def build_option_chain_view(runtime_snapshot: RuntimeSnapshot) -> DashboardOptio
         put_pressure=_enum_text(state.put_pressure),
         positioning_bias=_enum_text(state.positioning_bias),
         strikes=strikes,
-    )
+    ), runtime_status)
 
 
 def build_ai_view(runtime_snapshot: RuntimeSnapshot) -> DashboardAIView:
@@ -370,6 +378,98 @@ def _metric_strike(metric) -> float | None:
 
 def _metric_value(metric) -> int | None:
     return getattr(metric, "value", None)
+
+
+def _option_status_by_symbol(snapshot) -> dict[str, object]:
+    if snapshot is None:
+        return {}
+    return {
+        _enum_text(getattr(item, "underlying", None)): item
+        for item in tuple(getattr(snapshot, "instruments", ()) or ())
+    }
+
+
+def _apply_option_runtime_status(
+    view: DashboardOptionChainView,
+    status,
+) -> DashboardOptionChainView:
+    if status is None:
+        return view
+    runtime_status = _enum_text(getattr(status, "state", None))
+    error = _safe_error(getattr(status, "last_error", None))
+    message = _option_runtime_message(status, runtime_status, error)
+    subscribed = getattr(status, "option_token_count", 0) if getattr(status, "subscriptions_active", False) else 0
+    return DashboardOptionChainView(
+        symbol=view.symbol,
+        available=view.available,
+        exchange=view.exchange,
+        expiry_date=view.expiry_date,
+        timestamp=view.timestamp,
+        underlying_price=view.underlying_price,
+        atm_strike=view.atm_strike,
+        strike_count=view.strike_count,
+        total_call_oi=view.total_call_oi,
+        total_put_oi=view.total_put_oi,
+        total_call_change_oi=view.total_call_change_oi,
+        total_put_change_oi=view.total_put_change_oi,
+        oi_pcr=view.oi_pcr,
+        change_oi_pcr=view.change_oi_pcr,
+        max_call_oi_strike=view.max_call_oi_strike,
+        max_call_oi_value=view.max_call_oi_value,
+        max_put_oi_strike=view.max_put_oi_strike,
+        max_put_oi_value=view.max_put_oi_value,
+        max_call_change_oi_strike=view.max_call_change_oi_strike,
+        max_call_change_oi_value=view.max_call_change_oi_value,
+        max_put_change_oi_strike=view.max_put_change_oi_strike,
+        max_put_change_oi_value=view.max_put_change_oi_value,
+        resistance_strike=view.resistance_strike,
+        support_strike=view.support_strike,
+        max_pain_strike=view.max_pain_strike,
+        call_pressure=view.call_pressure,
+        put_pressure=view.put_pressure,
+        positioning_bias=view.positioning_bias,
+        strikes=view.strikes,
+        runtime_status=runtime_status,
+        runtime_message=message,
+        runtime_underlying=_enum_text(getattr(status, "underlying", None)),
+        runtime_expiry=getattr(status, "last_expiry", None),
+        runtime_subscribed_contracts=subscribed,
+        runtime_last_update=getattr(status, "last_updated_at", None),
+        runtime_last_error=error,
+        current_spot=getattr(status, "current_spot", None),
+        runtime_atm_strike=getattr(status, "atm_strike", None),
+        contracts_resolved=getattr(status, "option_token_count", 0) if getattr(status, "contracts_resolved", False) else 0,
+        option_ticks_received=getattr(status, "option_ticks_received", 0),
+        last_spot_tick_at=getattr(status, "last_spot_tick_at", None),
+        last_option_tick_at=getattr(status, "last_option_tick_at", None),
+        analytics_updated=bool(getattr(status, "analytics_updated", False)),
+        health_market_feed=True,
+        health_spot_feed=getattr(status, "last_spot_tick_at", None) is not None,
+        health_discovery=bool(getattr(status, "discovery_ready", False)),
+        health_subscription=bool(getattr(status, "subscriptions_active", False)),
+        health_option_feed=getattr(status, "option_ticks_received", 0) > 0,
+        health_analytics=bool(getattr(status, "analytics_updated", False)),
+        health_dashboard=view.available,
+        runtime_events=tuple(getattr(status, "events", ()) or ()),
+    )
+
+
+def _option_runtime_message(status, runtime_status: str, error: str | None) -> str:
+    if error:
+        return error
+    if runtime_status == "Disabled":
+        return "Set LIVE_OPTION_CHAIN_ENABLED=true"
+    if runtime_status == "Waiting For Spot":
+        return f"Waiting for first {_enum_text(getattr(status, 'underlying', None))} spot tick"
+    if runtime_status == "Discovering Contracts":
+        return "Resolving contracts..."
+    if runtime_status == "Subscribing":
+        return "Subscribing..."
+    if runtime_status == "Receiving":
+        return "Receiving live option-chain ticks"
+    if runtime_status == "Starting":
+        return "Starting live option-chain runtime"
+    return runtime_status
 
 
 def _swing_price(swing) -> float | None:

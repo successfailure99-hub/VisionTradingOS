@@ -32,6 +32,7 @@ class DashboardApplication:
         self._main_window = VisionMainWindow(
             lifecycle,
             live_market_data_runtime=live_market_data_runtime,
+            live_option_chain_runtime=live_option_chain_runtime,
             refresh_interval_ms=refresh_interval_ms,
             clock=clock,
         )

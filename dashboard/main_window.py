@@ -44,6 +44,7 @@ class VisionMainWindow(QMainWindow):
         lifecycle: ApplicationLifecycleManager,
         *,
         live_market_data_runtime: LiveMarketDataRuntime | None = None,
+        live_option_chain_runtime=None,
         refresh_interval_ms: int = 500,
         clock=None,
         parent=None,
@@ -57,6 +58,7 @@ class VisionMainWindow(QMainWindow):
         super().__init__(parent)
         self._lifecycle = lifecycle
         self._live_market_data_runtime = live_market_data_runtime
+        self._live_option_chain_runtime = live_option_chain_runtime
         self._current_view: DashboardView | None = None
         self._clock = clock or _default_clock
         self._runtime_panel = RuntimePanel()
@@ -90,7 +92,17 @@ class VisionMainWindow(QMainWindow):
             if self._live_market_data_runtime is not None
             else None
         )
-        view = build_dashboard_view(lifecycle_snapshot, live_snapshot, clock=self._clock)
+        option_chain_snapshot = (
+            self._live_option_chain_runtime.snapshot()
+            if self._live_option_chain_runtime is not None
+            else None
+        )
+        view = build_dashboard_view(
+            lifecycle_snapshot,
+            live_snapshot,
+            live_option_chain_snapshot=option_chain_snapshot,
+            clock=self._clock,
+        )
         self.render(view)
         self._current_view = view
         return view

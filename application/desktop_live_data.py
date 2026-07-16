@@ -49,7 +49,6 @@ ENV_LIVE_MARKET_DATA_ENABLED = "LIVE_MARKET_DATA_ENABLED"
 ENV_LIVE_MARKET_DATA_AUTO_CONNECT = "LIVE_MARKET_DATA_AUTO_CONNECT"
 ENV_LIVE_OPTION_CHAIN_ENABLED = "LIVE_OPTION_CHAIN_ENABLED"
 ENV_LIVE_OPTION_CHAIN_AUTO_START = "LIVE_OPTION_CHAIN_AUTO_START"
-ENV_OPTION_CHAIN_REFRESH_SECONDS = "OPTION_CHAIN_REFRESH_SECONDS"
 ENV_OPTION_CHAIN_STRIKES_EACH_SIDE = "OPTION_CHAIN_STRIKES_EACH_SIDE"
 
 INSTRUMENT_TOKEN_ENV = (
@@ -263,10 +262,7 @@ def create_dashboard_application(
             clock=clock,
         )
         if settings.option_chain.auto_start:
-            try:
-                option_chain_manager.start()
-            except DesktopOptionChainConfigurationError:
-                option_chain_manager = None
+            option_chain_manager.start()
     return DashboardApplication(
         lifecycle,
         live_market_data_runtime=runtime,
@@ -298,6 +294,7 @@ def _create_desktop_option_chain_manager(
             instrument_client=instrument_client,
             settings=settings.option_chain,
             spot_subscriptions=settings.subscriptions,
+            redactions=(settings.api_key, settings.api_secret, settings.access_token),
             clock=clock,
         )
     except Exception as exc:
@@ -328,39 +325,26 @@ def _parse_token(value: str, variable_name: str) -> int:
 def _load_option_chain_settings(environ: Mapping[str, str]) -> DesktopOptionChainSettings:
     enabled = _parse_bool(environ.get(ENV_LIVE_OPTION_CHAIN_ENABLED, "false"), ENV_LIVE_OPTION_CHAIN_ENABLED)
     auto_start = _parse_bool(environ.get(ENV_LIVE_OPTION_CHAIN_AUTO_START, "true"), ENV_LIVE_OPTION_CHAIN_AUTO_START)
-    refresh_seconds = _parse_positive_int(
-        environ.get(ENV_OPTION_CHAIN_REFRESH_SECONDS, "15"),
-        ENV_OPTION_CHAIN_REFRESH_SECONDS,
-    )
-    strikes_each_side = _parse_non_negative_int(
+    strikes_each_side = _parse_bounded_int(
         environ.get(ENV_OPTION_CHAIN_STRIKES_EACH_SIDE, "5"),
         ENV_OPTION_CHAIN_STRIKES_EACH_SIDE,
+        minimum=1,
+        maximum=20,
     )
     return DesktopOptionChainSettings(
         enabled=enabled,
         auto_start=auto_start,
-        refresh_seconds=refresh_seconds,
         strikes_each_side=strikes_each_side,
     )
 
 
-def _parse_positive_int(value: str | None, variable_name: str) -> int:
+def _parse_bounded_int(value: str | None, variable_name: str, *, minimum: int, maximum: int) -> int:
     try:
         parsed = int(_text(value))
     except Exception as exc:
-        raise DesktopLiveDataConfigurationError(f"{variable_name} must be a positive integer") from exc
-    if parsed <= 0:
-        raise DesktopLiveDataConfigurationError(f"{variable_name} must be a positive integer")
-    return parsed
-
-
-def _parse_non_negative_int(value: str | None, variable_name: str) -> int:
-    try:
-        parsed = int(_text(value))
-    except Exception as exc:
-        raise DesktopLiveDataConfigurationError(f"{variable_name} must be a non-negative integer") from exc
-    if parsed < 0:
-        raise DesktopLiveDataConfigurationError(f"{variable_name} must be a non-negative integer")
+        raise DesktopLiveDataConfigurationError(f"{variable_name} must be between {minimum} and {maximum}") from exc
+    if parsed < minimum or parsed > maximum:
+        raise DesktopLiveDataConfigurationError(f"{variable_name} must be between {minimum} and {maximum}")
     return parsed
 
 
@@ -430,16 +414,19 @@ class _DesktopTickerRouter:
 
     def _on_ticks(self, ws, ticks) -> None:
         rows = tuple(ticks)
-        option_tokens = self._option_chain_manager.option_tokens() if self._option_chain_manager is not None else set()
         spot_rows = tuple(row for row in rows if _tick_token(row) in self._spot_tokens)
+        if self._option_chain_manager is not None:
+            if spot_rows:
+                self._option_chain_manager.deliver_spot_ticks(spot_rows)
+            option_tokens = self._option_chain_manager.option_tokens()
+        else:
+            option_tokens = set()
         option_rows = tuple(row for row in rows if _tick_token(row) in option_tokens)
         unknown_rows = tuple(row for row in rows if _tick_token(row) not in self._spot_tokens and _tick_token(row) not in option_tokens)
         spot_callback = self._callbacks.get("on_ticks")
         if spot_callback is not None and (spot_rows or unknown_rows):
             spot_callback(ws, spot_rows + unknown_rows)
         if self._option_chain_manager is not None:
-            if spot_rows:
-                self._option_chain_manager.deliver_spot_ticks(spot_rows)
             if option_rows:
                 self._option_chain_manager.deliver_option_ticks(option_rows)
 

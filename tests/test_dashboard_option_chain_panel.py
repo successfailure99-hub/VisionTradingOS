@@ -152,6 +152,12 @@ def test_summary_uses_readable_grouped_metric_rows_without_missing_labels_or_val
     panel = OptionChainPanel()
     panel.render(view())
     expected = {
+        "Status", "Underlying", "Expiry", "Contracts Active",
+        "Last Update", "Last Error", "Current Spot", "Resolved ATM",
+        "Contracts Resolved", "Option Ticks", "Last Spot Tick", "Last Option Tick",
+        "Analytics Updated", "Market Feed", "Spot Feed", "Discovery",
+        "Subscription", "Option Feed", "Analytics", "Dashboard",
+        "Message", "Events", "Runtime State", "Configured",
         "Positioning Bias", "OI PCR", "Change OI PCR", "ATM Strike",
         "Support", "Resistance", "Max Pain", "Expiry",
         "Call Pressure", "Put Pressure", "Total Call OI", "Total Put OI",

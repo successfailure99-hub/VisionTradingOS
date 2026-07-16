@@ -226,6 +226,28 @@ class DashboardOptionChainView:
     put_pressure: str
     positioning_bias: str
     strikes: tuple[DashboardOptionChainStrikeView, ...]
+    runtime_status: str = "Disabled"
+    runtime_message: str = "Set LIVE_OPTION_CHAIN_ENABLED=true"
+    runtime_underlying: str = "-"
+    runtime_expiry: date | None = None
+    runtime_subscribed_contracts: int = 0
+    runtime_last_update: datetime | None = None
+    runtime_last_error: str | None = None
+    current_spot: float | None = None
+    runtime_atm_strike: float | None = None
+    contracts_resolved: int = 0
+    option_ticks_received: int = 0
+    last_spot_tick_at: datetime | None = None
+    last_option_tick_at: datetime | None = None
+    analytics_updated: bool = False
+    health_market_feed: bool = False
+    health_spot_feed: bool = False
+    health_discovery: bool = False
+    health_subscription: bool = False
+    health_option_feed: bool = False
+    health_analytics: bool = False
+    health_dashboard: bool = False
+    runtime_events: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "strikes", tuple(self.strikes))
@@ -242,6 +264,13 @@ class DashboardOptionChainView:
             if value is not None:
                 _require_non_negative(value, name)
         _require_aware(self.timestamp, "timestamp")
+        _require_aware(self.runtime_last_update, "runtime_last_update")
+        _require_aware(self.last_spot_tick_at, "last_spot_tick_at")
+        _require_aware(self.last_option_tick_at, "last_option_tick_at")
+        _require_non_negative(self.runtime_subscribed_contracts, "runtime_subscribed_contracts")
+        _require_non_negative(self.contracts_resolved, "contracts_resolved")
+        _require_non_negative(self.option_ticks_received, "option_ticks_received")
+        object.__setattr__(self, "runtime_events", tuple(self.runtime_events))
         for strike in self.strikes:
             if not isinstance(strike, DashboardOptionChainStrikeView):
                 raise TypeError("strikes must contain DashboardOptionChainStrikeView values")
@@ -281,6 +310,7 @@ def unavailable_option_chain_view(symbol: str = "-") -> DashboardOptionChainView
         put_pressure="-",
         positioning_bias="-",
         strikes=(),
+        runtime_underlying=symbol,
     )
 
 

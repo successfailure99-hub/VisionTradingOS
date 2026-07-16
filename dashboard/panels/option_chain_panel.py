@@ -32,6 +32,14 @@ class OptionChainPanel(QGroupBox):
     def __init__(self, parent=None):
         super().__init__("Option Chain Analytics", parent)
         self._labels = {}
+        self._runtime_fields = (
+            ("Status", "Underlying", "Expiry", "Contracts Active"),
+            ("Last Update", "Last Error", "Current Spot", "Resolved ATM"),
+            ("Contracts Resolved", "Option Ticks", "Last Spot Tick", "Last Option Tick"),
+            ("Analytics Updated", "Market Feed", "Spot Feed", "Discovery"),
+            ("Subscription", "Option Feed", "Analytics", "Dashboard"),
+            ("Message", "Events", "Runtime State", "Configured"),
+        )
         self._summary_fields = (
             ("Positioning Bias", "OI PCR", "Change OI PCR", "ATM Strike"),
             ("Support", "Resistance", "Max Pain", "Expiry"),
@@ -40,7 +48,11 @@ class OptionChainPanel(QGroupBox):
             ("Available", "Symbol", "Exchange", "Underlying"),
             ("Timestamp", "Strike Count", "Total Call Change OI", "Total Put Change OI"),
         )
-        self._cards = {field: MetricCard(field) for row in self._summary_fields for field in row}
+        self._cards = {
+            field: MetricCard(field)
+            for row in (self._runtime_fields + self._summary_fields)
+            for field in row
+        }
         self._table = QTableWidget(0, len(STRIKE_COLUMNS))
         self._table.setHorizontalHeaderLabels(STRIKE_COLUMNS)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -56,25 +68,33 @@ class OptionChainPanel(QGroupBox):
         root.setContentsMargins(14, 18, 14, 14)
         root.setSpacing(12)
 
+        runtime = self._grid(self._runtime_fields)
+        root.addLayout(runtime)
+
+        summary = self._grid(self._summary_fields)
+        root.addLayout(summary)
+
+        root.addWidget(self._table, 1)
+
+    def _grid(self, fields: tuple[tuple[str, ...], ...]) -> QGridLayout:
         summary = QGridLayout()
         summary.setContentsMargins(0, 0, 0, 0)
         summary.setHorizontalSpacing(10)
         summary.setVerticalSpacing(10)
         for column in range(4):
             summary.setColumnStretch(column, 1)
-        for row, fields in enumerate(self._summary_fields):
-            for column, field in enumerate(fields):
+        for row, row_fields in enumerate(fields):
+            for column, field in enumerate(row_fields):
                 card = self._cards[field]
                 card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
                 summary.addWidget(card, row, column)
                 self._labels[field] = card.value_label
-        root.addLayout(summary)
-
-        root.addWidget(self._table, 1)
+        return summary
 
     def render(self, view: DashboardOptionChainView) -> None:
         if not isinstance(view, DashboardOptionChainView):
             raise TypeError("view must be DashboardOptionChainView")
+        self._render_runtime_status(view)
         self._cards["Positioning Bias"].set_value(view.positioning_bias)
         self._cards["OI PCR"].set_value(formatters.ratio(view.oi_pcr), kind="neutral")
         self._cards["Change OI PCR"].set_value(formatters.ratio(view.change_oi_pcr), kind="neutral")
@@ -100,6 +120,33 @@ class OptionChainPanel(QGroupBox):
         self._cards["Total Call Change OI"].set_value(formatters.integer(view.total_call_change_oi), kind="neutral")
         self._cards["Total Put Change OI"].set_value(formatters.integer(view.total_put_change_oi), kind="neutral")
         self._render_strikes(view)
+
+    def _render_runtime_status(self, view: DashboardOptionChainView) -> None:
+        status_kind = _runtime_kind(view.runtime_status)
+        self._cards["Status"].set_value(view.runtime_status, kind=status_kind)
+        self._cards["Runtime State"].set_value(view.runtime_status, kind=status_kind)
+        self._cards["Configured"].set_value("Yes" if view.runtime_status != "Disabled" else "No", kind="neutral")
+        self._cards["Underlying"].set_value(view.runtime_underlying, kind="neutral")
+        self._cards["Expiry"].set_value(formatters.date_text(view.runtime_expiry), kind="neutral")
+        self._cards["Contracts Active"].set_value(formatters.integer(view.runtime_subscribed_contracts), kind="neutral")
+        self._cards["Last Update"].set_value(formatters.timestamp(view.runtime_last_update), kind="neutral")
+        self._cards["Last Error"].set_value(view.runtime_last_error or formatters.MISSING, kind="negative" if view.runtime_last_error else "neutral")
+        self._cards["Current Spot"].set_value(formatters.price(view.current_spot), kind="neutral")
+        self._cards["Resolved ATM"].set_value(formatters.price(view.runtime_atm_strike), kind="neutral")
+        self._cards["Contracts Resolved"].set_value(formatters.integer(view.contracts_resolved), kind="neutral")
+        self._cards["Option Ticks"].set_value(formatters.integer(view.option_ticks_received), kind="neutral")
+        self._cards["Last Spot Tick"].set_value(formatters.timestamp(view.last_spot_tick_at), kind="neutral")
+        self._cards["Last Option Tick"].set_value(formatters.timestamp(view.last_option_tick_at), kind="neutral")
+        self._cards["Analytics Updated"].set_value(formatters.yes_no(view.analytics_updated), kind="positive" if view.analytics_updated else "warning")
+        self._cards["Message"].set_value(view.runtime_message, kind=status_kind)
+        self._cards["Events"].set_value(_events_text(view.runtime_events), kind="neutral")
+        self._cards["Market Feed"].set_value(_health_text(view.health_market_feed), kind=_health_kind(view.health_market_feed))
+        self._cards["Spot Feed"].set_value(_health_text(view.health_spot_feed), kind=_health_kind(view.health_spot_feed))
+        self._cards["Discovery"].set_value(_health_text(view.health_discovery), kind=_health_kind(view.health_discovery))
+        self._cards["Subscription"].set_value(_health_text(view.health_subscription), kind=_health_kind(view.health_subscription))
+        self._cards["Option Feed"].set_value(_health_text(view.health_option_feed), kind=_health_kind(view.health_option_feed))
+        self._cards["Analytics"].set_value(_health_text(view.health_analytics), kind=_health_kind(view.health_analytics))
+        self._cards["Dashboard"].set_value(_health_text(view.health_dashboard), kind=_health_kind(view.health_dashboard))
 
     def _render_strikes(self, view: DashboardOptionChainView) -> None:
         rows = select_display_strikes(view)
@@ -172,6 +219,31 @@ def _pressure_kind(value: str) -> str:
     if key in {"balanced", "unknown", "-"}:
         return "neutral"
     return "warning"
+
+
+def _runtime_kind(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized == "receiving":
+        return "positive"
+    if normalized in {"waiting for spot", "discovering contracts", "subscribing", "starting"}:
+        return "warning"
+    if normalized == "error":
+        return "negative"
+    return "neutral"
+
+
+def _health_text(value: bool) -> str:
+    return "OK" if value else "Waiting"
+
+
+def _health_kind(value: bool) -> str:
+    return "positive" if value else "warning"
+
+
+def _events_text(events: tuple[str, ...]) -> str:
+    if not events:
+        return formatters.MISSING
+    return " | ".join(events[-3:])
 
 
 def _row_tags(view: DashboardOptionChainView, strike: DashboardOptionChainStrikeView) -> str:

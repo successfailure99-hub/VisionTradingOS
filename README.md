@@ -53,6 +53,17 @@ python desktop_main.py
 
 Live market data enables WebSocket ticks for NIFTY, BANKNIFTY, and SENSEX only. Order execution remains protected: broker mode is `DRY_RUN`, safety mode remains `ANALYSIS_ONLY`, and live order placement is not enabled.
 
+Live option-chain integration is disabled by default. To enable the dashboard option-chain runtime, keep live market data enabled and add:
+
+```powershell
+$env:LIVE_OPTION_CHAIN_ENABLED="true"
+$env:LIVE_OPTION_CHAIN_AUTO_START="true"
+$env:OPTION_CHAIN_STRIKES_EACH_SIDE="5"
+python desktop_main.py
+```
+
+Option contracts are discovered dynamically from Zerodha's instrument master after the first valid spot tick for NIFTY, BANKNIFTY, or SENSEX. Do not configure or store option tokens manually. If option-chain discovery or subscription fails, the spot feed continues and the Option Chain panel shows a sanitized runtime error. Zerodha access tokens are valid only for the current session/day and must not be committed.
+
 ## Testing
 
 Full regression suite:
