@@ -47,6 +47,8 @@ class ZerodhaOptionContractDiscoveryService:
         self._loaded_at: datetime | None = None
         self._last_error: str | None = None
         self._rejected_contracts: tuple[str, ...] = ()
+        self._rejections_by_underlying: dict[Instrument, tuple[str, ...]] = {}
+        self._accepted_by_underlying: dict[Instrument, int] = {}
 
     @property
     def catalogue(self) -> ZerodhaOptionContractCatalogue:
@@ -61,25 +63,40 @@ class ZerodhaOptionContractDiscoveryService:
         with self._lock:
             self._status = ZerodhaOptionDiscoveryStatus.LOADING
             self._last_error = None
+            self._rejections_by_underlying = {}
+            self._accepted_by_underlying = {}
             try:
                 raw_records: list[Mapping[str, object]] = []
                 for venue in venues:
                     raw_records.extend(tuple(self._client.instruments(venue.value)))
                 contracts = []
                 rejections = []
+                rejected_by_underlying: dict[Instrument, list[str]] = {underlying: [] for underlying in underlyings}
+                accepted_by_underlying: dict[Instrument, int] = {underlying: 0 for underlying in underlyings}
                 for record in raw_records:
-                    if not _is_requested_option_record(record, underlyings, set(venues)):
+                    underlying = _record_underlying(record, underlyings, set(venues))
+                    if underlying is None:
                         continue
                     try:
-                        contracts.append(self._normalizer.normalize(record))
+                        contract = self._normalizer.normalize(record)
+                        contracts.append(contract)
+                        accepted_by_underlying[contract.underlying] = accepted_by_underlying.get(contract.underlying, 0) + 1
                     except (TypeError, ValueError) as exc:
-                        rejections.append(_rejected_contract_message(record, exc))
+                        message = _rejected_contract_message(record, exc)
+                        rejections.append(message)
+                        rejected_by_underlying.setdefault(underlying, []).append(message)
                 self._catalogue.replace(tuple(contracts))
                 self._record_count = len(raw_records)
                 self._loaded_venues = venues
                 self._loaded_at = require_aware(self._clock(), "clock result")
                 self._status = ZerodhaOptionDiscoveryStatus.READY if contracts else ZerodhaOptionDiscoveryStatus.EMPTY
                 self._rejected_contracts = tuple(rejections)
+                self._rejections_by_underlying = {
+                    underlying: tuple(values)
+                    for underlying, values in rejected_by_underlying.items()
+                    if values
+                }
+                self._accepted_by_underlying = accepted_by_underlying
                 self._last_error = _discovery_message(self._status, self._rejected_contracts)
                 return self._snapshot_unlocked()
             except Exception as exc:
@@ -103,7 +120,39 @@ class ZerodhaOptionContractDiscoveryService:
             self._loaded_at = None
             self._last_error = None
             self._rejected_contracts = ()
+            self._rejections_by_underlying = {}
+            self._accepted_by_underlying = {}
             return self._snapshot_unlocked()
+
+    def accepted_count(self, underlying: Instrument) -> int:
+        require_supported_underlying(underlying)
+        with self._lock:
+            return self._accepted_by_underlying.get(underlying, 0)
+
+    def rejected_count(self, underlying: Instrument) -> int:
+        require_supported_underlying(underlying)
+        with self._lock:
+            return len(self._rejections_by_underlying.get(underlying, ()))
+
+    def rejection_examples(self, underlying: Instrument, *, limit: int = 3) -> tuple[str, ...]:
+        require_supported_underlying(underlying)
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        with self._lock:
+            return self._rejections_by_underlying.get(underlying, ())[:limit]
+
+    def error_for(self, underlying: Instrument) -> str | None:
+        require_supported_underlying(underlying)
+        with self._lock:
+            accepted = self._accepted_by_underlying.get(underlying, 0)
+            rejected = len(self._rejections_by_underlying.get(underlying, ()))
+            if accepted > 0:
+                return None
+            if rejected > 0:
+                return f"No valid {underlying.value} contracts were discovered."
+            if self._status in {ZerodhaOptionDiscoveryStatus.EMPTY, ZerodhaOptionDiscoveryStatus.READY}:
+                return f"No valid {underlying.value} contracts were discovered."
+            return self._last_error
 
     def _snapshot_unlocked(self) -> ZerodhaOptionDiscoverySnapshot:
         contracts = self._catalogue.all()
@@ -156,6 +205,45 @@ def _is_requested_option_record(
         if name in roots[underlying] or any(symbol.startswith(root.replace(" ", "")) for root in roots[underlying]):
             return True
     return False
+
+
+def _record_underlying(
+    record: object,
+    underlyings: tuple[Instrument, ...],
+    venues: set[ZerodhaDerivativeVenue],
+) -> Instrument | None:
+    if not isinstance(record, Mapping):
+        return None
+    if not _matches_requested_option_shape(record, venues):
+        return None
+    try:
+        underlying = identify_underlying(record)
+    except Exception:
+        underlying = _fallback_underlying(record, underlyings)
+    if underlying in underlyings:
+        return underlying
+    return None
+
+
+def _matches_requested_option_shape(record: Mapping[str, object], venues: set[ZerodhaDerivativeVenue]) -> bool:
+    exchange = str(record.get("exchange", "")).strip().upper()
+    segment = str(record.get("segment", "")).strip().upper()
+    instrument_type = str(record.get("instrument_type", "")).strip().upper()
+    try:
+        venue = ZerodhaDerivativeVenue(exchange)
+    except ValueError:
+        return False
+    return venue in venues and segment == f"{venue.value}-OPT" and instrument_type in {"CE", "PE"}
+
+
+def _fallback_underlying(record: Mapping[str, object], underlyings: tuple[Instrument, ...]) -> Instrument | None:
+    name = str(record.get("name", "")).strip().upper()
+    symbol = str(record.get("tradingsymbol", "")).strip().upper()
+    roots = {Instrument.NIFTY: ("NIFTY",), Instrument.BANKNIFTY: ("BANKNIFTY", "NIFTY BANK"), Instrument.SENSEX: ("SENSEX",)}
+    for underlying in underlyings:
+        if name in roots[underlying] or any(symbol.startswith(root.replace(" ", "")) for root in roots[underlying]):
+            return underlying
+    return None
 
 
 def _rejected_contract_message(record: Mapping[str, object], exc: Exception) -> str:

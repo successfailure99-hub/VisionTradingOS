@@ -80,7 +80,7 @@ def test_load_rejects_bad_inputs_preserves_catalogue_and_errors_are_safe():
     (
         raw(1, exchange_token=None),
         raw(1, exchange_token=0),
-        raw(1, exchange_token="1001"),
+        raw(1, exchange_token="1001.0"),
         {key: value for key, value in raw(1).items() if key != "exchange_token"},
     ),
 )
@@ -102,7 +102,7 @@ def test_mixed_valid_invalid_contracts_continue_and_subscriptions_use_valid_toke
             raw(3, right="CE", strike=25100),
             raw(4, right="PE", strike=25100),
             raw(5, right="CE", strike=25200, exchange_token=0),
-            raw(6, right="PE", strike=25200, exchange_token="1006"),
+            raw(6, right="PE", strike=25200, exchange_token="1006.0"),
             raw(7, right="CE", strike=25300, segment="NFO-FUT"),
             raw(8, right="PE", strike=25300, segment="NFO-OPT", exchange="NSE"),
         ]
@@ -113,6 +113,9 @@ def test_mixed_valid_invalid_contracts_continue_and_subscriptions_use_valid_toke
     assert snapshot.supported_contract_count == 4
     assert snapshot.last_error is not None
     assert "Rejected contract:" in snapshot.last_error
+    assert item.accepted_count(Instrument.NIFTY) == 4
+    assert item.rejected_count(Instrument.NIFTY) == 2
+    assert len(item.rejection_examples(Instrument.NIFTY)) == 2
     contracts = item.catalogue.all()
     assert tuple(contract.instrument_token for contract in contracts) == (1, 2, 3, 4)
     assert tuple(contract.exchange_token for contract in contracts) == (1001, 1002, 1003, 1004)
@@ -147,6 +150,13 @@ def test_invalid_sensex_contracts_do_not_block_nifty_or_banknifty_discovery():
     assert snapshot.status is ZerodhaOptionDiscoveryStatus.READY
     assert snapshot.available_underlyings == (Instrument.NIFTY, Instrument.BANKNIFTY)
     assert "Rejected contract:" in snapshot.last_error
+    assert item.accepted_count(Instrument.NIFTY) == 4
+    assert item.accepted_count(Instrument.BANKNIFTY) == 4
+    assert item.accepted_count(Instrument.SENSEX) == 0
+    assert item.rejected_count(Instrument.SENSEX) == 2
+    assert item.error_for(Instrument.NIFTY) is None
+    assert item.error_for(Instrument.BANKNIFTY) is None
+    assert item.error_for(Instrument.SENSEX) == "No valid SENSEX contracts were discovered."
     resolver = item.create_resolver()
     nifty = resolver.resolve_universe(Instrument.NIFTY, as_of=date(2026, 7, 1), underlying_price=25000, strikes_each_side=0)
     banknifty = resolver.resolve_universe(Instrument.BANKNIFTY, as_of=date(2026, 7, 1), underlying_price=52000, strikes_each_side=0)

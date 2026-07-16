@@ -218,8 +218,6 @@ class DesktopOptionChainRuntimeManager:
                 state.log(self._clock, "Resolving contracts...")
             discovery = self._discovery.load(SUPPORTED_OPTION_CHAIN_INSTRUMENTS)
             self._discovery_ready = bool(discovery.available_underlyings)
-            if not self._discovery_ready:
-                raise RuntimeError(discovery.last_error or "No Contracts Found")
             self._resolver = self._discovery.create_resolver()
         except Exception as exc:
             self._last_error = _safe_error(exc, self._redactions)
@@ -229,13 +227,21 @@ class DesktopOptionChainRuntimeManager:
                 state.last_error = self._last_error
                 state.log(self._clock, self._last_error)
             return self.snapshot()
+        available = set(discovery.available_underlyings)
         self._started = True
         self._stopped = False
-        self._last_error = None
+        self._last_error = None if available else (discovery.last_error or "No Contracts Found")
         self._last_updated_at = _safe_now(self._clock)
         for state in self._instrument_state.values():
-            state.state = DesktopOptionChainRuntimeState.WAITING_FOR_SPOT
-            state.log(self._clock, f"Waiting for first {state.underlying.value} spot tick")
+            if state.underlying in available:
+                state.state = DesktopOptionChainRuntimeState.WAITING_FOR_SPOT
+                state.last_error = None
+                state.log(self._clock, f"Waiting for first {state.underlying.value} spot tick")
+            else:
+                error = self._discovery.error_for(state.underlying) or f"No valid {state.underlying.value} contracts were discovered."
+                state.state = DesktopOptionChainRuntimeState.ERROR
+                state.last_error = error
+                state.log(self._clock, error)
         return self.snapshot()
 
     def stop(self) -> DesktopOptionChainRuntimeSnapshot:
@@ -268,6 +274,12 @@ class DesktopOptionChainRuntimeManager:
             price = _raw_price(raw_tick)
             timestamp = _raw_timestamp(raw_tick, self._clock)
             state = self._instrument_state[underlying]
+            if state.state is DesktopOptionChainRuntimeState.ERROR and state.option_token_count == 0:
+                state.current_spot = price
+                state.last_spot_tick_at = timestamp
+                state.last_updated_at = timestamp
+                state.log(self._clock, f"Spot ignored after discovery error: {price:.2f}")
+                continue
             state.current_spot = price
             state.last_spot_tick_at = timestamp
             state.last_updated_at = timestamp

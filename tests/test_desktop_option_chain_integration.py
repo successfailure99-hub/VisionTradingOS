@@ -404,8 +404,49 @@ def test_invalid_option_exchange_tokens_surface_safe_discovery_error_on_dashboar
     assert view.markets[0].last_price == 25050.0
     assert view.option_chains[0].runtime_status == "Error"
     assert view.option_chains[0].runtime_last_error is not None
-    assert "No Valid Contracts" in view.option_chains[0].runtime_last_error
-    assert "Rejected contract:" in view.option_chains[0].runtime_last_error
+    assert view.option_chains[0].runtime_last_error == "No valid NIFTY contracts were discovered."
     assert "TypeError" not in view.option_chains[0].runtime_last_error
     assert "desktop_access_token" not in view.option_chains[0].runtime_last_error
+    dashboard.shutdown()
+
+
+def test_nifty_receiving_and_banknifty_waiting_are_isolated_from_sensex_discovery_error():
+    records = []
+    for record in option_records():
+        row = dict(record)
+        if row["name"] == "SENSEX":
+            row["exchange_token"] = "856478.0"
+        records.append(row)
+    dashboard, ticker = create_dashboard(records=tuple(records))
+    ticker.callbacks["on_connect"](None, {})
+    ticker.callbacks["on_ticks"](None, (spot_tick(101, 25050),))
+    ticker.callbacks["on_ticks"](None, tuple(option_tick(token, 120 + token, 11) for token in range(1000, 1006)))
+
+    view = dashboard.main_window.refresh()
+    by_symbol = {chain.symbol: chain for chain in view.option_chains}
+    assert by_symbol["NIFTY"].runtime_status == "Receiving"
+    assert by_symbol["NIFTY"].runtime_last_error is None
+    assert by_symbol["NIFTY"].available is True
+    assert by_symbol["NIFTY"].strike_count == 3
+    assert all(24900 <= strike.strike_price <= 25100 for strike in by_symbol["NIFTY"].strikes)
+    assert by_symbol["BANKNIFTY"].runtime_status == "Waiting For Spot"
+    assert by_symbol["BANKNIFTY"].runtime_last_error is None
+    assert by_symbol["SENSEX"].runtime_status == "Error"
+    assert by_symbol["SENSEX"].runtime_last_error == "No valid SENSEX contracts were discovered."
+    assert "SENSEX" not in (by_symbol["NIFTY"].runtime_last_error or "")
+    assert "SENSEX" not in (by_symbol["BANKNIFTY"].runtime_last_error or "")
+
+    nifty_panel = dashboard.main_window._instrument_panels["NIFTY"]["option_chain"]
+    bank_panel = dashboard.main_window._instrument_panels["BANKNIFTY"]["option_chain"]
+    sensex_panel = dashboard.main_window._instrument_panels["SENSEX"]["option_chain"]
+    assert nifty_panel._labels["Status"].text() == "Receiving"
+    assert nifty_panel._labels["Last Error"].text() == "-"
+    assert nifty_panel._table.rowCount() == 3
+    assert bank_panel._labels["Status"].text() == "Waiting For Spot"
+    assert bank_panel._labels["Last Error"].text() == "-"
+    assert sensex_panel._labels["Status"].text() == "Error"
+    assert sensex_panel._labels["Last Error"].text() == "No valid SENSEX contracts were discovered."
+    assert ticker.submitted_orders == []
+    assert view.runtime.broker_mode == "Dry Run"
+    assert view.runtime.safety_mode == "Analysis Only"
     dashboard.shutdown()

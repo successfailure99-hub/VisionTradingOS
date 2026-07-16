@@ -5,6 +5,7 @@ Normalizer for raw Zerodha derivative option records.
 from collections.abc import Iterable, Mapping
 from datetime import date, datetime
 from math import isfinite
+from numbers import Integral
 
 from brokers.zerodha.options.enums import ZerodhaDerivativeVenue, ZerodhaOptionRight
 from brokers.zerodha.options.models import ZerodhaOptionContract, venue_for_underlying
@@ -48,8 +49,8 @@ class ZerodhaOptionContractNormalizer:
             else underlying.value
         )
         return ZerodhaOptionContract(
-            instrument_token=self._positive_int(raw_record.get("instrument_token"), "instrument_token"),
-            exchange_token=self._positive_int(raw_record.get("exchange_token"), "exchange_token"),
+            instrument_token=safe_positive_int(raw_record.get("instrument_token"), "instrument_token"),
+            exchange_token=safe_positive_int(raw_record.get("exchange_token"), "exchange_token"),
             underlying=underlying,
             venue=venue,
             segment=segment,
@@ -58,7 +59,7 @@ class ZerodhaOptionContractNormalizer:
             expiry=self._expiry(raw_record.get("expiry")),
             strike=self._positive_float(raw_record.get("strike"), "strike"),
             right=right,
-            lot_size=self._positive_int(raw_record.get("lot_size"), "lot_size"),
+            lot_size=safe_positive_int(raw_record.get("lot_size"), "lot_size"),
             tick_size=self._positive_float(raw_record.get("tick_size"), "tick_size"),
         )
 
@@ -97,13 +98,6 @@ class ZerodhaOptionContractNormalizer:
             raise TypeError(f"{field_name} must be text, empty, or None")
         normalized = value.strip()
         return normalized or None
-
-    def _positive_int(self, value: object, field_name: str) -> int:
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise TypeError(f"{field_name} must be a positive integer")
-        if value <= 0:
-            raise ValueError(f"{field_name} must be positive")
-        return value
 
     def _positive_float(self, value: object, field_name: str) -> float:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -162,3 +156,22 @@ def is_candidate_record(
         return identify_underlying(raw_record) in underlyings
     except Exception:
         return False
+
+
+def safe_positive_int(value: object, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise TypeError(f"{field_name} must be a positive integer")
+    if isinstance(value, Integral):
+        normalized = int(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            raise ValueError(f"{field_name} must be positive")
+        if not text.isdecimal():
+            raise TypeError(f"{field_name} must be a positive integer")
+        normalized = int(text)
+    else:
+        raise TypeError(f"{field_name} must be a positive integer")
+    if normalized <= 0:
+        raise ValueError(f"{field_name} must be positive")
+    return normalized

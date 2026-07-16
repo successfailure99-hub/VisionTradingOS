@@ -1,4 +1,5 @@
 from datetime import date
+from enum import IntEnum
 
 import pytest
 
@@ -22,6 +23,10 @@ def raw(**overrides):
     )
     item.update(overrides)
     return item
+
+
+class IntegralToken(IntEnum):
+    VALUE = 219258373
 
 
 def test_normalizes_supported_underlyings_rights_and_name_symbol_rules():
@@ -54,6 +59,24 @@ def test_normalizes_supported_underlyings_rights_and_name_symbol_rules():
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("instrument_token", 219258373),
+        ("instrument_token", "219258373"),
+        ("instrument_token", IntegralToken.VALUE),
+        ("exchange_token", 856478),
+        ("exchange_token", "856478"),
+        ("exchange_token", " 856478 "),
+        ("lot_size", "20"),
+    ),
+)
+def test_integral_master_fields_accept_safe_integer_representations(field, value):
+    contract = ZerodhaOptionContractNormalizer().normalize(raw(**{field: value}))
+    assert isinstance(getattr(contract, field), int)
+    assert getattr(contract, field) == int(value)
+
+
+@pytest.mark.parametrize(
     "overrides",
     [
         dict(exchange="NSE", segment="NSE"),
@@ -68,7 +91,14 @@ def test_normalizes_supported_underlyings_rights_and_name_symbol_rules():
         dict(instrument_token=True),
         dict(exchange_token=None),
         dict(exchange_token=0),
-        dict(exchange_token="11"),
+        dict(exchange_token=True),
+        dict(exchange_token=""),
+        dict(exchange_token=" "),
+        dict(exchange_token="-11"),
+        dict(exchange_token="11.0"),
+        dict(exchange_token="1e3"),
+        dict(exchange_token=11.0),
+        dict(exchange_token="bad"),
         dict(strike=float("nan")),
         dict(strike=float("inf")),
         dict(lot_size=None),
@@ -97,3 +127,20 @@ def test_missing_exchange_token_is_rejected():
     item.pop("exchange_token")
     with pytest.raises(TypeError):
         ZerodhaOptionContractNormalizer().normalize(item)
+
+
+@pytest.mark.parametrize(
+    "record",
+    (
+        raw(exchange="NFO", segment="NFO-OPT", instrument_type="CE", name="NIFTY", tradingsymbol="NIFTY2673025000CE", instrument_token="219258373", exchange_token="856478", lot_size="20"),
+        raw(exchange="NFO", segment="NFO-OPT", instrument_type="PE", name="BANKNIFTY", tradingsymbol="BANKNIFTY2673050000PE", instrument_token="219258374", exchange_token="856479", lot_size="15"),
+        raw(exchange="BFO", segment="BFO-OPT", instrument_type="CE", name="SENSEX", tradingsymbol="SENSEX2673080000CE", instrument_token="219258375", exchange_token="856480", lot_size="20"),
+        raw(exchange="BFO", segment="BFO-OPT", instrument_type="PE", name="SENSEX", tradingsymbol="SENSEX2673080000PE", instrument_token=219258373, exchange_token="856478", lot_size=20, strike=26450.0),
+    ),
+)
+def test_real_shaped_kite_option_records_with_numeric_strings_normalize(record):
+    contract = ZerodhaOptionContractNormalizer().normalize(record)
+    assert isinstance(contract.instrument_token, int)
+    assert isinstance(contract.exchange_token, int)
+    assert isinstance(contract.lot_size, int)
+    assert contract.exchange_token > 0
