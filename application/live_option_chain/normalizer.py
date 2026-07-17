@@ -41,7 +41,7 @@ class ZerodhaLiveOptionQuoteNormalizer:
         if entry is None:
             raise ValueError("unknown option instrument token")
         last_price = _non_negative_float(raw_tick.get("last_price"), "last_price")
-        volume = _non_negative_int(raw_tick.get("volume", 0), "volume")
+        volume = _session_volume(raw_tick)
         open_interest = _non_negative_int(raw_tick.get("oi", 0), "oi")
         exchange_timestamp = _timestamp(raw_tick, self._clock)
         received_at = self._now()
@@ -97,6 +97,14 @@ def _non_negative_int(value, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{field_name} must be non-negative integer")
     return value
+
+
+def _session_volume(raw_tick: Mapping[str, object]) -> int:
+    for field_name in ("volume_traded", "volume", "traded_quantity"):
+        value = raw_tick.get(field_name)
+        if value is not None:
+            return _non_negative_int(value, field_name)
+    return 0
 
 
 def _non_negative_float(value, field_name: str) -> float:

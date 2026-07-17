@@ -3,6 +3,7 @@ Tests for the market dashboard panel.
 """
 
 import os
+from datetime import UTC, datetime
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -25,7 +26,9 @@ def market_view(**overrides):
         vwap_source_expiry=None, vwap_source_volume=0, vwap_source_price=None,
         vwap_source_state="-", vwap_source_message="-", vwap_subscription_active=False,
         vwap_historical_candles_loaded=0, vwap_historical_volume=0, vwap_live_tick_count=0,
-        vwap_last_live_tick=None, vwap_last_error=None,
+        vwap_historical_seed_complete=False, vwap_bootstrap_time=None,
+        vwap_last_live_volume=0, vwap_last_delta_volume=0,
+        vwap_last_live_tick=None, vwap_current_accumulated_volume=0, vwap_last_error=None,
         cpr_pivot=None, cpr_bc=None, cpr_tc=None,
         camarilla_h3=None, camarilla_h4=None, camarilla_h5=None, camarilla_h6=None,
         camarilla_l3=None, camarilla_l4=None, camarilla_l5=None, camarilla_l6=None,
@@ -80,7 +83,12 @@ def test_futures_vwap_source_metadata_renders():
             vwap_subscription_active=True,
             vwap_historical_candles_loaded=3,
             vwap_historical_volume=1475,
+            vwap_historical_seed_complete=True,
+            vwap_bootstrap_time=datetime(2026, 7, 15, 9, 20, tzinfo=UTC),
             vwap_live_tick_count=1,
+            vwap_last_live_volume=1500,
+            vwap_last_delta_volume=25,
+            vwap_current_accumulated_volume=1500,
         )
     )
     assert panel._labels["VWAP"].text() == "25250.00"
@@ -93,7 +101,12 @@ def test_futures_vwap_source_metadata_renders():
     assert panel._labels["VWAP Message"].text() == "Futures proxy VWAP ready"
     assert panel._labels["VWAP Subscription"].text() == "Active"
     assert panel._labels["VWAP History Volume"].text() == "1475"
-    assert panel._labels["VWAP Live Ticks"].text() == "1"
+    assert panel._labels["Historical Seed Complete"].text() == "Yes"
+    assert panel._labels["Bootstrap Time"].text() == "15-Jul-2026 14:50:00 IST"
+    assert panel._labels["Live Tick Count"].text() == "1"
+    assert panel._labels["Last Live Volume"].text() == "1500"
+    assert panel._labels["Last Delta Volume"].text() == "25"
+    assert panel._labels["Current Accumulated Volume"].text() == "1500"
 
 
 def test_repeated_render_updates_existing_labels():

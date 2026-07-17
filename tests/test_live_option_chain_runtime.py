@@ -54,6 +54,25 @@ def test_runtime_start_underlying_batch_engine_and_duplicates():
     assert duplicate.engine_updated is False
 
 
+def test_runtime_propagates_zerodha_volume_traded_into_option_chain_snapshot():
+    runtime, _, engine, _ = active_runtime()
+    runtime.start()
+    runtime.set_underlying_price(25050, timestamp=NOW)
+    result = runtime.process_raw_ticks(
+        (
+            {"instrument_token": 1, "last_price": 10, "volume_traded": 111, "oi": 101, "exchange_timestamp": NOW},
+            {"instrument_token": 2, "last_price": 11, "volume_traded": 222, "oi": 102, "exchange_timestamp": NOW},
+            {"instrument_token": 3, "last_price": 12, "volume_traded": 333, "oi": 103, "exchange_timestamp": NOW},
+            {"instrument_token": 4, "last_price": 13, "volume_traded": 444, "oi": 104, "exchange_timestamp": NOW},
+        )
+    )
+    assert result.engine_updated is True
+    assert engine.state.strikes[0].call.volume == 111
+    assert engine.state.strikes[0].put.volume == 222
+    assert engine.state.strikes[1].call.volume == 333
+    assert engine.state.strikes[1].put.volume == 444
+
+
 def test_runtime_partial_stale_correction_stop_clear_and_baseline():
     runtime, _, _, _ = active_runtime()
     with pytest.raises(RuntimeError):

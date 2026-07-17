@@ -42,8 +42,13 @@ class RuntimeVWAPSource:
     subscription_active: bool = False
     historical_candles_loaded: int = 0
     historical_volume: int = 0
+    historical_seed_complete: bool = False
+    bootstrap_time: datetime | None = None
     live_tick_count: int = 0
+    last_live_volume: int = 0
+    last_delta_volume: int = 0
     last_live_tick: datetime | None = None
+    current_accumulated_volume: int = 0
     last_error: str | None = None
 
     def __post_init__(self) -> None:
@@ -71,10 +76,21 @@ class RuntimeVWAPSource:
             raise TypeError("ready must be bool")
         if not isinstance(self.subscription_active, bool):
             raise TypeError("subscription_active must be bool")
-        for field_name in ("historical_candles_loaded", "historical_volume", "live_tick_count"):
+        if not isinstance(self.historical_seed_complete, bool):
+            raise TypeError("historical_seed_complete must be bool")
+        for field_name in (
+            "historical_candles_loaded",
+            "historical_volume",
+            "live_tick_count",
+            "last_live_volume",
+            "last_delta_volume",
+            "current_accumulated_volume",
+        ):
             value = getattr(self, field_name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{field_name} must be a non-negative integer")
+        if self.bootstrap_time is not None and not isinstance(self.bootstrap_time, datetime):
+            raise TypeError("bootstrap_time must be datetime or None")
         if self.last_live_tick is not None and not isinstance(self.last_live_tick, datetime):
             raise TypeError("last_live_tick must be datetime or None")
         for field_name in ("state", "message"):

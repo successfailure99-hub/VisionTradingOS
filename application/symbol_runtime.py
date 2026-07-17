@@ -65,8 +65,13 @@ class SymbolRuntime:
         self._vwap_subscription_active = False
         self._vwap_historical_candles_loaded = 0
         self._vwap_historical_volume = 0
+        self._vwap_historical_seed_complete = False
+        self._vwap_bootstrap_time = None
         self._vwap_live_tick_count = 0
+        self._vwap_last_live_volume = 0
+        self._vwap_last_delta_volume = 0
         self._vwap_last_live_tick = None
+        self._vwap_current_accumulated_volume = 0
         self._vwap_last_error = None
 
         self.market_context_engine = MarketContextEngine(event_bus, instrument.value, configuration.timeframe)
@@ -160,8 +165,13 @@ class SymbolRuntime:
         subscription_active: bool = True,
         historical_candles_loaded: int = 0,
         historical_volume: int = 0,
+        historical_seed_complete: bool = False,
+        bootstrap_time=None,
         live_tick_count: int = 0,
+        last_live_volume: int = 0,
+        last_delta_volume: int = 0,
         last_live_tick=None,
+        current_accumulated_volume: int = 0,
     ) -> RuntimeSnapshot:
         self._require_running()
         if tick.symbol is not self._core_instrument:
@@ -181,8 +191,16 @@ class SymbolRuntime:
         self._vwap_subscription_active = bool(subscription_active)
         self._vwap_historical_candles_loaded = _non_negative_int(historical_candles_loaded, "historical_candles_loaded")
         self._vwap_historical_volume = _non_negative_int(historical_volume, "historical_volume")
+        self._vwap_historical_seed_complete = bool(historical_seed_complete)
+        self._vwap_bootstrap_time = bootstrap_time
         self._vwap_live_tick_count = _non_negative_int(live_tick_count, "live_tick_count")
+        self._vwap_last_live_volume = _non_negative_int(last_live_volume, "last_live_volume")
+        self._vwap_last_delta_volume = _non_negative_int(last_delta_volume, "last_delta_volume")
         self._vwap_last_live_tick = last_live_tick
+        self._vwap_current_accumulated_volume = _non_negative_int(
+            current_accumulated_volume,
+            "current_accumulated_volume",
+        )
         self._vwap_last_error = None
         self._updated_at = tick.timestamp
         if self._last_tick is not None:
@@ -413,8 +431,13 @@ class SymbolRuntime:
         self._vwap_subscription_active = False
         self._vwap_historical_candles_loaded = 0
         self._vwap_historical_volume = 0
+        self._vwap_historical_seed_complete = False
+        self._vwap_bootstrap_time = None
         self._vwap_live_tick_count = 0
+        self._vwap_last_live_volume = 0
+        self._vwap_last_delta_volume = 0
         self._vwap_last_live_tick = None
+        self._vwap_current_accumulated_volume = 0
         self._vwap_last_error = None
         self._status = RuntimeStatus.CREATED
 
@@ -521,8 +544,13 @@ class SymbolRuntime:
             subscription_active=self._vwap_subscription_active,
             historical_candles_loaded=self._vwap_historical_candles_loaded,
             historical_volume=self._vwap_historical_volume,
+            historical_seed_complete=self._vwap_historical_seed_complete,
+            bootstrap_time=self._vwap_bootstrap_time,
             live_tick_count=self._vwap_live_tick_count,
+            last_live_volume=self._vwap_last_live_volume,
+            last_delta_volume=self._vwap_last_delta_volume,
             last_live_tick=self._vwap_last_live_tick,
+            current_accumulated_volume=self._vwap_current_accumulated_volume,
             last_error=self._vwap_last_error,
         )
 

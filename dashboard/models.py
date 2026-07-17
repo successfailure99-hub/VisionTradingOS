@@ -376,8 +376,13 @@ class DashboardMarketView:
     vwap_subscription_active: bool
     vwap_historical_candles_loaded: int
     vwap_historical_volume: int
+    vwap_historical_seed_complete: bool
+    vwap_bootstrap_time: datetime | None
     vwap_live_tick_count: int
+    vwap_last_live_volume: int
+    vwap_last_delta_volume: int
     vwap_last_live_tick: datetime | None
+    vwap_current_accumulated_volume: int
     vwap_last_error: str | None
     cpr_pivot: float | None
     cpr_bc: float | None

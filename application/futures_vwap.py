@@ -84,7 +84,11 @@ class FuturesVWAPInstrumentSnapshot:
     contract: FuturesVWAPContract | None
     warmed_candles: int
     historical_volume: int
+    historical_seed_complete: bool
+    bootstrap_time: datetime | None
     live_ticks: int
+    last_live_volume: int
+    last_delta_volume: int
     last_source_price: float | None
     cumulative_volume: int
     vwap_ready: bool
@@ -117,7 +121,12 @@ class _MutableFuturesState:
     subscription_active: bool = False
     warmed_candles: int = 0
     historical_volume: int = 0
+    historical_seed_complete: bool = False
+    historical_bootstrap_attempted: bool = False
+    bootstrap_time: datetime | None = None
     live_ticks: int = 0
+    last_live_volume: int = 0
+    last_delta_volume: int = 0
     last_cumulative_live_volume: int | None = None
     last_source_price: float | None = None
     last_updated_at: datetime | None = None
@@ -215,7 +224,7 @@ class DesktopFuturesVWAPRuntimeManager:
             try:
                 state.state = FuturesVWAPRuntimeState.LOADING_HISTORY
                 state.message = f"Loading completed {contract.trading_symbol} history"
-                state.warmed_candles = self._warm_contract(contract)
+                state.warmed_candles = self._try_bootstrap_contract(contract)
             except Exception as exc:
                 state.last_error = _safe_error(exc, self._redactions)
                 state.state = FuturesVWAPRuntimeState.ERROR
@@ -291,6 +300,7 @@ class DesktopFuturesVWAPRuntimeManager:
             if contract is None:
                 continue
             try:
+                self._bootstrap_before_first_live_tick(state, contract)
                 price = _raw_price(raw_tick)
                 cumulative_volume = _raw_volume(raw_tick)
                 volume = self._incremental_live_volume(state, cumulative_volume)
@@ -298,6 +308,8 @@ class DesktopFuturesVWAPRuntimeManager:
                     continue
                 timestamp = normalize_zerodha_tick_timestamp(raw_tick, clock=self._clock).timestamp
                 state.live_ticks += 1
+                state.last_live_volume = cumulative_volume
+                state.last_delta_volume = volume
                 state.last_source_price = price
                 state.last_updated_at = timestamp
                 state.state = FuturesVWAPRuntimeState.RECEIVING
@@ -338,12 +350,17 @@ class DesktopFuturesVWAPRuntimeManager:
                 state.last_error = f"Discovery Failed: {_safe_error(exc, self._redactions)}"
         return contracts
 
-    def _warm_contract(self, contract: FuturesVWAPContract) -> int:
+    def _try_bootstrap_contract(self, contract: FuturesVWAPContract) -> int:
+        state = self._states[contract.underlying]
+        if state.historical_bootstrap_attempted or state.cumulative_volume > 0:
+            return state.warmed_candles
         if self._historical_client is None:
             return 0
         bounds = _current_completed_minute_bounds(self._clock)
         if bounds is None:
             return 0
+        state.historical_bootstrap_attempted = True
+        state.bootstrap_time = _safe_now(self._clock)
         manager = ZerodhaHistoricalDataManager(client=self._historical_client, clock=self._clock)
         result = manager.fetch(
             ZerodhaHistoricalRequest(
@@ -357,11 +374,11 @@ class DesktopFuturesVWAPRuntimeManager:
                 include_open_interest=False,
             )
         )
-        accepted = 0
+        state.historical_seed_complete = True
+        accepted = state.warmed_candles
         for candle in result.candles:
             if candle.volume <= 0:
                 continue
-            state = self._states[contract.underlying]
             accepted += 1
             state.warmed_candles = accepted
             state.historical_volume += candle.volume
@@ -374,6 +391,16 @@ class DesktopFuturesVWAPRuntimeManager:
             )
         return accepted
 
+    def _bootstrap_before_first_live_tick(self, state: _MutableFuturesState, contract: FuturesVWAPContract) -> None:
+        if state.cumulative_volume > 0 or state.historical_bootstrap_attempted:
+            return
+        try:
+            self._try_bootstrap_contract(contract)
+        except Exception as exc:
+            state.historical_bootstrap_attempted = True
+            state.last_error = _safe_error(exc, self._redactions)
+            state.message = state.last_error
+
     def _process_vwap_tick(
         self,
         contract: FuturesVWAPContract,
@@ -383,6 +410,8 @@ class DesktopFuturesVWAPRuntimeManager:
         timestamp: datetime,
     ) -> None:
         runtime = self._runtime_for(contract.underlying)
+        state = self._states[contract.underlying]
+        projected_accumulated_volume = state.cumulative_volume + volume
         runtime.process_vwap_tick(
             Tick(
                 symbol=contract.underlying,
@@ -401,11 +430,16 @@ class DesktopFuturesVWAPRuntimeManager:
             expiry=contract.expiry,
             state="Ready",
             message="Futures proxy VWAP ready",
-            subscription_active=self._states[contract.underlying].subscription_active,
-            historical_candles_loaded=self._states[contract.underlying].warmed_candles,
-            historical_volume=self._states[contract.underlying].historical_volume,
-            live_tick_count=self._states[contract.underlying].live_ticks,
-            last_live_tick=self._states[contract.underlying].last_updated_at,
+            subscription_active=state.subscription_active,
+            historical_candles_loaded=state.warmed_candles,
+            historical_volume=state.historical_volume,
+            historical_seed_complete=state.historical_seed_complete,
+            bootstrap_time=state.bootstrap_time,
+            live_tick_count=state.live_ticks,
+            last_live_volume=state.last_live_volume,
+            last_delta_volume=state.last_delta_volume,
+            last_live_tick=state.last_updated_at,
+            current_accumulated_volume=projected_accumulated_volume,
         )
         levels = runtime.vwap_engine.get_latest(contract.underlying)
         if levels is not None:
@@ -463,7 +497,11 @@ class DesktopFuturesVWAPRuntimeManager:
             contract=state.contract,
             warmed_candles=state.warmed_candles,
             historical_volume=state.historical_volume,
+            historical_seed_complete=state.historical_seed_complete,
+            bootstrap_time=state.bootstrap_time,
             live_ticks=state.live_ticks,
+            last_live_volume=state.last_live_volume,
+            last_delta_volume=state.last_delta_volume,
             last_source_price=state.last_source_price,
             cumulative_volume=state.cumulative_volume,
             vwap_ready=state.vwap_value is not None and state.cumulative_volume > 0,
@@ -478,7 +516,6 @@ class DesktopFuturesVWAPRuntimeManager:
             state.last_cumulative_live_volume = cumulative_volume
             return cumulative_volume
         if cumulative_volume <= previous:
-            state.last_cumulative_live_volume = cumulative_volume
             return 0
         state.last_cumulative_live_volume = cumulative_volume
         return cumulative_volume - previous

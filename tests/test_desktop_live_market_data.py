@@ -459,12 +459,73 @@ def test_futures_vwap_discovers_valid_contracts_warms_vwap_and_surfaces_source_m
     assert view.markets[0].vwap_source_type == "Futures Proxy"
     assert view.markets[0].vwap_source_exchange == "NFO"
     assert view.markets[0].vwap_subscription_active is True
+    assert view.markets[0].vwap_historical_candles_loaded == 2
     assert view.markets[0].vwap_historical_volume > 0
+    assert view.markets[0].vwap_historical_seed_complete is True
+    assert view.markets[0].vwap_bootstrap_time is not None
+    assert view.markets[0].vwap_current_accumulated_volume == view.markets[0].vwap_source_volume
     assert view.markets[0].latest_candle_close is None
     assert instrument_clients[0].calls == ["NFO", "NFO", "BFO"]
     dashboard.shutdown()
     dashboard.shutdown()
     assert ticker.unsubscriptions.count((201, 202, 203)) == 1
+
+
+def test_futures_vwap_bootstraps_once_after_open_edge_before_first_live_delta():
+    qt_app()
+    ticker = FakeTickerClient()
+    historical_clients = []
+    current = [datetime(2026, 7, 15, 9, 15, 1, tzinfo=ZoneInfo("Asia/Kolkata"))]
+    dashboard = create_dashboard_application(
+        environ=live_env(
+            LIVE_MARKET_DATA_AUTO_CONNECT="false",
+            LIVE_FUTURES_VWAP_ENABLED="true",
+            REFERENCE_DATA_BOOTSTRAP_ENABLED="false",
+        ),
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: current[0]),
+        instrument_client_factory=instrument_factory_factory([], futures_records()),
+        historical_client_factory=historical_factory_factory(historical_clients),
+        ticker_client=ticker,
+        clock=lambda: current[0],
+    )
+    assert historical_clients[0].calls == []
+    current[0] = datetime(2026, 7, 15, 9, 17, 5, tzinfo=ZoneInfo("Asia/Kolkata"))
+    ticker.callbacks["on_ticks"](
+        None,
+        (
+            {
+                "instrument_token": 201,
+                "last_price": 25333.0,
+                "exchange_timestamp": current[0],
+                "volume_traded": 30,
+            },
+        ),
+    )
+    view = dashboard.main_window.refresh()
+    market = view.markets[0]
+    assert len(historical_clients[0].calls) == 1
+    assert market.vwap_historical_candles_loaded == 2
+    assert market.vwap_historical_volume == 20
+    assert market.vwap_historical_seed_complete is True
+    assert market.vwap_bootstrap_time == current[0]
+    assert market.vwap_live_tick_count == 1
+    assert market.vwap_last_live_volume == 30
+    assert market.vwap_last_delta_volume == 10
+    assert market.vwap_current_accumulated_volume == 30
+    ticker.callbacks["on_ticks"](
+        None,
+        (
+            {
+                "instrument_token": 201,
+                "last_price": 25334.0,
+                "exchange_timestamp": current[0] + timedelta(seconds=1),
+                "volume_traded": 30,
+            },
+        ),
+    )
+    assert len(historical_clients[0].calls) == 1
+    dashboard.shutdown()
 
 
 @pytest.mark.parametrize("invalid_token", (None, 0, "bad-token"))
@@ -566,15 +627,35 @@ def test_futures_ticks_route_only_to_vwap_and_preserve_spot_candle_isolation():
             },
         ),
     )
+    ticker.callbacks["on_ticks"](
+        None,
+        (
+            {
+                "instrument_token": 201,
+                "last_price": 25336.0,
+                "exchange_timestamp": NOW + timedelta(seconds=4),
+                "volume_traded": 20,
+            },
+            {
+                "instrument_token": 201,
+                "last_price": 25337.0,
+                "exchange_timestamp": NOW + timedelta(seconds=5),
+                "volume_traded": 35,
+            },
+        ),
+    )
     view = dashboard.main_window.refresh()
     runtime_snapshot = dashboard.live_market_data_runtime.snapshot()
     assert runtime_snapshot.websocket.delivered_tick_count == 1
     assert view.markets[0].vwap_source == "NIFTY26JULFUT"
     assert view.markets[0].vwap_source_type == "Futures Proxy"
     assert view.markets[0].vwap_source_exchange == "NFO"
-    assert view.markets[0].vwap_source_price == 25335.0
-    assert view.markets[0].vwap_live_tick_count == 2
-    assert view.markets[0].vwap_source_volume == 30
+    assert view.markets[0].vwap_source_price == 25337.0
+    assert view.markets[0].vwap_live_tick_count == 3
+    assert view.markets[0].vwap_last_live_volume == 35
+    assert view.markets[0].vwap_last_delta_volume == 5
+    assert view.markets[0].vwap_current_accumulated_volume == 35
+    assert view.markets[0].vwap_source_volume == 35
     assert view.markets[0].latest_candle_close == 25000.0
     assert view.price_actions[0].available is False
     dashboard.shutdown()
