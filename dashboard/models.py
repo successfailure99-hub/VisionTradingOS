@@ -469,6 +469,14 @@ class DashboardStrategyView:
     approved_quantity: int | None
     risk_amount: float | None
     reward_risk: float | None
+    entry_price: float | None
+    stop_price: float | None
+    target_price: float | None
+    lot_size: int | None
+    approved_lots: int | None
+    plan_status: str
+    plan_valid_until: datetime | None
+    risk_reason: str
     latest_order_status: str
 
 

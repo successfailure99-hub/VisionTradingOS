@@ -16,6 +16,7 @@ from application.live_market_data import LiveMarketDataConfiguration, LiveMarket
 from application.models import RuntimeConfiguration
 from application.reference_data_bootstrap import run_reference_data_bootstrap
 from application.futures_vwap import DesktopFuturesVWAPRuntimeManager
+from engines.risk.models import InstrumentLotSize, RiskConfiguration
 from application.desktop_option_chain import (
     DesktopOptionChainConfigurationError,
     DesktopOptionChainRuntimeManager,
@@ -60,6 +61,18 @@ ENV_LIVE_OPTION_CHAIN_AUTO_START = "LIVE_OPTION_CHAIN_AUTO_START"
 ENV_LIVE_FUTURES_VWAP_ENABLED = "LIVE_FUTURES_VWAP_ENABLED"
 ENV_OPTION_CHAIN_STRIKES_EACH_SIDE = "OPTION_CHAIN_STRIKES_EACH_SIDE"
 ENV_REFERENCE_DATA_BOOTSTRAP_ENABLED = "REFERENCE_DATA_BOOTSTRAP_ENABLED"
+ENV_RISK_ENABLED = "RISK_ENABLED"
+ENV_RISK_CAPITAL = "RISK_CAPITAL"
+ENV_RISK_PER_TRADE_PERCENT = "RISK_PER_TRADE_PERCENT"
+ENV_RISK_MAX_AMOUNT_PER_TRADE = "RISK_MAX_AMOUNT_PER_TRADE"
+ENV_RISK_MAX_LOTS = "RISK_MAX_LOTS"
+ENV_RISK_MIN_REWARD_RISK = "RISK_MIN_REWARD_RISK"
+ENV_RISK_MAX_STOP_PERCENT = "RISK_MAX_STOP_PERCENT"
+ENV_RISK_MAX_TRADES_PER_DAY = "RISK_MAX_TRADES_PER_DAY"
+ENV_RISK_MAX_DAILY_LOSS = "RISK_MAX_DAILY_LOSS"
+ENV_RISK_ALLOW_LOW_CONFIDENCE = "RISK_ALLOW_LOW_CONFIDENCE"
+ENV_RISK_ALLOW_MIXED_SIGNALS = "RISK_ALLOW_MIXED_SIGNALS"
+ENV_TRADE_PLAN_VALIDITY_MINUTES = "TRADE_PLAN_VALIDITY_MINUTES"
 
 INSTRUMENT_TOKEN_ENV = (
     (Instrument.NIFTY, "NIFTY_INSTRUMENT_TOKEN", Exchange.NSE),
@@ -79,6 +92,7 @@ class DesktopLiveDataSettings:
     option_chain: DesktopOptionChainSettings
     reference_data_bootstrap_enabled: bool
     futures_vwap_enabled: bool
+    risk_configuration: RiskConfiguration | None
 
     def __repr__(self) -> str:
         return (
@@ -88,7 +102,8 @@ class DesktopLiveDataSettings:
             f"subscriptions={len(self.subscriptions)}, "
             f"option_chain_enabled={self.option_chain.enabled}, "
             f"reference_data_bootstrap_enabled={self.reference_data_bootstrap_enabled}, "
-            f"futures_vwap_enabled={self.futures_vwap_enabled})"
+            f"futures_vwap_enabled={self.futures_vwap_enabled}, "
+            f"risk_enabled={self.risk_configuration is not None})"
         )
 
     __str__ = __repr__
@@ -100,6 +115,7 @@ def load_desktop_live_configuration(
     enabled = _parse_bool(environ.get(ENV_LIVE_MARKET_DATA_ENABLED, "false"), ENV_LIVE_MARKET_DATA_ENABLED)
     auto_connect = _parse_bool(environ.get(ENV_LIVE_MARKET_DATA_AUTO_CONNECT, "true"), ENV_LIVE_MARKET_DATA_AUTO_CONNECT)
     option_chain = _load_option_chain_settings(environ)
+    risk_configuration = _load_risk_configuration(environ)
     futures_vwap_enabled = _parse_bool(
         environ.get(ENV_LIVE_FUTURES_VWAP_ENABLED, "true"),
         ENV_LIVE_FUTURES_VWAP_ENABLED,
@@ -121,6 +137,7 @@ def load_desktop_live_configuration(
             option_chain=option_chain,
             reference_data_bootstrap_enabled=False,
             futures_vwap_enabled=False,
+            risk_configuration=None,
         )
 
     missing = [
@@ -157,6 +174,7 @@ def load_desktop_live_configuration(
         option_chain=option_chain,
         reference_data_bootstrap_enabled=reference_bootstrap,
         futures_vwap_enabled=futures_vwap_enabled,
+        risk_configuration=risk_configuration,
     )
 
 
@@ -250,7 +268,8 @@ def create_dashboard_application(
                 RuntimeInstrument.NIFTY,
                 RuntimeInstrument.BANKNIFTY,
                 RuntimeInstrument.SENSEX,
-            )
+            ),
+            risk_configuration=settings.risk_configuration,
         )
     ).create_application()
     session_manager = create_zerodha_session_manager(
@@ -444,6 +463,36 @@ def _load_option_chain_settings(environ: Mapping[str, str]) -> DesktopOptionChai
     )
 
 
+def _load_risk_configuration(environ: Mapping[str, str]) -> RiskConfiguration | None:
+    enabled = _parse_bool(environ.get(ENV_RISK_ENABLED, "false"), ENV_RISK_ENABLED)
+    if not enabled:
+        return None
+    lot_sizes = []
+    missing = []
+    for instrument, _, _ in INSTRUMENT_TOKEN_ENV:
+        name = f"{instrument.value}_LOT_SIZE"
+        if not _text(environ.get(name)):
+            missing.append(name)
+        else:
+            lot_sizes.append(InstrumentLotSize(instrument.value, _parse_bounded_int(environ.get(name), name, minimum=1, maximum=10000)))
+    if not _text(environ.get(ENV_RISK_CAPITAL)):
+        missing.append(ENV_RISK_CAPITAL)
+    if missing:
+        raise DesktopLiveDataConfigurationError("Missing risk environment variables: " + ", ".join(missing))
+    return RiskConfiguration(
+        capital=_parse_positive_float(environ.get(ENV_RISK_CAPITAL), ENV_RISK_CAPITAL),
+        risk_per_trade_percentage=_parse_positive_float(environ.get(ENV_RISK_PER_TRADE_PERCENT, "1.0"), ENV_RISK_PER_TRADE_PERCENT),
+        maximum_risk_per_trade_amount=_parse_optional_positive_float(environ.get(ENV_RISK_MAX_AMOUNT_PER_TRADE), ENV_RISK_MAX_AMOUNT_PER_TRADE),
+        maximum_lots=_parse_bounded_int(environ.get(ENV_RISK_MAX_LOTS, "2"), ENV_RISK_MAX_LOTS, minimum=1, maximum=1000),
+        minimum_reward_risk=_parse_positive_float(environ.get(ENV_RISK_MIN_REWARD_RISK, "1.5"), ENV_RISK_MIN_REWARD_RISK),
+        maximum_stop_distance_percentage=_parse_positive_float(environ.get(ENV_RISK_MAX_STOP_PERCENT, "1.0"), ENV_RISK_MAX_STOP_PERCENT),
+        maximum_trades_per_day=_parse_bounded_int(environ.get(ENV_RISK_MAX_TRADES_PER_DAY, "3"), ENV_RISK_MAX_TRADES_PER_DAY, minimum=1, maximum=100),
+        maximum_daily_loss=_parse_non_negative_float(environ.get(ENV_RISK_MAX_DAILY_LOSS, "0"), ENV_RISK_MAX_DAILY_LOSS),
+        allow_low_confidence=_parse_bool(environ.get(ENV_RISK_ALLOW_LOW_CONFIDENCE, "false"), ENV_RISK_ALLOW_LOW_CONFIDENCE),
+        allow_mixed_signals=_parse_bool(environ.get(ENV_RISK_ALLOW_MIXED_SIGNALS, "false"), ENV_RISK_ALLOW_MIXED_SIGNALS),
+        trade_plan_validity_minutes=_parse_bounded_int(environ.get(ENV_TRADE_PLAN_VALIDITY_MINUTES, "15"), ENV_TRADE_PLAN_VALIDITY_MINUTES, minimum=1, maximum=240),
+        lot_sizes=tuple(lot_sizes),
+    )
 def _parse_bounded_int(value: str | None, variable_name: str, *, minimum: int, maximum: int) -> int:
     try:
         parsed = int(_text(value))
@@ -451,6 +500,32 @@ def _parse_bounded_int(value: str | None, variable_name: str, *, minimum: int, m
         raise DesktopLiveDataConfigurationError(f"{variable_name} must be between {minimum} and {maximum}") from exc
     if parsed < minimum or parsed > maximum:
         raise DesktopLiveDataConfigurationError(f"{variable_name} must be between {minimum} and {maximum}")
+    return parsed
+
+
+def _parse_positive_float(value: str | None, variable_name: str) -> float:
+    try:
+        parsed = float(_text(value))
+    except Exception as exc:
+        raise DesktopLiveDataConfigurationError(f"{variable_name} must be positive") from exc
+    if parsed <= 0:
+        raise DesktopLiveDataConfigurationError(f"{variable_name} must be positive")
+    return parsed
+
+
+def _parse_optional_positive_float(value: str | None, variable_name: str) -> float | None:
+    if not _text(value):
+        return None
+    return _parse_positive_float(value, variable_name)
+
+
+def _parse_non_negative_float(value: str | None, variable_name: str) -> float:
+    try:
+        parsed = float(_text(value))
+    except Exception as exc:
+        raise DesktopLiveDataConfigurationError(f"{variable_name} must be non-negative") from exc
+    if parsed < 0:
+        raise DesktopLiveDataConfigurationError(f"{variable_name} must be non-negative")
     return parsed
 
 

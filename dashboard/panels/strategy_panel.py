@@ -21,12 +21,14 @@ class StrategyPanel(QGroupBox):
         self._fields = (
             "Decision", "Direction", "Setup", "Entry", "Stop",
             "Target", "Block", "Risk", "Approved Qty",
-            "Risk Amount", "Reward/Risk", "Order",
+            "Risk Amount", "Reward/Risk", "Entry Price", "Stop Price",
+            "Target Price", "Lot Size", "Approved Lots", "Plan Status",
+            "Plan Valid Until", "Risk Reason", "Trade Plan",
         )
         grid = FieldGrid(self._fields)
         layout.addWidget(grid)
         self._labels.update(grid.labels)
-        for field in ("Decision", "Risk", "Order"):
+        for field in ("Decision", "Risk", "Trade Plan"):
             badge = StatusBadge()
             grid.layout().replaceWidget(grid.labels[field], badge)
             grid.labels[field].deleteLater()
@@ -45,7 +47,15 @@ class StrategyPanel(QGroupBox):
             "Approved Qty": formatters.quantity(view.approved_quantity),
             "Risk Amount": formatters.price(view.risk_amount),
             "Reward/Risk": formatters.ratio(view.reward_risk),
-            "Order": view.latest_order_status,
+            "Entry Price": formatters.price(view.entry_price),
+            "Stop Price": formatters.price(view.stop_price),
+            "Target Price": formatters.price(view.target_price),
+            "Lot Size": formatters.quantity(view.lot_size),
+            "Approved Lots": formatters.quantity(view.approved_lots),
+            "Plan Status": view.plan_status,
+            "Plan Valid Until": formatters.timestamp(view.plan_valid_until),
+            "Risk Reason": view.risk_reason,
+            "Trade Plan": view.latest_order_status,
         }
         for field, value in values.items():
             if isinstance(self._labels[field], StatusBadge):

@@ -18,7 +18,7 @@ from engines.option_chain.models import OptionChainState
 from engines.order_management.models import OrderState
 from engines.position.models import PositionState
 from engines.price_action.models import PriceActionState
-from engines.risk.models import RiskDecisionState
+from engines.risk.models import RiskConfiguration, RiskDecisionState
 from engines.strategy.models import StrategyDecisionState
 from engines.trade_journal.models import TradeJournalRecord
 from engines.vwap.levels import VWAPLevels
@@ -115,6 +115,7 @@ class RuntimeConfiguration:
     timeframe: str = "1m"
     option_expiry_date: date = date(1970, 1, 1)
     safety_mode: ExecutionSafetyMode = ExecutionSafetyMode.ANALYSIS_ONLY
+    risk_configuration: RiskConfiguration | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.instruments, tuple) or not self.instruments:
@@ -137,6 +138,8 @@ class RuntimeConfiguration:
             raise ValueError("RuntimeConfiguration option_expiry_date must be a date.")
         if not isinstance(self.safety_mode, ExecutionSafetyMode):
             raise ValueError("RuntimeConfiguration safety_mode must be an ExecutionSafetyMode.")
+        if self.risk_configuration is not None and not isinstance(self.risk_configuration, RiskConfiguration):
+            raise TypeError("RuntimeConfiguration risk_configuration must be RiskConfiguration or None.")
         object.__setattr__(self, "instruments", tuple(normalized))
         object.__setattr__(self, "exchange", self.exchange.strip().upper())
         object.__setattr__(self, "timeframe", timeframe)

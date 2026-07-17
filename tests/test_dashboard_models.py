@@ -81,7 +81,7 @@ def test_models_accept_optional_values_and_tuples_are_immutable():
     )
     price_action = DashboardPriceActionView("NIFTY", False, "-", "-", None, None, None, None, None, None, "-", "-", "-", "-", "-", None)
     ai = DashboardAIView("NIFTY", "-", "-", "-", "-", "-", "-", ())
-    strategy = DashboardStrategyView("NIFTY", "-", "-", "-", "-", "-", "-", "-", "-", None, None, None, "-")
+    strategy = DashboardStrategyView("NIFTY", "-", "-", "-", "-", "-", "-", "-", "-", None, None, None, None, None, None, None, None, "-", None, "-", "-")
     position = DashboardPositionView("NIFTY", "No Active Position", False, "-", None, None, None, None, None, None, None)
     journal = DashboardJournalView("NIFTY", "Ready", 0, "No completed DRY_RUN trades", None, "-", None, None, None)
     dashboard = DashboardView(runtime, (market,), (ai,), (strategy,), (position,), (journal,), (price_action,))

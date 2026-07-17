@@ -193,6 +193,14 @@ def test_long_strategy_block_reason_remains_accessible_inside_scroll_area():
             approved_quantity=0,
             risk_amount=0.0,
             reward_risk=0.0,
+            entry_price=None,
+            stop_price=None,
+            target_price=None,
+            lot_size=None,
+            approved_lots=None,
+            plan_status="Rejected",
+            plan_valid_until=None,
+            risk_reason="-",
             latest_order_status="None",
         )
     )

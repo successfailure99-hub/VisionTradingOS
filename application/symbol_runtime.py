@@ -25,6 +25,7 @@ from engines.position.position_engine import PositionEngine
 from engines.price_action.price_action_engine import PriceActionEngine
 from engines.risk.models import AccountRiskState, RiskDecisionState, RiskPolicy, RiskSnapshot, TradeRiskPlan
 from engines.risk.risk_engine import RiskEngine
+from engines.risk.trade_plan_engine import RiskTradePlanEngine
 from engines.strategy.models import StrategyDecisionState, StrategySnapshot
 from engines.strategy.strategy_engine import StrategyEngine
 from engines.vwap.vwap_engine import VWAPEngine
@@ -78,6 +79,7 @@ class SymbolRuntime:
         self.ai_reasoning_engine = AIReasoningEngine(event_bus, instrument.value, configuration.timeframe)
         self.strategy_engine = StrategyEngine(event_bus, instrument.value, configuration.timeframe)
         self.risk_engine = RiskEngine(event_bus, instrument.value, configuration.timeframe)
+        self.trade_plan_engine = RiskTradePlanEngine()
         self.order_engine = OrderManagementEngine(event_bus, instrument.value, configuration.timeframe)
         self.position_engine = PositionEngine(event_bus, instrument.value, configuration.exchange, configuration.timeframe)
         self.candle_engine = CandleEngine(event_bus, TimeFrame.from_value(configuration.timeframe))
@@ -342,6 +344,22 @@ class SymbolRuntime:
             market_context=market_context,
         )
         state = self.strategy_engine.process(snapshot)
+        if self._configuration.risk_configuration is not None:
+            risk_state = self.trade_plan_engine.evaluate(
+                symbol=self._instrument.value,
+                timeframe=self._configuration.timeframe,
+                strategy=state,
+                configuration=self._configuration.risk_configuration,
+                market_context=market_context,
+                price_action=self.price_action_engine.state,
+                option_chain=self.option_chain_engine.state,
+                camarilla=self.camarilla_engine.levels,
+                cpr=self.cpr_engine.levels,
+                latest_tick=self._last_tick,
+                position=self.position_engine.state,
+                now=state.timestamp,
+            )
+            self.risk_engine.record_decision(risk_state)
         self._updated_at = state.timestamp
         return state
 
@@ -414,6 +432,7 @@ class SymbolRuntime:
         self.ai_reasoning_engine.reset()
         self.strategy_engine.reset()
         self.risk_engine.reset()
+        self.trade_plan_engine.reset()
         self.order_engine.reset()
         self.position_engine.reset()
         self._last_tick = None

@@ -362,7 +362,15 @@ def build_strategy_view(runtime_snapshot: RuntimeSnapshot) -> DashboardStrategyV
         approved_quantity=getattr(risk, "approved_quantity", None),
         risk_amount=getattr(risk, "estimated_risk_amount", None),
         reward_risk=getattr(risk, "reward_risk_ratio", None),
-        latest_order_status=_enum_text(getattr(order, "status", None)),
+        entry_price=getattr(risk, "entry_price", None),
+        stop_price=getattr(risk, "stop_price", None),
+        target_price=getattr(risk, "target_price", None),
+        lot_size=getattr(risk, "lot_size", None),
+        approved_lots=getattr(risk, "approved_lots", None),
+        plan_status=getattr(risk, "plan_status", None) or MISSING,
+        plan_valid_until=getattr(risk, "valid_until", None),
+        risk_reason=getattr(risk, "risk_reason", None) or MISSING,
+        latest_order_status="Trade Plan Ready" if bool(getattr(risk, "trade_plan_ready", False)) else _enum_text(getattr(order, "status", None)),
     )
 
 

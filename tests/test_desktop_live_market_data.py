@@ -294,6 +294,55 @@ def test_supported_subscriptions_map_correctly_and_secrets_are_redacted_from_rep
     assert "desktop_api_key" not in rendered
     assert "desktop_api_secret" not in rendered
     assert "desktop_access_token" not in rendered
+    assert settings.risk_configuration is None
+
+
+def test_risk_configuration_requires_capital_and_supported_lot_sizes_when_enabled():
+    env = live_env(RISK_ENABLED="true", RISK_CAPITAL="", NIFTY_LOT_SIZE="75", BANKNIFTY_LOT_SIZE="35")
+    with pytest.raises(DesktopLiveDataConfigurationError) as error:
+        load_desktop_live_configuration(env)
+
+    message = str(error.value)
+    assert "Missing risk environment variables" in message
+    assert "RISK_CAPITAL" in message
+    assert "SENSEX_LOT_SIZE" in message
+    assert "desktop_api_secret" not in message
+    assert "desktop_access_token" not in message
+
+
+def test_risk_configuration_loads_explicit_analysis_only_trade_plan_settings():
+    settings = load_desktop_live_configuration(
+        live_env(
+            RISK_ENABLED="true",
+            RISK_CAPITAL="100000",
+            NIFTY_LOT_SIZE="75",
+            BANKNIFTY_LOT_SIZE="35",
+            SENSEX_LOT_SIZE="20",
+            RISK_PER_TRADE_PERCENT="0.5",
+            RISK_MAX_AMOUNT_PER_TRADE="750",
+            RISK_MAX_LOTS="3",
+            RISK_MIN_REWARD_RISK="2.0",
+            RISK_MAX_STOP_PERCENT="0.75",
+            RISK_MAX_TRADES_PER_DAY="2",
+            RISK_MAX_DAILY_LOSS="1500",
+            TRADE_PLAN_VALIDITY_MINUTES="10",
+        )
+    )
+
+    config = settings.risk_configuration
+    assert config is not None
+    assert config.capital == 100000.0
+    assert config.risk_budget == 500.0
+    assert config.maximum_risk_per_trade_amount == 750.0
+    assert config.maximum_lots == 3
+    assert config.minimum_reward_risk == 2.0
+    assert config.maximum_stop_distance_percentage == 0.75
+    assert config.maximum_trades_per_day == 2
+    assert config.maximum_daily_loss == 1500.0
+    assert config.trade_plan_validity_minutes == 10
+    assert config.lot_size_for("NIFTY") == 75
+    assert config.lot_size_for("BANKNIFTY") == 35
+    assert config.lot_size_for("SENSEX") == 20
 
 
 def test_session_restore_uses_existing_manager_and_redacts_authentication_errors():

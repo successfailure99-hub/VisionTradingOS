@@ -88,6 +88,18 @@ class RiskEngine(BaseEngine):
         """
         return self.update(snapshot)
 
+    def record_decision(self, state: RiskDecisionState) -> RiskDecisionState:
+        if not isinstance(state, RiskDecisionState):
+            raise TypeError("state must be RiskDecisionState")
+        if self._normalize_symbol(state.symbol) != self._symbol:
+            raise ValueError("RiskDecisionState symbol does not match risk context.")
+        if self._normalize_timeframe(state.timeframe) != self._timeframe:
+            raise ValueError("RiskDecisionState timeframe does not match risk context.")
+        self._state = state
+        self._data = state
+        self._event_bus.publish(RISK_UPDATED, state)
+        return state
+
     def reset(self) -> None:
         super().clear()
         self._snapshot = None
