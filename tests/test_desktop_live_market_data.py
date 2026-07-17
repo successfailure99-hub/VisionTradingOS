@@ -4,6 +4,7 @@ Desktop live market-data composition tests.
 
 import os
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 from unittest.mock import patch
 
 import pytest
@@ -21,6 +22,7 @@ from application.desktop_live_data import (
     load_desktop_live_configuration,
 )
 from application.live_market_data import LiveMarketDataRuntimeFactory, LiveMarketDataRuntimeStatus
+from application.reference_data_bootstrap import resolve_reference_bootstrap_bounds
 from brokers.zerodha.auth import ZerodhaCredentials, ZerodhaSessionManager
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
@@ -98,8 +100,30 @@ class FakeTickerClient:
         self.modes.append((mode, tuple(instrument_tokens)))
 
 
+class FakeHistoricalClient:
+    def __init__(self):
+        self.calls = []
+
+    def historical_data(self, **kwargs):
+        self.calls.append(kwargs)
+        start = kwargs["from_date"]
+        return [
+            dict(date=start, open=100.0, high=103.0, low=99.0, close=101.0, volume=10),
+            dict(date=start + timedelta(minutes=1), open=101.0, high=104.0, low=100.0, close=102.0, volume=10),
+        ]
+
+
 def auth_factory(api_key):
     return FakeAuthClient(api_key)
+
+
+def historical_factory_factory(store):
+    def factory(*, api_key, access_token):
+        client = FakeHistoricalClient()
+        store.append(client)
+        return client
+
+    return factory
 
 
 def test_live_data_disabled_starts_without_runtime_and_unavailable_dashboard_view():
@@ -265,6 +289,80 @@ def test_configured_mode_exposes_three_subscription_rows_and_preserves_safety_mo
     assert [row.instrument for row in view.live_market_data.subscription_rows] == ["NIFTY", "BANKNIFTY", "SENSEX"]
     assert view.runtime.broker_mode == "Dry Run"
     assert view.runtime.safety_mode == "Analysis Only"
+    dashboard.shutdown()
+
+
+def test_reference_bootstrap_bounds_skip_weekends_and_exclude_building_minute():
+    monday = datetime(2026, 7, 20, 9, 17, tzinfo=ZoneInfo("Asia/Kolkata"))
+    bounds = resolve_reference_bootstrap_bounds(monday)
+    assert bounds.previous_start.astimezone(bounds.previous_start.tzinfo).date().isoformat() == "2026-07-17"
+    assert bounds.current_start is not None
+    assert bounds.current_end is not None
+    assert bounds.current_end.minute == 16
+
+
+def test_desktop_startup_bootstraps_reference_data_per_instrument_when_available():
+    qt_app()
+    ticker = FakeTickerClient()
+    historical_clients = []
+    dashboard = create_dashboard_application(
+        environ=live_env(LIVE_MARKET_DATA_AUTO_CONNECT="false"),
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: NOW),
+        historical_client_factory=historical_factory_factory(historical_clients),
+        ticker_client=ticker,
+        clock=lambda: NOW,
+    )
+    view = dashboard.main_window.refresh()
+    assert len(historical_clients) == 1
+    assert len(historical_clients[0].calls) == 6
+    assert [market.symbol for market in view.markets] == ["NIFTY", "BANKNIFTY", "SENSEX"]
+    for market in view.markets:
+        assert market.cpr_pivot is not None
+        assert market.camarilla_h3 is not None
+        assert market.vwap is not None
+    dashboard.shutdown()
+
+
+def test_reference_bootstrap_before_open_loads_previous_levels_without_current_history():
+    qt_app()
+    historical_clients = []
+    before_open = datetime(2026, 7, 15, 8, 55, tzinfo=ZoneInfo("Asia/Kolkata"))
+    dashboard = create_dashboard_application(
+        environ=live_env(LIVE_MARKET_DATA_AUTO_CONNECT="false"),
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: before_open),
+        historical_client_factory=historical_factory_factory(historical_clients),
+        ticker_client=FakeTickerClient(),
+        clock=lambda: before_open,
+    )
+    view = dashboard.main_window.refresh()
+    assert len(historical_clients[0].calls) == 3
+    for market in view.markets:
+        assert market.cpr_pivot is not None
+        assert market.camarilla_h3 is not None
+        assert market.latest_candle_close is None
+        assert market.vwap is None
+    dashboard.shutdown()
+
+
+def test_reference_bootstrap_failure_isolated_from_live_runtime_startup():
+    qt_app()
+
+    def failing_historical_factory(*, api_key, access_token):
+        raise RuntimeError("historical unavailable")
+
+    dashboard = create_dashboard_application(
+        environ=live_env(LIVE_MARKET_DATA_AUTO_CONNECT="false"),
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: NOW),
+        historical_client_factory=failing_historical_factory,
+        ticker_client=FakeTickerClient(),
+        clock=lambda: NOW,
+    )
+    assert dashboard.live_market_data_runtime is not None
+    view = dashboard.main_window.refresh()
+    assert [market.symbol for market in view.markets] == ["NIFTY", "BANKNIFTY", "SENSEX"]
     dashboard.shutdown()
 
 

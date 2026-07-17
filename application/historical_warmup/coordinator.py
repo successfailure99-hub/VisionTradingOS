@@ -417,13 +417,7 @@ class HistoricalWarmupCoordinator:
         )
 
     def _safe_runtime_snapshot(self, instrument: Instrument) -> RuntimeSnapshot:
-        try:
-            return self._lifecycle.orchestrator.get_runtime(instrument.value).snapshot()
-        except Exception:
-            snapshots = self._lifecycle.orchestrator.snapshot().runtime_snapshots
-            if not snapshots:
-                raise
-            return snapshots[0]
+        return self._lifecycle.orchestrator.get_runtime(instrument.value).snapshot()
 
 
 def _safe_error(exc: Exception) -> str:

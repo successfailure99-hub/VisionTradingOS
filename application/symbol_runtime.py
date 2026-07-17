@@ -3,6 +3,7 @@ Per-symbol Application Orchestrator runtime.
 """
 
 from core.enums.instrument import Instrument
+from core.enums.exchange import Exchange
 from core.enums.timeframe import TimeFrame
 from core.models.candle import Candle
 from core.models.daily_ohlc import DailyOHLC
@@ -140,9 +141,11 @@ class SymbolRuntime:
             self.price_action_engine.reset()
             for candle in self.candle_engine.get_history(self._core_instrument):
                 self.price_action_engine.process(candle)
+                self._seed_vwap_from_candle(candle)
         else:
             for candle in accepted:
                 self.price_action_engine.process(candle)
+                self._seed_vwap_from_candle(candle)
 
         self._last_processed_history_count = len(
             self.candle_engine.get_history(self._core_instrument)
@@ -172,10 +175,10 @@ class SymbolRuntime:
     ) -> MarketContextState:
         self._require_running()
         trading_date = timestamp.date()
-        cpr = self.cpr if self.cpr is not None and self.cpr.trading_date == trading_date else None
+        cpr = self.cpr if self.cpr is not None and self.cpr.trading_date <= trading_date else None
         camarilla = (
             self.camarilla
-            if self.camarilla is not None and self.camarilla.trading_date == trading_date
+            if self.camarilla is not None and self.camarilla.trading_date <= trading_date
             else None
         )
         snapshot = MarketContextSnapshot(
@@ -353,6 +356,21 @@ class SymbolRuntime:
             highs.append(candle.high)
             lows.append(candle.low)
         return max(highs), min(lows)
+
+    def _seed_vwap_from_candle(self, candle: Candle) -> None:
+        if candle.volume <= 0:
+            return
+        tick = Tick(
+            symbol=self._core_instrument,
+            exchange=Exchange.NSE if self._core_instrument is not Instrument.SENSEX else Exchange.BSE,
+            timestamp=candle.end_time,
+            last_price=candle.close,
+            volume=candle.volume,
+            bid_price=0.0,
+            ask_price=0.0,
+            open_interest=0,
+        )
+        self.vwap_engine.on_tick(tick)
 
     def _require_running(self) -> None:
         if self._status is not RuntimeStatus.RUNNING:

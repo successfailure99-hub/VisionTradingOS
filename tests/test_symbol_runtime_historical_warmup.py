@@ -46,7 +46,8 @@ def test_seeds_price_action_idempotently_and_leaves_live_state_untouched():
     assert snapshot.latest_tick is None
     assert snapshot.updated_at == candle(1).end_time
     assert snapshot.price_action is not None
-    assert snapshot.vwap is None
+    assert snapshot.vwap is not None
+    assert snapshot.vwap.cumulative_volume == 20
     assert snapshot.market_context is None
     assert snapshot.ai_reasoning is None
     assert snapshot.strategy is None
@@ -58,3 +59,13 @@ def test_seeds_price_action_idempotently_and_leaves_live_state_untouched():
     with pytest.raises(TypeError, match="tuple"):
         history[0] = candle(9)
     assert item.get_candle_history() == accepted
+
+
+def test_zero_volume_historical_candles_do_not_fabricate_vwap():
+    item = runtime()
+    zero_volume = tuple(
+        Candle("NIFTY", "1m", (TS + timedelta(minutes=offset)), (TS + timedelta(minutes=offset + 1)), 100.0, 102.0, 99.0, 101.0, 0)
+        for offset in range(2)
+    )
+    item.warm_up_candles(zero_volume)
+    assert item.snapshot().vwap is None

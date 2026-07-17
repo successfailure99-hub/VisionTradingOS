@@ -61,7 +61,8 @@ def test_no_network_warmup_daily_levels_idempotency_backfill_and_live_continuati
     snapshot = lifecycle.orchestrator.snapshot().runtime_snapshots[0]
     assert snapshot.cpr is not None
     assert snapshot.camarilla is not None
-    assert snapshot.vwap is None
+    assert snapshot.vwap is not None
+    assert snapshot.vwap.cumulative_volume == 30
     assert snapshot.price_action is not None
     assert len(lifecycle.orchestrator.get_candle_history("NIFTY")) == 3
 

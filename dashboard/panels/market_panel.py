@@ -31,7 +31,7 @@ class MarketPanel(QGroupBox):
         self._fields = (
             "Symbol", "Timeframe", "Status",
             "Session High", "Session Low", "Candle O", "Candle H",
-            "Candle L", "Candle C", "VWAP", "CPR Pivot", "CPR BC",
+            "Candle L", "Candle C", "VWAP", "VWAP Source", "CPR Pivot", "CPR BC",
             "CPR TC", "Cam H3", "Cam H4", "Cam H5", "Cam H6",
             "Cam L3", "Cam L4", "Cam L5", "Cam L6", "Bias",
             "Phase", "Strength", "Options", "Updated",
@@ -61,6 +61,7 @@ class MarketPanel(QGroupBox):
             "Candle L": formatters.price(view.latest_candle_low),
             "Candle C": formatters.price(view.latest_candle_close),
             "VWAP": formatters.price(view.vwap),
+            "VWAP Source": view.vwap_source,
             "CPR Pivot": formatters.price(view.cpr_pivot),
             "CPR BC": formatters.price(view.cpr_bc),
             "CPR TC": formatters.price(view.cpr_tc),

@@ -40,7 +40,7 @@ def test_requires_running_rejects_unsupported_and_delegates_without_market_event
     accepted, snapshot = orchestrator.warm_up_candles("nifty", (candle(0), candle(1)))
     assert accepted == (candle(0), candle(1))
     assert isinstance(snapshot, RuntimeSnapshot)
-    assert snapshot.vwap is None
+    assert snapshot.vwap is not None
     assert orchestrator.get_candle_history("NIFTY") == accepted
     assert market_events == []
     with pytest.raises(ValueError):
@@ -56,3 +56,19 @@ def test_existing_daily_ohlc_behavior_unchanged():
     cpr, camarilla = orchestrator.process_daily_ohlc("NIFTY", DailyOHLC(TS.date(), 100.0, 110.0, 90.0, 105.0))
     assert cpr is not None
     assert camarilla is not None
+
+
+def test_previous_session_cpr_camarilla_are_available_to_current_context():
+    orchestrator = ApplicationOrchestrator(EventBus())
+    orchestrator.start()
+    previous_day = TS.date() - timedelta(days=1)
+    orchestrator.process_daily_ohlc("NIFTY", DailyOHLC(previous_day, 100.0, 110.0, 90.0, 105.0))
+    state = orchestrator.build_market_context(
+        "NIFTY",
+        timestamp=TS,
+        current_price=106.0,
+        session_high=108.0,
+        session_low=100.0,
+    )
+    assert "cpr" not in state.missing_sources
+    assert "camarilla" not in state.missing_sources

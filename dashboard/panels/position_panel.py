@@ -18,17 +18,19 @@ class PositionPanel(QGroupBox):
         layout.setContentsMargins(14, 18, 14, 14)
         layout.setSpacing(12)
         layout.setAlignment(Qt.AlignTop)
-        self._fields = ("Active", "Side", "Quantity", "Average", "Last", "Unrealized", "Realized", "Stop", "Target")
+        self._fields = ("Status", "Active", "Side", "Quantity", "Average", "Last", "Unrealized", "Realized", "Stop", "Target")
         grid = FieldGrid(self._fields)
         layout.addWidget(grid)
         self._labels.update(grid.labels)
-        active = StatusBadge()
-        grid.layout().replaceWidget(grid.labels["Active"], active)
-        grid.labels["Active"].deleteLater()
-        self._labels["Active"] = active
+        for field in ("Status", "Active"):
+            badge = StatusBadge()
+            grid.layout().replaceWidget(grid.labels[field], badge)
+            grid.labels[field].deleteLater()
+            self._labels[field] = badge
 
     def render(self, view: DashboardPositionView) -> None:
         values = {
+            "Status": view.status,
             "Active": "Yes" if view.has_position else "No",
             "Side": view.side,
             "Quantity": formatters.quantity(view.quantity),
@@ -40,7 +42,7 @@ class PositionPanel(QGroupBox):
             "Target": formatters.price(view.target_price),
         }
         for field, value in values.items():
-            if field == "Active":
+            if field in ("Status", "Active"):
                 self._labels[field].set_status_text(value)
             else:
                 self._labels[field].setText(formatters.text(value))

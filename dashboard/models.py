@@ -365,6 +365,7 @@ class DashboardMarketView:
     latest_candle_low: float | None
     latest_candle_close: float | None
     vwap: float | None
+    vwap_source: str
     cpr_pivot: float | None
     cpr_bc: float | None
     cpr_tc: float | None
@@ -456,6 +457,7 @@ class DashboardStrategyView:
 @dataclass(frozen=True, slots=True)
 class DashboardPositionView:
     symbol: str
+    status: str
     has_position: bool
     side: str
     quantity: int | None
@@ -470,6 +472,9 @@ class DashboardPositionView:
 @dataclass(frozen=True, slots=True)
 class DashboardJournalView:
     symbol: str
+    status: str
+    records: int
+    message: str
     latest_trade_id: str | None
     latest_exit_type: str
     latest_realized_pnl: float | None

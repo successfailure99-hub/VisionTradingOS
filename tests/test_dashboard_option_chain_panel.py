@@ -143,7 +143,7 @@ def test_complete_view_renders_headline_analytics_and_deterministic_columns():
     assert panel._labels["Available"].text() == "Yes"
     assert panel._labels["Exchange"].text() == "NSE"
     assert panel._labels["Expiry"].text() == "2026-07-30"
-    assert panel._labels["Timestamp"].text().startswith("2026-07-12 09:15:00")
+    assert panel._labels["Timestamp"].text() == "12-Jul-2026 14:45:00 IST"
     assert panel._labels["Underlying"].text() == "101.00"
     assert panel._labels["Support"].text() == "90.00"
     assert panel._labels["Resistance"].text() == "110.00"

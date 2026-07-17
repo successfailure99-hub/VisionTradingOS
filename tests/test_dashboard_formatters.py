@@ -28,7 +28,8 @@ def test_missing_numeric_and_timestamp_formatting_is_deterministic():
     assert formatters.ratio(0) == "0.0000"
     assert formatters.ratio(2) == "2.0000"
     assert formatters.ratio(-2.5) == "-2.5000"
-    assert formatters.timestamp(datetime(2026, 7, 12, 9, 15, tzinfo=UTC)).startswith("2026-07-12 09:15:00")
+    assert formatters.timestamp(datetime(2026, 7, 12, 9, 15, tzinfo=UTC)) == "12-Jul-2026 14:45:00 IST"
+    assert formatters.timestamp(datetime(2026, 7, 12, 9, 15)) == "12-Jul-2026 09:15:00 IST"
 
 
 def test_semantic_status_kinds_are_stable():

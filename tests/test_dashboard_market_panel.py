@@ -21,7 +21,7 @@ def market_view(**overrides):
         symbol="NIFTY", timeframe="1m", runtime_status="Running",
         last_price=None, bid_price=None, ask_price=None, session_high=None, session_low=None,
         latest_candle_open=None, latest_candle_high=None, latest_candle_low=None, latest_candle_close=None,
-        vwap=None, cpr_pivot=None, cpr_bc=None, cpr_tc=None,
+        vwap=None, vwap_source="-", cpr_pivot=None, cpr_bc=None, cpr_tc=None,
         camarilla_h3=None, camarilla_h4=None, camarilla_h5=None, camarilla_h6=None,
         camarilla_l3=None, camarilla_l4=None, camarilla_l5=None, camarilla_l6=None,
         market_bias="-", market_phase="-", context_strength="-", option_chain_direction="-", updated_at=None,
@@ -51,7 +51,8 @@ def test_render_populated_market_values_and_price_formatting():
 
 def test_camarilla_cpr_and_market_bias_render():
     panel = MarketPanel()
-    panel.render(market_view(cpr_pivot=100.0, cpr_bc=99.0, cpr_tc=101.0, camarilla_h3=102.0, camarilla_l6=94.0, market_bias="Bullish"))
+    panel.render(market_view(vwap=100.5, vwap_source="NIFTY Spot", cpr_pivot=100.0, cpr_bc=99.0, cpr_tc=101.0, camarilla_h3=102.0, camarilla_l6=94.0, market_bias="Bullish"))
+    assert panel._labels["VWAP Source"].text() == "NIFTY Spot"
     assert panel._labels["CPR Pivot"].text() == "100.00"
     assert panel._labels["CPR BC"].text() == "99.00"
     assert panel._labels["Cam H3"].text() == "102.00"

@@ -130,6 +130,7 @@ def test_tick_candle_vwap_cpr_camarilla_and_context_map_correctly():
     assert market.bid_price == 99.5
     assert market.latest_candle_open == 95.0
     assert market.vwap == 100.25
+    assert market.vwap_source == "NIFTY Spot"
     assert market.cpr_pivot == 100.0
     assert market.camarilla_h6 == 104.0
     assert market.session_high == 108.0
@@ -164,11 +165,52 @@ def test_ai_strategy_risk_order_position_and_journal_map_correctly():
     assert strategy.approved_quantity == 10
     assert strategy.latest_order_status == "Pending Submission"
     position = build_position_view(runtime)
+    assert position.status == "Active Position"
     assert position.has_position is True
     assert position.stop_price == 95.0
     journal = build_journal_view(runtime)
+    assert journal.status == "Ready"
+    assert journal.records == 1
     assert journal.latest_trade_id == "trade-1"
     assert journal.latest_exit_type == "Target"
+
+
+def test_empty_position_and_journal_readiness_are_explicit():
+    runtime = empty_runtime()
+    position = build_position_view(runtime)
+    assert position.status == "No Active Position"
+    assert position.has_position is False
+    journal = build_journal_view(runtime)
+    assert journal.status == "Ready"
+    assert journal.records == 0
+    assert journal.message == "No completed DRY_RUN trades"
+
+
+def test_mismatched_price_action_state_does_not_render_under_selected_instrument():
+    runtime = RuntimeSnapshot(
+        RuntimeInstrument.BANKNIFTY,
+        "1m",
+        RuntimeStatus.RUNNING,
+        None,
+        None,
+        None,
+        None,
+        None,
+        price_action_state(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        TS,
+    )
+    view = build_price_action_view(runtime)
+    assert view.symbol == "BANKNIFTY"
+    assert view.available is False
+    assert view.trend == "-"
 
 
 def test_runtime_order_is_preserved_and_sources_are_not_mutated():

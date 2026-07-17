@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QGroupBox, QVBoxLayout
 
 from dashboard import formatters
 from dashboard.models import DashboardJournalView
-from dashboard.widgets import FieldGrid
+from dashboard.widgets import FieldGrid, StatusBadge
 
 
 class JournalPanel(QGroupBox):
@@ -18,11 +18,18 @@ class JournalPanel(QGroupBox):
         layout.setContentsMargins(14, 18, 14, 14)
         layout.setSpacing(12)
         layout.setAlignment(Qt.AlignTop)
-        grid = FieldGrid(("Trade ID", "Exit Type", "Realized P&L", "Opened", "Closed"))
+        grid = FieldGrid(("Status", "Records", "Message", "Trade ID", "Exit Type", "Realized P&L", "Opened", "Closed"))
         layout.addWidget(grid)
         self._labels.update(grid.labels)
+        status = StatusBadge()
+        grid.layout().replaceWidget(grid.labels["Status"], status)
+        grid.labels["Status"].deleteLater()
+        self._labels["Status"] = status
 
     def render(self, view: DashboardJournalView) -> None:
+        self._labels["Status"].set_status_text(view.status)
+        self._labels["Records"].setText(formatters.integer(view.records))
+        self._labels["Message"].setText(formatters.text(view.message))
         self._labels["Trade ID"].setText(formatters.text(view.latest_trade_id))
         self._labels["Exit Type"].setText(formatters.text(view.latest_exit_type))
         self._labels["Realized P&L"].setText(formatters.price(view.latest_realized_pnl))

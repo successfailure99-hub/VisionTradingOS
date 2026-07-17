@@ -6,9 +6,11 @@ import math
 import re
 from datetime import date, datetime
 from numbers import Real
+from zoneinfo import ZoneInfo
 
 
 MISSING = "-"
+IST = ZoneInfo("Asia/Kolkata")
 
 
 def text(value) -> str:
@@ -44,7 +46,11 @@ def ratio(value: float | None) -> str:
 
 
 def timestamp(value: datetime | None) -> str:
-    return value.isoformat(sep=" ", timespec="seconds") if value is not None else MISSING
+    if not isinstance(value, datetime):
+        return MISSING
+    if value.tzinfo is None or value.utcoffset() is None:
+        value = value.replace(tzinfo=IST)
+    return f"{value.astimezone(IST).strftime('%d-%b-%Y %H:%M:%S')} IST"
 
 
 def date_text(value: date | None) -> str:

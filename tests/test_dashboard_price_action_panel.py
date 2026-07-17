@@ -79,7 +79,7 @@ def test_complete_state_renders_all_price_action_evidence():
     assert panel._labels["Pullback"].text() == "Bullish Pullback"
     assert panel._labels["Range"].text() == "Not Range"
     assert panel._labels["Liquidity Sweep"].text() == "Buy Side"
-    assert panel._labels["Updated Time"].text() == "2026-07-12 09:15:00"
+    assert panel._labels["Updated Time"].text() == "12-Jul-2026 09:15:00 IST"
 
 
 def test_status_properties_use_existing_semantic_colors():

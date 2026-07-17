@@ -188,6 +188,7 @@ def build_market_view(runtime_snapshot: RuntimeSnapshot) -> DashboardMarketView:
         latest_candle_low=getattr(candle, "low", None),
         latest_candle_close=getattr(candle, "close", None),
         vwap=getattr(vwap, "vwap", None),
+        vwap_source=f"{_enum_text(runtime_snapshot.symbol)} Spot" if vwap is not None else "-",
         cpr_pivot=getattr(cpr, "pivot", None),
         cpr_bc=getattr(cpr, "bc", None),
         cpr_tc=getattr(cpr, "tc", None),
@@ -212,8 +213,10 @@ def build_price_action_view(runtime_snapshot: RuntimeSnapshot) -> DashboardPrice
     symbol = _enum_text(runtime_snapshot.symbol)
     if price_action is None:
         return unavailable_price_action_view(symbol)
+    if _enum_text(price_action.symbol) != symbol:
+        return unavailable_price_action_view(symbol)
     return DashboardPriceActionView(
-        symbol=_enum_text(price_action.symbol),
+        symbol=symbol,
         available=True,
         trend=_enum_text(price_action.trend),
         market_structure=_enum_text(price_action.market_structure),
@@ -240,9 +243,17 @@ def build_option_chain_view(
     clock=None,
 ) -> DashboardOptionChainView:
     state = runtime_snapshot.option_chain
+    symbol = _enum_text(runtime_snapshot.symbol)
     if state is None:
         return _apply_option_runtime_status(
-            unavailable_option_chain_view(_enum_text(runtime_snapshot.symbol)),
+            unavailable_option_chain_view(symbol),
+            runtime_status,
+            all_option_statuses=all_option_statuses,
+            clock=clock,
+        )
+    if _enum_text(state.symbol) != symbol:
+        return _apply_option_runtime_status(
+            unavailable_option_chain_view(symbol),
             runtime_status,
             all_option_statuses=all_option_statuses,
             clock=clock,
@@ -252,7 +263,7 @@ def build_option_chain_view(
         for strike in sorted(tuple(state.strikes), key=lambda strike: strike.strike_price)
     )
     return _apply_option_runtime_status(DashboardOptionChainView(
-        symbol=_enum_text(state.symbol),
+        symbol=symbol,
         available=True,
         exchange=_enum_text(state.exchange),
         expiry_date=state.expiry_date,
@@ -322,9 +333,11 @@ def build_strategy_view(runtime_snapshot: RuntimeSnapshot) -> DashboardStrategyV
 def build_position_view(runtime_snapshot: RuntimeSnapshot) -> DashboardPositionView:
     position = runtime_snapshot.position
     tick = runtime_snapshot.latest_tick
+    has_position = position is not None and getattr(position, "absolute_quantity", 0) > 0
     return DashboardPositionView(
         symbol=_enum_text(runtime_snapshot.symbol),
-        has_position=position is not None and getattr(position, "absolute_quantity", 0) > 0,
+        status="Active Position" if has_position else "No Active Position",
+        has_position=has_position,
         side=_enum_text(getattr(position, "side", None)),
         quantity=getattr(position, "absolute_quantity", None),
         average_price=getattr(position, "average_entry_price", None),
@@ -338,8 +351,12 @@ def build_position_view(runtime_snapshot: RuntimeSnapshot) -> DashboardPositionV
 
 def build_journal_view(runtime_snapshot: RuntimeSnapshot) -> DashboardJournalView:
     record = runtime_snapshot.latest_journal_record
+    has_record = record is not None
     return DashboardJournalView(
         symbol=_enum_text(runtime_snapshot.symbol),
+        status="Ready",
+        records=1 if has_record else 0,
+        message="Latest completed DRY_RUN trade" if has_record else "No completed DRY_RUN trades",
         latest_trade_id=getattr(record, "trade_id", None),
         latest_exit_type=_enum_text(getattr(record, "exit_type", None)),
         latest_realized_pnl=getattr(record, "realized_gross_pnl", None),

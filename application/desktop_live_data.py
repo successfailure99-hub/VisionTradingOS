@@ -14,6 +14,7 @@ from application.enums import RuntimeInstrument
 from application.lifecycle_manager import ApplicationLifecycleManager
 from application.live_market_data import LiveMarketDataConfiguration, LiveMarketDataRuntime, LiveMarketDataRuntimeFactory
 from application.models import RuntimeConfiguration
+from application.reference_data_bootstrap import run_reference_data_bootstrap
 from application.desktop_option_chain import (
     DesktopOptionChainConfigurationError,
     DesktopOptionChainRuntimeManager,
@@ -22,6 +23,7 @@ from application.desktop_option_chain import (
     create_instrument_client,
 )
 from brokers.zerodha.auth import KiteConnectAuthClient, ZerodhaCredentials, ZerodhaSessionManager
+from brokers.zerodha.historical import KiteHistoricalClient
 from brokers.zerodha.market_data import KiteTickerClient, ZerodhaInstrumentSubscription, ZerodhaSubscriptionMode
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
@@ -42,6 +44,11 @@ class SessionManagerFactory(Protocol):
         ...
 
 
+class HistoricalClientFactory(Protocol):
+    def __call__(self, *, api_key: str, access_token: str):
+        ...
+
+
 ENV_ZERODHA_API_KEY = "ZERODHA_API_KEY"
 ENV_ZERODHA_API_SECRET = "ZERODHA_API_SECRET"
 ENV_ZERODHA_ACCESS_TOKEN = "ZERODHA_ACCESS_TOKEN"
@@ -50,6 +57,7 @@ ENV_LIVE_MARKET_DATA_AUTO_CONNECT = "LIVE_MARKET_DATA_AUTO_CONNECT"
 ENV_LIVE_OPTION_CHAIN_ENABLED = "LIVE_OPTION_CHAIN_ENABLED"
 ENV_LIVE_OPTION_CHAIN_AUTO_START = "LIVE_OPTION_CHAIN_AUTO_START"
 ENV_OPTION_CHAIN_STRIKES_EACH_SIDE = "OPTION_CHAIN_STRIKES_EACH_SIDE"
+ENV_REFERENCE_DATA_BOOTSTRAP_ENABLED = "REFERENCE_DATA_BOOTSTRAP_ENABLED"
 
 INSTRUMENT_TOKEN_ENV = (
     (Instrument.NIFTY, "NIFTY_INSTRUMENT_TOKEN", Exchange.NSE),
@@ -67,6 +75,7 @@ class DesktopLiveDataSettings:
     access_token: str | None
     subscriptions: tuple[ZerodhaInstrumentSubscription, ...]
     option_chain: DesktopOptionChainSettings
+    reference_data_bootstrap_enabled: bool
 
     def __repr__(self) -> str:
         return (
@@ -74,7 +83,8 @@ class DesktopLiveDataSettings:
             f"enabled={self.enabled}, "
             f"auto_connect={self.auto_connect}, "
             f"subscriptions={len(self.subscriptions)}, "
-            f"option_chain_enabled={self.option_chain.enabled})"
+            f"option_chain_enabled={self.option_chain.enabled}, "
+            f"reference_data_bootstrap_enabled={self.reference_data_bootstrap_enabled})"
         )
 
     __str__ = __repr__
@@ -86,6 +96,10 @@ def load_desktop_live_configuration(
     enabled = _parse_bool(environ.get(ENV_LIVE_MARKET_DATA_ENABLED, "false"), ENV_LIVE_MARKET_DATA_ENABLED)
     auto_connect = _parse_bool(environ.get(ENV_LIVE_MARKET_DATA_AUTO_CONNECT, "true"), ENV_LIVE_MARKET_DATA_AUTO_CONNECT)
     option_chain = _load_option_chain_settings(environ)
+    reference_bootstrap = _parse_bool(
+        environ.get(ENV_REFERENCE_DATA_BOOTSTRAP_ENABLED, "true"),
+        ENV_REFERENCE_DATA_BOOTSTRAP_ENABLED,
+    )
     if not enabled:
         if option_chain.enabled:
             raise DesktopLiveDataConfigurationError("LIVE_OPTION_CHAIN_ENABLED requires LIVE_MARKET_DATA_ENABLED")
@@ -97,6 +111,7 @@ def load_desktop_live_configuration(
             access_token=None,
             subscriptions=(),
             option_chain=option_chain,
+            reference_data_bootstrap_enabled=False,
         )
 
     missing = [
@@ -131,6 +146,7 @@ def load_desktop_live_configuration(
         access_token=_text(environ[ENV_ZERODHA_ACCESS_TOKEN]),
         subscriptions=subscriptions,
         option_chain=option_chain,
+        reference_data_bootstrap_enabled=reference_bootstrap,
     )
 
 
@@ -213,6 +229,7 @@ def create_dashboard_application(
     session_manager_factory: SessionManagerFactory | None = None,
     instrument_client_factory: InstrumentClientFactory | None = None,
     runtime_factory: LiveMarketDataRuntimeFactory | None = None,
+    historical_client_factory: HistoricalClientFactory | None = None,
     ticker_client=None,
     clock=None,
 ) -> DashboardApplication:
@@ -250,6 +267,14 @@ def create_dashboard_application(
         runtime_factory=runtime_factory,
         ticker_client=ticker_router,
     )
+    if settings.reference_data_bootstrap_enabled and settings.enabled and session_manager is not None:
+        _try_reference_data_bootstrap(
+            lifecycle=lifecycle,
+            settings=settings,
+            session_manager=session_manager,
+            historical_client_factory=historical_client_factory,
+            clock=clock or _default_clock,
+        )
     option_chain_manager = None
     if settings.option_chain.enabled and session_manager is not None and ticker_router is not None:
         option_chain_manager = _create_desktop_option_chain_manager(
@@ -269,6 +294,30 @@ def create_dashboard_application(
         live_option_chain_runtime=option_chain_manager,
         clock=clock,
     )
+
+
+def _try_reference_data_bootstrap(
+    *,
+    lifecycle: ApplicationLifecycleManager,
+    settings: DesktopLiveDataSettings,
+    session_manager: ZerodhaSessionManager,
+    historical_client_factory: HistoricalClientFactory | None,
+    clock,
+) -> None:
+    session = session_manager.session
+    if session is None:
+        return
+    try:
+        factory = historical_client_factory or KiteHistoricalClient
+        client = factory(api_key=settings.api_key, access_token=session.access_token)
+        run_reference_data_bootstrap(
+            lifecycle=lifecycle,
+            historical_client=client,
+            subscriptions=settings.subscriptions,
+            clock=clock,
+        )
+    except Exception:
+        return
 
 
 def _create_desktop_option_chain_manager(

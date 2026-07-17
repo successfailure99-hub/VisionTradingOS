@@ -178,8 +178,8 @@ class MarketContextEngine(BaseEngine):
             return
         if not isinstance(state, CPRLevels):
             raise ValueError("cpr must be a CPRLevels object.")
-        if state.trading_date != timestamp.date():
-            raise ValueError("CPR trading date must match context date.")
+        if state.trading_date > timestamp.date():
+            raise ValueError("CPR trading date cannot be after context date.")
         values = (
             state.previous_high,
             state.previous_low,
@@ -200,8 +200,8 @@ class MarketContextEngine(BaseEngine):
             return
         if not isinstance(state, CamarillaLevels):
             raise ValueError("camarilla must be a CamarillaLevels object.")
-        if state.trading_date != timestamp.date():
-            raise ValueError("Camarilla trading date must match context date.")
+        if state.trading_date > timestamp.date():
+            raise ValueError("Camarilla trading date cannot be after context date.")
         values = (
             state.previous_high,
             state.previous_low,
