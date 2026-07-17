@@ -366,6 +366,11 @@ class DashboardMarketView:
     latest_candle_close: float | None
     vwap: float | None
     vwap_source: str
+    vwap_source_type: str
+    vwap_source_exchange: str
+    vwap_source_expiry: date | None
+    vwap_source_volume: int
+    vwap_source_price: float | None
     cpr_pivot: float | None
     cpr_bc: float | None
     cpr_tc: float | None

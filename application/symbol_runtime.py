@@ -30,7 +30,7 @@ from engines.strategy.strategy_engine import StrategyEngine
 from engines.vwap.vwap_engine import VWAPEngine
 
 from application.enums import RuntimeInstrument, RuntimeStatus
-from application.models import RuntimeConfiguration, RuntimeSnapshot
+from application.models import RuntimeConfiguration, RuntimeSnapshot, RuntimeVWAPSource
 
 
 class SymbolRuntime:
@@ -53,6 +53,13 @@ class SymbolRuntime:
         self._last_tick: Tick | None = None
         self._updated_at = None
         self._last_processed_history_count = 0
+        self._vwap_source_type = "Spot"
+        self._vwap_source_exchange = "NSE" if self._core_instrument is not Instrument.SENSEX else "BSE"
+        self._vwap_source_trading_symbol = instrument.value
+        self._vwap_source_token = 1
+        self._vwap_source_expiry = None
+        self._vwap_source_price = None
+        self._vwap_unavailable_reason = None
 
         self.market_context_engine = MarketContextEngine(event_bus, instrument.value, configuration.timeframe)
         self.ai_reasoning_engine = AIReasoningEngine(event_bus, instrument.value, configuration.timeframe)
@@ -103,10 +110,49 @@ class SymbolRuntime:
             raise ValueError("Tick instrument does not match SymbolRuntime.")
         self.candle_engine.on_tick(tick)
         self.vwap_engine.on_tick(tick)
+        self._vwap_source_type = "Spot"
+        self._vwap_source_exchange = tick.exchange.value
+        self._vwap_source_trading_symbol = self._instrument.value
+        self._vwap_source_token = max(self._vwap_source_token, 1)
+        self._vwap_source_expiry = None
+        self._vwap_source_price = tick.last_price
+        self._vwap_unavailable_reason = None
         self._process_closed_candles()
         self._last_tick = tick
         self._updated_at = tick.timestamp
         self._refresh_dashboard_analysis(tick.timestamp, tick.last_price)
+        return self.snapshot()
+
+    def process_vwap_tick(
+        self,
+        tick: Tick,
+        *,
+        source_type: str,
+        source_exchange: str,
+        trading_symbol: str,
+        instrument_token: int,
+        expiry=None,
+    ) -> RuntimeSnapshot:
+        self._require_running()
+        if tick.symbol is not self._core_instrument:
+            raise ValueError("VWAP tick instrument does not match SymbolRuntime.")
+        self.vwap_engine.on_tick(tick)
+        self._vwap_source_type = _require_text(source_type, "source_type")
+        self._vwap_source_exchange = _require_text(source_exchange, "source_exchange")
+        self._vwap_source_trading_symbol = _require_text(trading_symbol, "trading_symbol")
+        if isinstance(instrument_token, bool) or not isinstance(instrument_token, int) or instrument_token <= 0:
+            raise ValueError("instrument_token must be a positive integer")
+        self._vwap_source_token = instrument_token
+        self._vwap_source_expiry = expiry
+        self._vwap_source_price = tick.last_price
+        self._vwap_unavailable_reason = None
+        self._updated_at = tick.timestamp
+        if self._last_tick is not None:
+            self._refresh_dashboard_analysis(tick.timestamp, self._last_tick.last_price)
+        return self.snapshot()
+
+    def mark_vwap_unavailable(self, reason: str) -> RuntimeSnapshot:
+        self._vwap_unavailable_reason = _require_text(reason, "reason")
         return self.snapshot()
 
     def process_daily_ohlc(self, daily_ohlc: DailyOHLC) -> tuple[CPRLevels, CamarillaLevels]:
@@ -295,6 +341,13 @@ class SymbolRuntime:
         self._last_tick = None
         self._updated_at = None
         self._last_processed_history_count = 0
+        self._vwap_source_type = "Spot"
+        self._vwap_source_exchange = "NSE" if self._core_instrument is not Instrument.SENSEX else "BSE"
+        self._vwap_source_trading_symbol = self._instrument.value
+        self._vwap_source_token = 1
+        self._vwap_source_expiry = None
+        self._vwap_source_price = None
+        self._vwap_unavailable_reason = None
         self._status = RuntimeStatus.CREATED
 
     def snapshot(self, latest_journal_record=None) -> RuntimeSnapshot:
@@ -321,6 +374,7 @@ class SymbolRuntime:
             position=self.position_engine.state,
             latest_journal_record=latest_journal_record,
             updated_at=self._updated_at,
+            vwap_source=self._vwap_source_snapshot(),
         )
 
     def _process_closed_candles(self) -> None:
@@ -371,7 +425,37 @@ class SymbolRuntime:
             open_interest=0,
         )
         self.vwap_engine.on_tick(tick)
+        self._vwap_source_type = "Spot"
+        self._vwap_source_exchange = tick.exchange.value
+        self._vwap_source_trading_symbol = self._instrument.value
+        self._vwap_source_price = tick.last_price
+        self._vwap_unavailable_reason = None
+
+    def _vwap_source_snapshot(self) -> RuntimeVWAPSource:
+        levels = self.vwap_engine.get_latest(self._core_instrument)
+        return RuntimeVWAPSource(
+            instrument=self._instrument,
+            source_type=self._vwap_source_type,
+            source_exchange=self._vwap_source_exchange,
+            trading_symbol=self._vwap_source_trading_symbol,
+            instrument_token=self._vwap_source_token,
+            expiry=self._vwap_source_expiry,
+            cumulative_volume=getattr(levels, "cumulative_volume", 0) if levels is not None else 0,
+            last_source_price=self._vwap_source_price,
+            updated_at=getattr(levels, "timestamp", None),
+            ready=levels is not None,
+            unavailable_reason=None if levels is not None else self._vwap_unavailable_reason,
+        )
 
     def _require_running(self) -> None:
         if self._status is not RuntimeStatus.RUNNING:
             raise RuntimeError("SymbolRuntime processing requires RUNNING status.")
+
+
+def _require_text(value: str, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be text")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} must be non-empty")
+    return normalized

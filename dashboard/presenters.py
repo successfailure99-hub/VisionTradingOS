@@ -172,6 +172,7 @@ def build_market_view(runtime_snapshot: RuntimeSnapshot) -> DashboardMarketView:
     candle = runtime_snapshot.latest_candle
     context = runtime_snapshot.market_context
     vwap = runtime_snapshot.vwap
+    vwap_source = runtime_snapshot.vwap_source
     cpr = runtime_snapshot.cpr
     camarilla = runtime_snapshot.camarilla
     return DashboardMarketView(
@@ -188,7 +189,12 @@ def build_market_view(runtime_snapshot: RuntimeSnapshot) -> DashboardMarketView:
         latest_candle_low=getattr(candle, "low", None),
         latest_candle_close=getattr(candle, "close", None),
         vwap=getattr(vwap, "vwap", None),
-        vwap_source=f"{_enum_text(runtime_snapshot.symbol)} Spot" if vwap is not None else "-",
+        vwap_source=_vwap_source_label(runtime_snapshot),
+        vwap_source_type=_vwap_source_text(vwap_source, "source_type"),
+        vwap_source_exchange=_vwap_source_text(vwap_source, "source_exchange"),
+        vwap_source_expiry=getattr(vwap_source, "expiry", None),
+        vwap_source_volume=getattr(vwap_source, "cumulative_volume", 0) if vwap_source is not None else 0,
+        vwap_source_price=getattr(vwap_source, "last_source_price", None),
         cpr_pivot=getattr(cpr, "pivot", None),
         cpr_bc=getattr(cpr, "bc", None),
         cpr_tc=getattr(cpr, "tc", None),
@@ -206,6 +212,23 @@ def build_market_view(runtime_snapshot: RuntimeSnapshot) -> DashboardMarketView:
         option_chain_direction=_enum_text(getattr(context, "option_chain_direction", None)),
         updated_at=runtime_snapshot.updated_at,
     )
+
+
+def _vwap_source_label(runtime_snapshot: RuntimeSnapshot) -> str:
+    source = runtime_snapshot.vwap_source
+    if source is None:
+        return f"{_enum_text(runtime_snapshot.symbol)} Spot" if runtime_snapshot.vwap is not None else MISSING
+    if getattr(source, "ready", False):
+        return _enum_text(getattr(source, "trading_symbol", None))
+    reason = getattr(source, "unavailable_reason", None)
+    return _enum_text(reason) if reason else MISSING
+
+
+def _vwap_source_text(source, field_name: str) -> str:
+    if source is None:
+        return MISSING
+    value = getattr(source, field_name, None)
+    return _enum_text(value) if value else MISSING
 
 
 def build_price_action_view(runtime_snapshot: RuntimeSnapshot) -> DashboardPriceActionView:

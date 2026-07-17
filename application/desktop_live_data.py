@@ -15,6 +15,7 @@ from application.lifecycle_manager import ApplicationLifecycleManager
 from application.live_market_data import LiveMarketDataConfiguration, LiveMarketDataRuntime, LiveMarketDataRuntimeFactory
 from application.models import RuntimeConfiguration
 from application.reference_data_bootstrap import run_reference_data_bootstrap
+from application.futures_vwap import DesktopFuturesVWAPRuntimeManager
 from application.desktop_option_chain import (
     DesktopOptionChainConfigurationError,
     DesktopOptionChainRuntimeManager,
@@ -56,6 +57,7 @@ ENV_LIVE_MARKET_DATA_ENABLED = "LIVE_MARKET_DATA_ENABLED"
 ENV_LIVE_MARKET_DATA_AUTO_CONNECT = "LIVE_MARKET_DATA_AUTO_CONNECT"
 ENV_LIVE_OPTION_CHAIN_ENABLED = "LIVE_OPTION_CHAIN_ENABLED"
 ENV_LIVE_OPTION_CHAIN_AUTO_START = "LIVE_OPTION_CHAIN_AUTO_START"
+ENV_LIVE_FUTURES_VWAP_ENABLED = "LIVE_FUTURES_VWAP_ENABLED"
 ENV_OPTION_CHAIN_STRIKES_EACH_SIDE = "OPTION_CHAIN_STRIKES_EACH_SIDE"
 ENV_REFERENCE_DATA_BOOTSTRAP_ENABLED = "REFERENCE_DATA_BOOTSTRAP_ENABLED"
 
@@ -76,6 +78,7 @@ class DesktopLiveDataSettings:
     subscriptions: tuple[ZerodhaInstrumentSubscription, ...]
     option_chain: DesktopOptionChainSettings
     reference_data_bootstrap_enabled: bool
+    futures_vwap_enabled: bool
 
     def __repr__(self) -> str:
         return (
@@ -84,7 +87,8 @@ class DesktopLiveDataSettings:
             f"auto_connect={self.auto_connect}, "
             f"subscriptions={len(self.subscriptions)}, "
             f"option_chain_enabled={self.option_chain.enabled}, "
-            f"reference_data_bootstrap_enabled={self.reference_data_bootstrap_enabled})"
+            f"reference_data_bootstrap_enabled={self.reference_data_bootstrap_enabled}, "
+            f"futures_vwap_enabled={self.futures_vwap_enabled})"
         )
 
     __str__ = __repr__
@@ -96,6 +100,10 @@ def load_desktop_live_configuration(
     enabled = _parse_bool(environ.get(ENV_LIVE_MARKET_DATA_ENABLED, "false"), ENV_LIVE_MARKET_DATA_ENABLED)
     auto_connect = _parse_bool(environ.get(ENV_LIVE_MARKET_DATA_AUTO_CONNECT, "true"), ENV_LIVE_MARKET_DATA_AUTO_CONNECT)
     option_chain = _load_option_chain_settings(environ)
+    futures_vwap_enabled = _parse_bool(
+        environ.get(ENV_LIVE_FUTURES_VWAP_ENABLED, "true"),
+        ENV_LIVE_FUTURES_VWAP_ENABLED,
+    )
     reference_bootstrap = _parse_bool(
         environ.get(ENV_REFERENCE_DATA_BOOTSTRAP_ENABLED, "true"),
         ENV_REFERENCE_DATA_BOOTSTRAP_ENABLED,
@@ -112,6 +120,7 @@ def load_desktop_live_configuration(
             subscriptions=(),
             option_chain=option_chain,
             reference_data_bootstrap_enabled=False,
+            futures_vwap_enabled=False,
         )
 
     missing = [
@@ -147,6 +156,7 @@ def load_desktop_live_configuration(
         subscriptions=subscriptions,
         option_chain=option_chain,
         reference_data_bootstrap_enabled=reference_bootstrap,
+        futures_vwap_enabled=futures_vwap_enabled,
     )
 
 
@@ -275,6 +285,22 @@ def create_dashboard_application(
             historical_client_factory=historical_client_factory,
             clock=clock or _default_clock,
         )
+    futures_vwap_manager = None
+    if settings.futures_vwap_enabled and session_manager is not None and ticker_router is not None:
+        try:
+            futures_vwap_manager = _create_desktop_futures_vwap_manager(
+                lifecycle=lifecycle,
+                settings=settings,
+                session_manager=session_manager,
+                ticker_router=ticker_router,
+                instrument_client_factory=instrument_client_factory,
+                historical_client_factory=historical_client_factory,
+                clock=clock,
+            )
+            ticker_router.set_futures_vwap_manager(futures_vwap_manager)
+            futures_vwap_manager.start()
+        except Exception:
+            futures_vwap_manager = None
     option_chain_manager = None
     if settings.option_chain.enabled and session_manager is not None and ticker_router is not None:
         option_chain_manager = _create_desktop_option_chain_manager(
@@ -292,6 +318,7 @@ def create_dashboard_application(
         lifecycle,
         live_market_data_runtime=runtime,
         live_option_chain_runtime=option_chain_manager,
+        live_futures_vwap_runtime=futures_vwap_manager,
         clock=clock,
     )
 
@@ -350,6 +377,36 @@ def _create_desktop_option_chain_manager(
         raise DesktopLiveDataConfigurationError(f"Live option-chain startup failed: {_safe_message(exc, settings)}") from exc
     ticker_router.set_option_chain_manager(manager)
     return manager
+
+
+def _create_desktop_futures_vwap_manager(
+    *,
+    lifecycle: ApplicationLifecycleManager,
+    settings: DesktopLiveDataSettings,
+    session_manager: ZerodhaSessionManager,
+    ticker_router,
+    instrument_client_factory: InstrumentClientFactory | None,
+    historical_client_factory: HistoricalClientFactory | None,
+    clock=None,
+) -> DesktopFuturesVWAPRuntimeManager:
+    session = session_manager.session
+    if session is None or not session_manager.is_authenticated():
+        raise DesktopLiveDataConfigurationError("authenticated Zerodha session is required")
+    instrument_factory = instrument_client_factory or create_instrument_client
+    historical_factory = historical_client_factory or KiteHistoricalClient
+    try:
+        instrument_client = instrument_factory(api_key=settings.api_key, access_token=session.access_token)
+        historical_client = historical_factory(api_key=settings.api_key, access_token=session.access_token)
+        return DesktopFuturesVWAPRuntimeManager(
+            lifecycle=lifecycle,
+            ticker_client=ticker_router,
+            instrument_client=instrument_client,
+            historical_client=historical_client,
+            redactions=(settings.api_key, settings.api_secret, settings.access_token),
+            clock=clock or _default_clock,
+        )
+    except Exception as exc:
+        raise DesktopLiveDataConfigurationError(f"Futures VWAP startup failed: {_safe_message(exc, settings)}") from exc
 
 
 def _parse_bool(value: str | None, variable_name: str) -> bool:
@@ -432,12 +489,16 @@ class _DesktopTickerRouter:
         self._client = client
         self._spot_tokens = set(spot_tokens)
         self._option_chain_manager = None
+        self._futures_vwap_manager = None
         self._callbacks = {}
         self._callback_error_count = 0
         self._last_callback_error = None
 
     def set_option_chain_manager(self, manager: DesktopOptionChainRuntimeManager) -> None:
         self._option_chain_manager = manager
+
+    def set_futures_vwap_manager(self, manager: DesktopFuturesVWAPRuntimeManager) -> None:
+        self._futures_vwap_manager = manager
 
     def set_callbacks(self, **callbacks):
         self._callbacks = callbacks
@@ -475,12 +536,28 @@ class _DesktopTickerRouter:
             option_tokens = self._option_chain_manager.option_tokens()
         else:
             option_tokens = set()
+        if self._futures_vwap_manager is not None:
+            futures_tokens = self._futures_vwap_manager.futures_tokens()
+        else:
+            futures_tokens = set()
         option_rows = tuple(row for row in rows if _tick_token(row) in option_tokens)
-        unknown_rows = tuple(row for row in rows if _tick_token(row) not in self._spot_tokens and _tick_token(row) not in option_tokens)
+        futures_rows = tuple(row for row in rows if _tick_token(row) in futures_tokens)
+        unknown_rows = tuple(
+            row
+            for row in rows
+            if _tick_token(row) not in self._spot_tokens
+            and _tick_token(row) not in option_tokens
+            and _tick_token(row) not in futures_tokens
+        )
         spot_callback = self._callbacks.get("on_ticks")
         if spot_callback is not None and (spot_rows or unknown_rows):
             try:
                 spot_callback(ws, spot_rows + unknown_rows)
+            except Exception as exc:
+                self._record_callback_error(exc)
+        if self._futures_vwap_manager is not None and futures_rows:
+            try:
+                self._futures_vwap_manager.deliver_futures_ticks(futures_rows)
             except Exception as exc:
                 self._record_callback_error(exc)
         if self._option_chain_manager is not None:

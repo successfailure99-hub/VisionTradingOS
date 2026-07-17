@@ -113,15 +113,21 @@ class VisionMainWindow(QMainWindow):
         self._header_status.set_status_text(view.runtime.application_status)
         self._header_mode.set_status_text(view.runtime.safety_mode)
         self._sync_tabs(view)
-        for index, market in enumerate(view.markets):
+        price_actions = {item.symbol: item for item in view.price_actions}
+        option_chains = {item.symbol: item for item in view.option_chains}
+        ai_views = {item.symbol: item for item in view.ai}
+        strategies = {item.symbol: item for item in view.strategies}
+        positions = {item.symbol: item for item in view.positions}
+        journals = {item.symbol: item for item in view.journals}
+        for market in view.markets:
             panels = self._instrument_panels[market.symbol]
             panels["market"].render(market)
-            panels["price_action"].render(view.price_actions[index])
-            panels["option_chain"].render(view.option_chains[index])
-            panels["ai"].render(view.ai[index])
-            panels["strategy"].render(view.strategies[index])
-            panels["position"].render(view.positions[index])
-            panels["journal"].render(view.journals[index])
+            panels["price_action"].render(price_actions[market.symbol])
+            panels["option_chain"].render(option_chains[market.symbol])
+            panels["ai"].render(ai_views[market.symbol])
+            panels["strategy"].render(strategies[market.symbol])
+            panels["position"].render(positions[market.symbol])
+            panels["journal"].render(journals[market.symbol])
         self.statusBar().showMessage(f"Application {view.runtime.application_status}")
 
     def current_view(self) -> DashboardView | None:

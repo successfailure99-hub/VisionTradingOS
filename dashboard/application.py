@@ -17,6 +17,7 @@ class DashboardApplication:
         *,
         live_market_data_runtime: LiveMarketDataRuntime | None = None,
         live_option_chain_runtime=None,
+        live_futures_vwap_runtime=None,
         argv: list[str] | None = None,
         refresh_interval_ms: int = 500,
         clock=None,
@@ -28,6 +29,7 @@ class DashboardApplication:
         self._lifecycle = lifecycle
         self._live_market_data_runtime = live_market_data_runtime
         self._live_option_chain_runtime = live_option_chain_runtime
+        self._live_futures_vwap_runtime = live_futures_vwap_runtime
         self._qt_app = QApplication.instance() or QApplication(argv or [])
         self._main_window = VisionMainWindow(
             lifecycle,
@@ -54,6 +56,10 @@ class DashboardApplication:
     def live_option_chain_runtime(self):
         return self._live_option_chain_runtime
 
+    @property
+    def live_futures_vwap_runtime(self):
+        return self._live_futures_vwap_runtime
+
     def run(self) -> int:
         if self._lifecycle.status is not RuntimeStatus.RUNNING:
             self._lifecycle.start()
@@ -74,6 +80,11 @@ class DashboardApplication:
             self._stop_live_option_chain_if_needed()
         except Exception as exc:
             first_error = exc
+        try:
+            self._stop_live_futures_vwap_if_needed()
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
         try:
             self._stop_live_runtime_if_needed()
         except Exception as exc:
@@ -102,6 +113,12 @@ class DashboardApplication:
 
     def _stop_live_option_chain_if_needed(self) -> None:
         runtime = self._live_option_chain_runtime
+        if runtime is None:
+            return
+        runtime.stop()
+
+    def _stop_live_futures_vwap_if_needed(self) -> None:
+        runtime = self._live_futures_vwap_runtime
         if runtime is None:
             return
         runtime.stop()

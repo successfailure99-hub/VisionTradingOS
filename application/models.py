@@ -25,6 +25,49 @@ from engines.vwap.levels import VWAPLevels
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeVWAPSource:
+    instrument: RuntimeInstrument
+    source_type: str
+    source_exchange: str
+    trading_symbol: str
+    instrument_token: int
+    expiry: date | None
+    cumulative_volume: int
+    last_source_price: float | None
+    updated_at: datetime | None
+    ready: bool
+    unavailable_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.instrument, RuntimeInstrument):
+            raise TypeError("instrument must be RuntimeInstrument")
+        for field_name in ("source_type", "source_exchange", "trading_symbol"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{field_name} must be non-empty text")
+            object.__setattr__(self, field_name, value.strip())
+        if isinstance(self.instrument_token, bool) or not isinstance(self.instrument_token, int) or self.instrument_token <= 0:
+            raise ValueError("instrument_token must be a positive integer")
+        if self.expiry is not None and (isinstance(self.expiry, datetime) or not isinstance(self.expiry, date)):
+            raise TypeError("expiry must be a date or None")
+        if isinstance(self.cumulative_volume, bool) or not isinstance(self.cumulative_volume, int) or self.cumulative_volume < 0:
+            raise ValueError("cumulative_volume must be a non-negative integer")
+        if self.last_source_price is not None:
+            if isinstance(self.last_source_price, bool) or not isinstance(self.last_source_price, (int, float)):
+                raise TypeError("last_source_price must be numeric or None")
+            object.__setattr__(self, "last_source_price", float(self.last_source_price))
+        if self.updated_at is not None:
+            if not isinstance(self.updated_at, datetime):
+                raise TypeError("updated_at must be datetime or None")
+        if not isinstance(self.ready, bool):
+            raise TypeError("ready must be bool")
+        if self.unavailable_reason is not None:
+            if not isinstance(self.unavailable_reason, str):
+                raise TypeError("unavailable_reason must be text or None")
+            object.__setattr__(self, "unavailable_reason", self.unavailable_reason.strip() or None)
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeConfiguration:
     instruments: tuple[RuntimeInstrument, ...] = (RuntimeInstrument.NIFTY,)
     exchange: str = "NSE"
@@ -78,6 +121,7 @@ class RuntimeSnapshot:
     position: PositionState | None
     latest_journal_record: TradeJournalRecord | None
     updated_at: datetime | None
+    vwap_source: RuntimeVWAPSource | None = None
 
 
 @dataclass(frozen=True, slots=True)

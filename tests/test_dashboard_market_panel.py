@@ -21,7 +21,9 @@ def market_view(**overrides):
         symbol="NIFTY", timeframe="1m", runtime_status="Running",
         last_price=None, bid_price=None, ask_price=None, session_high=None, session_low=None,
         latest_candle_open=None, latest_candle_high=None, latest_candle_low=None, latest_candle_close=None,
-        vwap=None, vwap_source="-", cpr_pivot=None, cpr_bc=None, cpr_tc=None,
+        vwap=None, vwap_source="-", vwap_source_type="-", vwap_source_exchange="-",
+        vwap_source_expiry=None, vwap_source_volume=0, vwap_source_price=None,
+        cpr_pivot=None, cpr_bc=None, cpr_tc=None,
         camarilla_h3=None, camarilla_h4=None, camarilla_h5=None, camarilla_h6=None,
         camarilla_l3=None, camarilla_l4=None, camarilla_l5=None, camarilla_l6=None,
         market_bias="-", market_phase="-", context_strength="-", option_chain_direction="-", updated_at=None,
@@ -58,6 +60,26 @@ def test_camarilla_cpr_and_market_bias_render():
     assert panel._labels["Cam H3"].text() == "102.00"
     assert panel._labels["Cam L6"].text() == "94.00"
     assert panel._labels["Bias"].text() == "Bullish"
+
+
+def test_futures_vwap_source_metadata_renders():
+    panel = MarketPanel()
+    panel.render(
+        market_view(
+            vwap=25250.0,
+            vwap_source="NIFTY26JULFUT",
+            vwap_source_type="Futures",
+            vwap_source_exchange="NFO",
+            vwap_source_volume=1500,
+            vwap_source_price=25255.5,
+        )
+    )
+    assert panel._labels["VWAP"].text() == "25250.00"
+    assert panel._labels["VWAP Source"].text() == "NIFTY26JULFUT"
+    assert panel._labels["VWAP Type"].text() == "Futures"
+    assert panel._labels["VWAP Venue"].text() == "NFO"
+    assert panel._labels["VWAP Volume"].text() == "1500"
+    assert panel._labels["VWAP Source Price"].text() == "25255.50"
 
 
 def test_repeated_render_updates_existing_labels():

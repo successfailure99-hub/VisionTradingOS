@@ -45,6 +45,7 @@ def live_env(**overrides):
         "NIFTY_INSTRUMENT_TOKEN": "101",
         "BANKNIFTY_INSTRUMENT_TOKEN": "102",
         "SENSEX_INSTRUMENT_TOKEN": "103",
+        "LIVE_FUTURES_VWAP_ENABLED": "false",
     }
     env.update(overrides)
     return env
@@ -113,6 +114,16 @@ class FakeHistoricalClient:
         ]
 
 
+class FakeInstrumentClient:
+    def __init__(self, records):
+        self.records = tuple(records)
+        self.calls = []
+
+    def instruments(self, exchange=None):
+        self.calls.append(exchange)
+        return [record for record in self.records if exchange is None or record.get("exchange") == exchange]
+
+
 def auth_factory(api_key):
     return FakeAuthClient(api_key)
 
@@ -124,6 +135,88 @@ def historical_factory_factory(store):
         return client
 
     return factory
+
+
+def instrument_factory_factory(store, records):
+    def factory(*, api_key, access_token):
+        client = FakeInstrumentClient(records)
+        store.append(client)
+        return client
+
+    return factory
+
+
+def futures_records(*, invalid_nifty_exchange_token=None):
+    july = datetime(2026, 7, 30, tzinfo=UTC).date()
+    records = []
+    if invalid_nifty_exchange_token is not None:
+        records.append(
+            {
+                "instrument_token": 299,
+                "exchange_token": invalid_nifty_exchange_token,
+                "tradingsymbol": "NIFTY26JULBADFUT",
+                "name": "NIFTY",
+                "exchange": "NFO",
+                "segment": "NFO-FUT",
+                "instrument_type": "FUT",
+                "expiry": july,
+            }
+        )
+    records.extend(
+        [
+            {
+                "instrument_token": 201,
+                "exchange_token": 1201,
+                "tradingsymbol": "NIFTY26JULFUT",
+                "name": "NIFTY",
+                "exchange": "NFO",
+                "segment": "NFO-FUT",
+                "instrument_type": "FUT",
+                "expiry": july,
+            },
+            {
+                "instrument_token": 202,
+                "exchange_token": 1202,
+                "tradingsymbol": "BANKNIFTY26JULFUT",
+                "name": "BANKNIFTY",
+                "exchange": "NFO",
+                "segment": "NFO-FUT",
+                "instrument_type": "FUT",
+                "expiry": july,
+            },
+            {
+                "instrument_token": 203,
+                "exchange_token": 1203,
+                "tradingsymbol": "SENSEX26JULFUT",
+                "name": "SENSEX",
+                "exchange": "BFO",
+                "segment": "BFO-FUT",
+                "instrument_type": "FUT",
+                "expiry": july,
+            },
+            {
+                "instrument_token": 301,
+                "exchange_token": 1301,
+                "tradingsymbol": "NIFTY26JUL25000CE",
+                "name": "NIFTY",
+                "exchange": "NFO",
+                "segment": "NFO-OPT",
+                "instrument_type": "CE",
+                "expiry": july,
+            },
+            {
+                "instrument_token": 401,
+                "exchange_token": 1401,
+                "tradingsymbol": "NIFTYBEES",
+                "name": "NIFTYBEES",
+                "exchange": "NSE",
+                "segment": "NSE",
+                "instrument_type": "EQ",
+                "expiry": None,
+            },
+        ]
+    )
+    return records
 
 
 def test_live_data_disabled_starts_without_runtime_and_unavailable_dashboard_view():
@@ -321,6 +414,97 @@ def test_desktop_startup_bootstraps_reference_data_per_instrument_when_available
         assert market.cpr_pivot is not None
         assert market.camarilla_h3 is not None
         assert market.vwap is not None
+    dashboard.shutdown()
+
+
+def test_futures_vwap_discovers_valid_contracts_warms_vwap_and_surfaces_source_metadata():
+    qt_app()
+    ticker = FakeTickerClient()
+    historical_clients = []
+    instrument_clients = []
+    dashboard = create_dashboard_application(
+        environ=live_env(
+            LIVE_MARKET_DATA_AUTO_CONNECT="false",
+            LIVE_FUTURES_VWAP_ENABLED="true",
+            REFERENCE_DATA_BOOTSTRAP_ENABLED="false",
+        ),
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: NOW),
+        instrument_client_factory=instrument_factory_factory(instrument_clients, futures_records()),
+        historical_client_factory=historical_factory_factory(historical_clients),
+        ticker_client=ticker,
+        clock=lambda: NOW,
+    )
+    view = dashboard.main_window.refresh()
+    assert dashboard.live_futures_vwap_runtime is not None
+    assert dashboard.live_futures_vwap_runtime.snapshot().futures_token_count == 3
+    assert ticker.subscriptions[-1] == (201, 202, 203)
+    assert view.markets[0].vwap is not None
+    assert view.markets[0].vwap_source == "NIFTY26JULFUT"
+    assert view.markets[0].vwap_source_type == "Futures"
+    assert view.markets[0].vwap_source_exchange == "NFO"
+    assert view.markets[0].latest_candle_close is None
+    assert instrument_clients[0].calls == ["NFO", "NFO", "BFO"]
+    dashboard.shutdown()
+
+
+@pytest.mark.parametrize("invalid_token", (None, 0, "1201"))
+def test_futures_vwap_rejects_invalid_exchange_tokens_and_continues_with_valid_contracts(invalid_token):
+    qt_app()
+    ticker = FakeTickerClient()
+    dashboard = create_dashboard_application(
+        environ=live_env(
+            LIVE_MARKET_DATA_AUTO_CONNECT="false",
+            LIVE_FUTURES_VWAP_ENABLED="true",
+            REFERENCE_DATA_BOOTSTRAP_ENABLED="false",
+        ),
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: NOW),
+        instrument_client_factory=instrument_factory_factory([], futures_records(invalid_nifty_exchange_token=invalid_token)),
+        historical_client_factory=historical_factory_factory([]),
+        ticker_client=ticker,
+        clock=lambda: NOW,
+    )
+    snapshot = dashboard.live_futures_vwap_runtime.snapshot()
+    assert snapshot.futures_token_count == 3
+    assert {item.contract.instrument_token for item in snapshot.instruments if item.contract is not None} == {201, 202, 203}
+    assert ticker.subscriptions[-1] == (201, 202, 203)
+    dashboard.shutdown()
+
+
+def test_futures_ticks_route_only_to_vwap_and_preserve_spot_candle_isolation():
+    qt_app()
+    ticker = FakeTickerClient()
+    dashboard = create_dashboard_application(
+        environ=live_env(
+            LIVE_FUTURES_VWAP_ENABLED="true",
+            REFERENCE_DATA_BOOTSTRAP_ENABLED="false",
+        ),
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: NOW),
+        instrument_client_factory=instrument_factory_factory([], futures_records()),
+        historical_client_factory=historical_factory_factory([]),
+        ticker_client=ticker,
+        clock=lambda: NOW,
+    )
+    ticker.callbacks["on_ticks"](
+        None,
+        (
+            {
+                "instrument_token": 201,
+                "last_price": 25333.0,
+                "exchange_timestamp": NOW,
+                "volume_traded": 25,
+            },
+        ),
+    )
+    view = dashboard.main_window.refresh()
+    runtime_snapshot = dashboard.live_market_data_runtime.snapshot()
+    assert runtime_snapshot.websocket.delivered_tick_count == 0
+    assert view.markets[0].vwap_source == "NIFTY26JULFUT"
+    assert view.markets[0].vwap_source_price == 25333.0
+    assert view.markets[0].latest_candle_close is None
+    assert view.price_actions[0].available is False
     dashboard.shutdown()
 
 
