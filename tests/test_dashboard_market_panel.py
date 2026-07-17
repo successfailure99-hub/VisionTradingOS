@@ -23,6 +23,9 @@ def market_view(**overrides):
         latest_candle_open=None, latest_candle_high=None, latest_candle_low=None, latest_candle_close=None,
         vwap=None, vwap_source="-", vwap_source_type="-", vwap_source_exchange="-",
         vwap_source_expiry=None, vwap_source_volume=0, vwap_source_price=None,
+        vwap_source_state="-", vwap_source_message="-", vwap_subscription_active=False,
+        vwap_historical_candles_loaded=0, vwap_historical_volume=0, vwap_live_tick_count=0,
+        vwap_last_live_tick=None, vwap_last_error=None,
         cpr_pivot=None, cpr_bc=None, cpr_tc=None,
         camarilla_h3=None, camarilla_h4=None, camarilla_h5=None, camarilla_h6=None,
         camarilla_l3=None, camarilla_l4=None, camarilla_l5=None, camarilla_l6=None,
@@ -72,6 +75,12 @@ def test_futures_vwap_source_metadata_renders():
             vwap_source_exchange="NFO",
             vwap_source_volume=1500,
             vwap_source_price=25255.5,
+            vwap_source_state="Ready",
+            vwap_source_message="Futures proxy VWAP ready",
+            vwap_subscription_active=True,
+            vwap_historical_candles_loaded=3,
+            vwap_historical_volume=1475,
+            vwap_live_tick_count=1,
         )
     )
     assert panel._labels["VWAP"].text() == "25250.00"
@@ -80,6 +89,11 @@ def test_futures_vwap_source_metadata_renders():
     assert panel._labels["VWAP Venue"].text() == "NFO"
     assert panel._labels["VWAP Volume"].text() == "1500"
     assert panel._labels["VWAP Source Price"].text() == "25255.50"
+    assert panel._labels["VWAP Status"].text() == "Ready"
+    assert panel._labels["VWAP Message"].text() == "Futures proxy VWAP ready"
+    assert panel._labels["VWAP Subscription"].text() == "Active"
+    assert panel._labels["VWAP History Volume"].text() == "1475"
+    assert panel._labels["VWAP Live Ticks"].text() == "1"
 
 
 def test_repeated_render_updates_existing_labels():

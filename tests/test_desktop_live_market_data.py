@@ -79,6 +79,7 @@ class FakeTickerClient:
         self.connect_calls = 0
         self.close_calls = 0
         self.subscriptions = []
+        self.unsubscriptions = []
         self.modes = []
         self.submitted_orders = []
 
@@ -95,10 +96,16 @@ class FakeTickerClient:
         self.subscriptions.append(tuple(instrument_tokens))
 
     def unsubscribe(self, instrument_tokens):
-        pass
+        self.unsubscriptions.append(tuple(instrument_tokens))
 
     def set_mode(self, mode, instrument_tokens):
         self.modes.append((mode, tuple(instrument_tokens)))
+
+
+class FailingSubscribeTickerClient(FakeTickerClient):
+    def subscribe(self, instrument_tokens):
+        self.subscriptions.append(tuple(instrument_tokens))
+        raise RuntimeError("subscription failed with desktop_access_token")
 
 
 class FakeHistoricalClient:
@@ -437,18 +444,30 @@ def test_futures_vwap_discovers_valid_contracts_warms_vwap_and_surfaces_source_m
     )
     view = dashboard.main_window.refresh()
     assert dashboard.live_futures_vwap_runtime is not None
-    assert dashboard.live_futures_vwap_runtime.snapshot().futures_token_count == 3
+    snapshot = dashboard.live_futures_vwap_runtime.snapshot()
+    assert snapshot.started is True
+    assert snapshot.futures_token_count == 3
+    assert {item.underlying for item in snapshot.instruments if item.subscription_active} == {
+        Instrument.NIFTY,
+        Instrument.BANKNIFTY,
+        Instrument.SENSEX,
+    }
     assert ticker.subscriptions[-1] == (201, 202, 203)
+    assert ticker.modes[-1][1] == (201, 202, 203)
     assert view.markets[0].vwap is not None
     assert view.markets[0].vwap_source == "NIFTY26JULFUT"
-    assert view.markets[0].vwap_source_type == "Futures"
+    assert view.markets[0].vwap_source_type == "Futures Proxy"
     assert view.markets[0].vwap_source_exchange == "NFO"
+    assert view.markets[0].vwap_subscription_active is True
+    assert view.markets[0].vwap_historical_volume > 0
     assert view.markets[0].latest_candle_close is None
     assert instrument_clients[0].calls == ["NFO", "NFO", "BFO"]
     dashboard.shutdown()
+    dashboard.shutdown()
+    assert ticker.unsubscriptions.count((201, 202, 203)) == 1
 
 
-@pytest.mark.parametrize("invalid_token", (None, 0, "1201"))
+@pytest.mark.parametrize("invalid_token", (None, 0, "bad-token"))
 def test_futures_vwap_rejects_invalid_exchange_tokens_and_continues_with_valid_contracts(invalid_token):
     qt_app()
     ticker = FakeTickerClient()
@@ -469,6 +488,32 @@ def test_futures_vwap_rejects_invalid_exchange_tokens_and_continues_with_valid_c
     assert snapshot.futures_token_count == 3
     assert {item.contract.instrument_token for item in snapshot.instruments if item.contract is not None} == {201, 202, 203}
     assert ticker.subscriptions[-1] == (201, 202, 203)
+    dashboard.shutdown()
+
+
+def test_futures_vwap_subscription_failure_rolls_back_ownership_and_keeps_spot_runtime_available():
+    qt_app()
+    ticker = FailingSubscribeTickerClient()
+    dashboard = create_dashboard_application(
+        environ=live_env(
+            LIVE_MARKET_DATA_AUTO_CONNECT="false",
+            LIVE_FUTURES_VWAP_ENABLED="true",
+            REFERENCE_DATA_BOOTSTRAP_ENABLED="false",
+        ),
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: NOW),
+        instrument_client_factory=instrument_factory_factory([], futures_records()),
+        historical_client_factory=historical_factory_factory([]),
+        ticker_client=ticker,
+        clock=lambda: NOW,
+    )
+    manager = dashboard.live_futures_vwap_runtime
+    snapshot = manager.snapshot()
+    assert snapshot.futures_token_count == 0
+    assert all(item.subscription_active is False for item in snapshot.instruments)
+    assert all("desktop_access_token" not in (item.last_error or "") for item in snapshot.instruments)
+    assert dashboard.live_market_data_runtime is not None
+    assert ticker.subscriptions == [(201, 202, 203)]
     dashboard.shutdown()
 
 
@@ -498,12 +543,39 @@ def test_futures_ticks_route_only_to_vwap_and_preserve_spot_candle_isolation():
             },
         ),
     )
+    ticker.callbacks["on_ticks"](
+        None,
+        (
+            {
+                "instrument_token": 201,
+                "last_price": 25334.0,
+                "exchange_timestamp": NOW + timedelta(seconds=1),
+                "volume_traded": 25,
+            },
+            {
+                "instrument_token": 201,
+                "last_price": 25335.0,
+                "exchange_timestamp": NOW + timedelta(seconds=2),
+                "volume_traded": 30,
+            },
+            {
+                "instrument_token": 101,
+                "last_price": 25000.0,
+                "exchange_timestamp": NOW + timedelta(seconds=3),
+                "volume": 0,
+            },
+        ),
+    )
     view = dashboard.main_window.refresh()
     runtime_snapshot = dashboard.live_market_data_runtime.snapshot()
-    assert runtime_snapshot.websocket.delivered_tick_count == 0
+    assert runtime_snapshot.websocket.delivered_tick_count == 1
     assert view.markets[0].vwap_source == "NIFTY26JULFUT"
-    assert view.markets[0].vwap_source_price == 25333.0
-    assert view.markets[0].latest_candle_close is None
+    assert view.markets[0].vwap_source_type == "Futures Proxy"
+    assert view.markets[0].vwap_source_exchange == "NFO"
+    assert view.markets[0].vwap_source_price == 25335.0
+    assert view.markets[0].vwap_live_tick_count == 2
+    assert view.markets[0].vwap_source_volume == 30
+    assert view.markets[0].latest_candle_close == 25000.0
     assert view.price_actions[0].available is False
     dashboard.shutdown()
 

@@ -53,13 +53,21 @@ class SymbolRuntime:
         self._last_tick: Tick | None = None
         self._updated_at = None
         self._last_processed_history_count = 0
-        self._vwap_source_type = "Spot"
-        self._vwap_source_exchange = "NSE" if self._core_instrument is not Instrument.SENSEX else "BSE"
-        self._vwap_source_trading_symbol = instrument.value
+        self._vwap_source_type = "-"
+        self._vwap_source_exchange = "-"
+        self._vwap_source_trading_symbol = "-"
         self._vwap_source_token = 1
         self._vwap_source_expiry = None
         self._vwap_source_price = None
         self._vwap_unavailable_reason = None
+        self._vwap_source_state = "Unavailable"
+        self._vwap_source_message = "No valid VWAP source"
+        self._vwap_subscription_active = False
+        self._vwap_historical_candles_loaded = 0
+        self._vwap_historical_volume = 0
+        self._vwap_live_tick_count = 0
+        self._vwap_last_live_tick = None
+        self._vwap_last_error = None
 
         self.market_context_engine = MarketContextEngine(event_bus, instrument.value, configuration.timeframe)
         self.ai_reasoning_engine = AIReasoningEngine(event_bus, instrument.value, configuration.timeframe)
@@ -109,14 +117,29 @@ class SymbolRuntime:
         if tick.symbol is not self._core_instrument:
             raise ValueError("Tick instrument does not match SymbolRuntime.")
         self.candle_engine.on_tick(tick)
-        self.vwap_engine.on_tick(tick)
-        self._vwap_source_type = "Spot"
-        self._vwap_source_exchange = tick.exchange.value
-        self._vwap_source_trading_symbol = self._instrument.value
-        self._vwap_source_token = max(self._vwap_source_token, 1)
-        self._vwap_source_expiry = None
-        self._vwap_source_price = tick.last_price
-        self._vwap_unavailable_reason = None
+        if not self._ready_futures_proxy():
+            self.vwap_engine.on_tick(tick)
+            levels = self.vwap_engine.get_latest(self._core_instrument)
+            if tick.volume > 0 and levels is not None and levels.cumulative_volume > 0:
+                self._vwap_source_type = "Spot"
+                self._vwap_source_exchange = tick.exchange.value
+                self._vwap_source_trading_symbol = self._instrument.value
+                self._vwap_source_token = max(self._vwap_source_token, 1)
+                self._vwap_source_expiry = None
+                self._vwap_source_price = tick.last_price
+                self._vwap_unavailable_reason = None
+                self._vwap_source_state = "Ready"
+                self._vwap_source_message = "Spot VWAP ready"
+                self._vwap_subscription_active = False
+                self._vwap_last_error = None
+            elif levels is None:
+                self._vwap_source_type = "-"
+                self._vwap_source_exchange = "-"
+                self._vwap_source_trading_symbol = "-"
+                self._vwap_source_price = tick.last_price
+                self._vwap_unavailable_reason = "No positive volume VWAP source"
+                self._vwap_source_state = "Unavailable"
+                self._vwap_source_message = self._vwap_unavailable_reason
         self._process_closed_candles()
         self._last_tick = tick
         self._updated_at = tick.timestamp
@@ -132,6 +155,13 @@ class SymbolRuntime:
         trading_symbol: str,
         instrument_token: int,
         expiry=None,
+        state: str = "Ready",
+        message: str = "Futures proxy VWAP ready",
+        subscription_active: bool = True,
+        historical_candles_loaded: int = 0,
+        historical_volume: int = 0,
+        live_tick_count: int = 0,
+        last_live_tick=None,
     ) -> RuntimeSnapshot:
         self._require_running()
         if tick.symbol is not self._core_instrument:
@@ -146,13 +176,43 @@ class SymbolRuntime:
         self._vwap_source_expiry = expiry
         self._vwap_source_price = tick.last_price
         self._vwap_unavailable_reason = None
+        self._vwap_source_state = _require_text(state, "state")
+        self._vwap_source_message = _require_text(message, "message")
+        self._vwap_subscription_active = bool(subscription_active)
+        self._vwap_historical_candles_loaded = _non_negative_int(historical_candles_loaded, "historical_candles_loaded")
+        self._vwap_historical_volume = _non_negative_int(historical_volume, "historical_volume")
+        self._vwap_live_tick_count = _non_negative_int(live_tick_count, "live_tick_count")
+        self._vwap_last_live_tick = last_live_tick
+        self._vwap_last_error = None
         self._updated_at = tick.timestamp
         if self._last_tick is not None:
             self._refresh_dashboard_analysis(tick.timestamp, self._last_tick.last_price)
         return self.snapshot()
 
-    def mark_vwap_unavailable(self, reason: str) -> RuntimeSnapshot:
+    def mark_vwap_unavailable(
+        self,
+        reason: str,
+        *,
+        source_type: str = "-",
+        source_exchange: str = "-",
+        trading_symbol: str = "-",
+        instrument_token: int | None = None,
+        expiry=None,
+        state: str = "Unavailable",
+        message: str | None = None,
+        subscription_active: bool = False,
+        last_error: str | None = None,
+    ) -> RuntimeSnapshot:
         self._vwap_unavailable_reason = _require_text(reason, "reason")
+        self._vwap_source_type = _require_text(source_type, "source_type") if source_type != "-" else "-"
+        self._vwap_source_exchange = _require_text(source_exchange, "source_exchange") if source_exchange != "-" else "-"
+        self._vwap_source_trading_symbol = _require_text(trading_symbol, "trading_symbol") if trading_symbol != "-" else "-"
+        self._vwap_source_token = instrument_token if instrument_token is not None else 1
+        self._vwap_source_expiry = expiry
+        self._vwap_source_state = _require_text(state, "state")
+        self._vwap_source_message = _require_text(message or reason, "message")
+        self._vwap_subscription_active = bool(subscription_active)
+        self._vwap_last_error = last_error or reason
         return self.snapshot()
 
     def process_daily_ohlc(self, daily_ohlc: DailyOHLC) -> tuple[CPRLevels, CamarillaLevels]:
@@ -341,13 +401,21 @@ class SymbolRuntime:
         self._last_tick = None
         self._updated_at = None
         self._last_processed_history_count = 0
-        self._vwap_source_type = "Spot"
-        self._vwap_source_exchange = "NSE" if self._core_instrument is not Instrument.SENSEX else "BSE"
-        self._vwap_source_trading_symbol = self._instrument.value
+        self._vwap_source_type = "-"
+        self._vwap_source_exchange = "-"
+        self._vwap_source_trading_symbol = "-"
         self._vwap_source_token = 1
         self._vwap_source_expiry = None
         self._vwap_source_price = None
         self._vwap_unavailable_reason = None
+        self._vwap_source_state = "Unavailable"
+        self._vwap_source_message = "No valid VWAP source"
+        self._vwap_subscription_active = False
+        self._vwap_historical_candles_loaded = 0
+        self._vwap_historical_volume = 0
+        self._vwap_live_tick_count = 0
+        self._vwap_last_live_tick = None
+        self._vwap_last_error = None
         self._status = RuntimeStatus.CREATED
 
     def snapshot(self, latest_journal_record=None) -> RuntimeSnapshot:
@@ -425,11 +493,14 @@ class SymbolRuntime:
             open_interest=0,
         )
         self.vwap_engine.on_tick(tick)
-        self._vwap_source_type = "Spot"
-        self._vwap_source_exchange = tick.exchange.value
-        self._vwap_source_trading_symbol = self._instrument.value
-        self._vwap_source_price = tick.last_price
-        self._vwap_unavailable_reason = None
+        if not self._ready_futures_proxy():
+            self._vwap_source_type = "Spot"
+            self._vwap_source_exchange = tick.exchange.value
+            self._vwap_source_trading_symbol = self._instrument.value
+            self._vwap_source_price = tick.last_price
+            self._vwap_unavailable_reason = None
+            self._vwap_source_state = "Ready"
+            self._vwap_source_message = "Spot VWAP ready"
 
     def _vwap_source_snapshot(self) -> RuntimeVWAPSource:
         levels = self.vwap_engine.get_latest(self._core_instrument)
@@ -445,7 +516,19 @@ class SymbolRuntime:
             updated_at=getattr(levels, "timestamp", None),
             ready=levels is not None,
             unavailable_reason=None if levels is not None else self._vwap_unavailable_reason,
+            state=self._vwap_source_state,
+            message=self._vwap_source_message,
+            subscription_active=self._vwap_subscription_active,
+            historical_candles_loaded=self._vwap_historical_candles_loaded,
+            historical_volume=self._vwap_historical_volume,
+            live_tick_count=self._vwap_live_tick_count,
+            last_live_tick=self._vwap_last_live_tick,
+            last_error=self._vwap_last_error,
         )
+
+    def _ready_futures_proxy(self) -> bool:
+        levels = self.vwap_engine.get_latest(self._core_instrument)
+        return self._vwap_source_type == "Futures Proxy" and levels is not None and levels.cumulative_volume > 0
 
     def _require_running(self) -> None:
         if self._status is not RuntimeStatus.RUNNING:
@@ -459,3 +542,9 @@ def _require_text(value: str, field_name: str) -> str:
     if not normalized:
         raise ValueError(f"{field_name} must be non-empty")
     return normalized
+
+
+def _non_negative_int(value: int, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    return value

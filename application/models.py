@@ -37,6 +37,14 @@ class RuntimeVWAPSource:
     updated_at: datetime | None
     ready: bool
     unavailable_reason: str | None = None
+    state: str = "-"
+    message: str = "-"
+    subscription_active: bool = False
+    historical_candles_loaded: int = 0
+    historical_volume: int = 0
+    live_tick_count: int = 0
+    last_live_tick: datetime | None = None
+    last_error: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.instrument, RuntimeInstrument):
@@ -61,10 +69,27 @@ class RuntimeVWAPSource:
                 raise TypeError("updated_at must be datetime or None")
         if not isinstance(self.ready, bool):
             raise TypeError("ready must be bool")
+        if not isinstance(self.subscription_active, bool):
+            raise TypeError("subscription_active must be bool")
+        for field_name in ("historical_candles_loaded", "historical_volume", "live_tick_count"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
+        if self.last_live_tick is not None and not isinstance(self.last_live_tick, datetime):
+            raise TypeError("last_live_tick must be datetime or None")
+        for field_name in ("state", "message"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise TypeError(f"{field_name} must be text")
+            object.__setattr__(self, field_name, value.strip() or "-")
         if self.unavailable_reason is not None:
             if not isinstance(self.unavailable_reason, str):
                 raise TypeError("unavailable_reason must be text or None")
             object.__setattr__(self, "unavailable_reason", self.unavailable_reason.strip() or None)
+        if self.last_error is not None:
+            if not isinstance(self.last_error, str):
+                raise TypeError("last_error must be text or None")
+            object.__setattr__(self, "last_error", self.last_error.strip() or None)
 
 
 @dataclass(frozen=True, slots=True)

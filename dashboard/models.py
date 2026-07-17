@@ -371,6 +371,14 @@ class DashboardMarketView:
     vwap_source_expiry: date | None
     vwap_source_volume: int
     vwap_source_price: float | None
+    vwap_source_state: str
+    vwap_source_message: str
+    vwap_subscription_active: bool
+    vwap_historical_candles_loaded: int
+    vwap_historical_volume: int
+    vwap_live_tick_count: int
+    vwap_last_live_tick: datetime | None
+    vwap_last_error: str | None
     cpr_pivot: float | None
     cpr_bc: float | None
     cpr_tc: float | None

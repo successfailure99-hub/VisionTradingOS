@@ -41,6 +41,12 @@ ANALYSIS_EXCHANGE_BY_UNDERLYING = {
 class FuturesVWAPRuntimeState(str, Enum):
     DISABLED = "Disabled"
     STARTING = "Starting"
+    DISCOVERING = "Discovering Future"
+    RESOLVED = "Future Resolved"
+    LOADING_HISTORY = "Loading History"
+    SUBSCRIBING = "Subscribing"
+    WAITING_FOR_TICK = "Waiting For Futures Tick"
+    RECEIVING = "Receiving"
     READY = "Ready"
     PARTIAL = "Partial"
     ERROR = "Error"
@@ -61,12 +67,28 @@ class FuturesVWAPContract:
 @dataclass(frozen=True, slots=True)
 class FuturesVWAPInstrumentSnapshot:
     underlying: Instrument
+    enabled: bool
     configured: bool
+    started: bool
+    state: FuturesVWAPRuntimeState
+    message: str
+    analysis_instrument: Instrument
+    source_exchange: str
+    source_trading_symbol: str
+    source_token: int | None
+    source_expiry: date | None
+    contracts_examined: int
+    contracts_matched: int
+    subscription_active: bool
     ready: bool
     contract: FuturesVWAPContract | None
     warmed_candles: int
+    historical_volume: int
     live_ticks: int
     last_source_price: float | None
+    cumulative_volume: int
+    vwap_ready: bool
+    vwap_value: float | None
     last_updated_at: datetime | None
     last_error: str | None
 
@@ -87,15 +109,25 @@ class FuturesVWAPRuntimeSnapshot:
 class _MutableFuturesState:
     underlying: Instrument
     contract: FuturesVWAPContract | None = None
+    started: bool = False
+    state: FuturesVWAPRuntimeState = FuturesVWAPRuntimeState.DISABLED
+    message: str = "Disabled"
+    contracts_examined: int = 0
+    contracts_matched: int = 0
+    subscription_active: bool = False
     warmed_candles: int = 0
+    historical_volume: int = 0
     live_ticks: int = 0
+    last_cumulative_live_volume: int | None = None
     last_source_price: float | None = None
     last_updated_at: datetime | None = None
+    cumulative_volume: int = 0
+    vwap_value: float | None = None
     last_error: str | None = None
 
     @property
     def ready(self) -> bool:
-        return self.contract is not None and self.last_error is None
+        return self.contract is not None and self.last_error is None and self.cumulative_volume > 0 and self.vwap_value is not None
 
 
 class DesktopFuturesVWAPRuntimeManager:
@@ -126,6 +158,8 @@ class DesktopFuturesVWAPRuntimeManager:
         self._stopped = False
         self._last_error: str | None = None
         self._last_updated_at: datetime | None = None
+        self._start_count = 0
+        self._stop_count = 0
 
     def futures_tokens(self) -> set[int]:
         return set(self._token_owner)
@@ -158,28 +192,78 @@ class DesktopFuturesVWAPRuntimeManager:
         if self._started:
             return self.snapshot()
         self._started = True
+        self._start_count += 1
         self._stopped = False
         self._last_error = None
+        for state in self._states.values():
+            state.started = True
+            state.state = FuturesVWAPRuntimeState.DISCOVERING
+            state.message = f"Resolving nearest {state.underlying.value} futures contract"
         contracts = self._discover_contracts()
         for underlying, state in self._states.items():
             contract = contracts.get(underlying)
             if contract is None:
                 state.last_error = state.last_error or f"No valid {underlying.value} futures contract was discovered."
-                self._mark_runtime_vwap_unavailable(underlying, state.last_error)
+                state.state = FuturesVWAPRuntimeState.ERROR
+                state.message = state.last_error
+                self._mark_runtime_vwap_unavailable(underlying, state.last_error, state=state.state)
                 continue
             state.contract = contract
+            state.state = FuturesVWAPRuntimeState.RESOLVED
+            state.message = f"Resolved {contract.trading_symbol}"
             self._token_owner[contract.instrument_token] = underlying
             try:
+                state.state = FuturesVWAPRuntimeState.LOADING_HISTORY
+                state.message = f"Loading completed {contract.trading_symbol} history"
                 state.warmed_candles = self._warm_contract(contract)
             except Exception as exc:
                 state.last_error = _safe_error(exc, self._redactions)
-                self._mark_runtime_vwap_unavailable(underlying, state.last_error)
+                state.state = FuturesVWAPRuntimeState.ERROR
+                state.message = state.last_error
+                self._mark_runtime_vwap_unavailable(underlying, state.last_error, contract=contract, state=state.state)
                 continue
             state.last_error = None
+            state.state = FuturesVWAPRuntimeState.WAITING_FOR_TICK if state.cumulative_volume == 0 else FuturesVWAPRuntimeState.READY
+            state.message = "Waiting for first futures tick" if state.cumulative_volume == 0 else "Futures proxy VWAP ready"
         if self._token_owner:
             tokens = tuple(sorted(self._token_owner))
-            self._ticker_client.subscribe(tokens)
-            self._ticker_client.set_mode(ZerodhaSubscriptionMode.FULL.value, tokens)
+            for state in self._states.values():
+                if state.contract is not None and state.contract.instrument_token in self._token_owner:
+                    state.state = FuturesVWAPRuntimeState.SUBSCRIBING
+                    state.message = f"Subscribing {state.contract.trading_symbol}"
+            try:
+                self._ticker_client.subscribe(tokens)
+                self._ticker_client.set_mode(ZerodhaSubscriptionMode.FULL.value, tokens)
+            except Exception as exc:
+                error = _safe_error(exc, self._redactions)
+                owners = dict(self._token_owner)
+                self._token_owner.clear()
+                for token, underlying in owners.items():
+                    state = self._states[underlying]
+                    state.subscription_active = False
+                    state.state = FuturesVWAPRuntimeState.ERROR
+                    state.last_error = error
+                    state.message = error
+                    self._mark_runtime_vwap_unavailable(underlying, error, contract=state.contract, state=state.state)
+                self._last_error = error
+                self._last_updated_at = _safe_now(self._clock)
+                return self.snapshot()
+            for underlying in set(self._token_owner.values()):
+                state = self._states[underlying]
+                state.subscription_active = True
+                if state.cumulative_volume > 0:
+                    state.state = FuturesVWAPRuntimeState.READY
+                    state.message = "Futures proxy VWAP ready"
+                else:
+                    state.state = FuturesVWAPRuntimeState.WAITING_FOR_TICK
+                    state.message = "Waiting for first futures tick"
+                self._mark_runtime_vwap_unavailable(
+                    underlying,
+                    "Waiting for first futures tick" if state.cumulative_volume == 0 else "Futures proxy VWAP ready",
+                    contract=state.contract,
+                    state=state.state,
+                    subscription_active=True,
+                )
         self._last_updated_at = _safe_now(self._clock)
         self._last_error = next((state.last_error for state in self._states.values() if state.last_error), None)
         return self.snapshot()
@@ -189,6 +273,7 @@ class DesktopFuturesVWAPRuntimeManager:
             return self.snapshot()
         if self._token_owner:
             self._ticker_client.unsubscribe(tuple(sorted(self._token_owner)))
+        self._stop_count += 1
         self._stopped = True
         self._last_updated_at = _safe_now(self._clock)
         return self.snapshot()
@@ -207,17 +292,22 @@ class DesktopFuturesVWAPRuntimeManager:
                 continue
             try:
                 price = _raw_price(raw_tick)
-                volume = _raw_volume(raw_tick)
+                cumulative_volume = _raw_volume(raw_tick)
+                volume = self._incremental_live_volume(state, cumulative_volume)
+                if volume <= 0:
+                    continue
                 timestamp = normalize_zerodha_tick_timestamp(raw_tick, clock=self._clock).timestamp
+                state.live_ticks += 1
+                state.last_source_price = price
+                state.last_updated_at = timestamp
+                state.state = FuturesVWAPRuntimeState.RECEIVING
+                state.message = "Receiving futures ticks"
                 self._process_vwap_tick(contract, price=price, volume=volume, timestamp=timestamp)
             except Exception as exc:
                 state.last_error = _safe_error(exc, self._redactions)
                 self._last_error = state.last_error
                 self._mark_runtime_vwap_unavailable(underlying, state.last_error)
                 continue
-            state.live_ticks += 1
-            state.last_source_price = price
-            state.last_updated_at = timestamp
             state.last_error = None
             self._last_updated_at = timestamp
 
@@ -228,6 +318,7 @@ class DesktopFuturesVWAPRuntimeManager:
             state = self._states[underlying]
             try:
                 raw_records = tuple(self._instrument_client.instruments(venue))
+                state.contracts_examined = len(raw_records)
                 candidates = []
                 for record in raw_records:
                     if not _is_requested_future_record(record, underlying, venue):
@@ -238,6 +329,7 @@ class DesktopFuturesVWAPRuntimeManager:
                         state.last_error = _rejected_contract_message(record, exc)
                 today = _trading_date(self._clock)
                 valid = tuple(contract for contract in candidates if contract.expiry >= today)
+                state.contracts_matched = len(valid)
                 if not valid:
                     state.last_error = state.last_error or f"No valid {underlying.value} futures contract was discovered."
                     continue
@@ -269,13 +361,17 @@ class DesktopFuturesVWAPRuntimeManager:
         for candle in result.candles:
             if candle.volume <= 0:
                 continue
+            state = self._states[contract.underlying]
+            accepted += 1
+            state.warmed_candles = accepted
+            state.historical_volume += candle.volume
+            state.last_cumulative_live_volume = state.historical_volume
             self._process_vwap_tick(
                 contract,
                 price=candle.close,
                 volume=candle.volume,
                 timestamp=candle.end_time,
             )
-            accepted += 1
         return accepted
 
     def _process_vwap_tick(
@@ -298,16 +394,48 @@ class DesktopFuturesVWAPRuntimeManager:
                 ask_price=0.0,
                 open_interest=0,
             ),
-            source_type="Futures",
+            source_type="Futures Proxy",
             source_exchange=contract.source_exchange,
             trading_symbol=contract.trading_symbol,
             instrument_token=contract.instrument_token,
             expiry=contract.expiry,
+            state="Ready",
+            message="Futures proxy VWAP ready",
+            subscription_active=self._states[contract.underlying].subscription_active,
+            historical_candles_loaded=self._states[contract.underlying].warmed_candles,
+            historical_volume=self._states[contract.underlying].historical_volume,
+            live_tick_count=self._states[contract.underlying].live_ticks,
+            last_live_tick=self._states[contract.underlying].last_updated_at,
         )
+        levels = runtime.vwap_engine.get_latest(contract.underlying)
+        if levels is not None:
+            state = self._states[contract.underlying]
+            state.cumulative_volume = levels.cumulative_volume
+            state.vwap_value = levels.vwap
 
-    def _mark_runtime_vwap_unavailable(self, underlying: Instrument, reason: str) -> None:
+    def _mark_runtime_vwap_unavailable(
+        self,
+        underlying: Instrument,
+        reason: str,
+        *,
+        contract: FuturesVWAPContract | None = None,
+        state: FuturesVWAPRuntimeState = FuturesVWAPRuntimeState.ERROR,
+        subscription_active: bool = False,
+    ) -> None:
         try:
-            self._runtime_for(underlying).mark_vwap_unavailable(reason)
+            source = contract or self._states[underlying].contract
+            self._runtime_for(underlying).mark_vwap_unavailable(
+                reason,
+                source_type="Futures Proxy" if source is not None else "-",
+                source_exchange=source.source_exchange if source is not None else "-",
+                trading_symbol=source.trading_symbol if source is not None else "-",
+                instrument_token=source.instrument_token if source is not None else None,
+                expiry=source.expiry if source is not None else None,
+                state=state.value,
+                message=reason,
+                subscription_active=subscription_active,
+                last_error=reason if state is FuturesVWAPRuntimeState.ERROR else None,
+            )
         except Exception:
             return
 
@@ -318,15 +446,42 @@ class DesktopFuturesVWAPRuntimeManager:
         state = self._states[underlying]
         return FuturesVWAPInstrumentSnapshot(
             underlying=underlying,
+            enabled=True,
             configured=True,
+            started=state.started,
+            state=state.state,
+            message=state.message,
+            analysis_instrument=underlying,
+            source_exchange=state.contract.source_exchange if state.contract is not None else "-",
+            source_trading_symbol=state.contract.trading_symbol if state.contract is not None else "-",
+            source_token=state.contract.instrument_token if state.contract is not None else None,
+            source_expiry=state.contract.expiry if state.contract is not None else None,
+            contracts_examined=state.contracts_examined,
+            contracts_matched=state.contracts_matched,
+            subscription_active=state.subscription_active,
             ready=state.ready,
             contract=state.contract,
             warmed_candles=state.warmed_candles,
+            historical_volume=state.historical_volume,
             live_ticks=state.live_ticks,
             last_source_price=state.last_source_price,
+            cumulative_volume=state.cumulative_volume,
+            vwap_ready=state.vwap_value is not None and state.cumulative_volume > 0,
+            vwap_value=state.vwap_value,
             last_updated_at=state.last_updated_at,
             last_error=state.last_error,
         )
+
+    def _incremental_live_volume(self, state: _MutableFuturesState, cumulative_volume: int) -> int:
+        previous = state.last_cumulative_live_volume
+        if previous is None:
+            state.last_cumulative_live_volume = cumulative_volume
+            return cumulative_volume
+        if cumulative_volume <= previous:
+            state.last_cumulative_live_volume = cumulative_volume
+            return 0
+        state.last_cumulative_live_volume = cumulative_volume
+        return cumulative_volume - previous
 
 
 def _is_requested_future_record(record: object, underlying: Instrument, venue: str) -> bool:
@@ -363,6 +518,10 @@ def _contract_from_record(record: Mapping[str, object], underlying: Instrument, 
 
 
 def _positive_int(value: object, field_name: str) -> int:
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit():
+            value = int(text)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{field_name} must be a positive integer")
     return value
@@ -408,6 +567,10 @@ def _raw_volume(row) -> int:
     value = row.get("volume_traded") if hasattr(row, "get") else None
     if value is None and hasattr(row, "get"):
         value = row.get("volume")
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit():
+            value = int(text)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError("volume must be a positive integer")
     return value
