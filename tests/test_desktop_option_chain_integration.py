@@ -158,6 +158,12 @@ def spot_tick(token, price):
     }
 
 
+def spot_tick_with_timestamp(token, price, timestamp):
+    row = spot_tick(token, price)
+    row["exchange_timestamp"] = timestamp
+    return row
+
+
 def option_tick(token, oi, price=10.0):
     return {
         "instrument_token": token,
@@ -276,6 +282,67 @@ def test_enabled_mode_resolves_expiry_atm_pairs_and_populates_dashboard_option_c
     assert ticker.submitted_orders == []
     assert view.runtime.broker_mode == "Dry Run"
     assert view.runtime.safety_mode == "Analysis Only"
+    dashboard.shutdown()
+
+
+def test_naive_zerodha_spot_timestamp_is_localized_and_option_chain_progresses():
+    naive = datetime(2026, 7, 15, 9, 36, 15)
+    dashboard, ticker = create_dashboard()
+    ticker.callbacks["on_connect"](None, {})
+
+    ticker.callbacks["on_ticks"](None, (spot_tick_with_timestamp(101, 25050, naive),))
+
+    option_runtime = dashboard.live_option_chain_runtime.snapshot()
+    nifty = option_runtime.instruments[0]
+    assert nifty.naive_timestamps_localized == 1
+    assert nifty.normalized_timestamp_count == 1
+    assert nifty.last_normalized_spot_timestamp == naive.replace(tzinfo=__import__("zoneinfo").ZoneInfo("Asia/Kolkata"))
+    assert nifty.last_normalized_spot_timestamp.hour == 9
+    assert nifty.state.value in {"Subscribing", "Receiving", "Waiting For Spot"}
+    assert (1000, 1001, 1002, 1003, 1004, 1005) in ticker.subscriptions
+    assert ticker.close_calls == 0
+    dashboard.shutdown()
+
+
+def test_malformed_sensex_timestamp_does_not_stop_nifty_or_disconnect_callback():
+    dashboard, ticker = create_dashboard()
+    ticker.callbacks["on_connect"](None, {})
+
+    ticker.callbacks["on_ticks"](
+        None,
+        (
+            spot_tick_with_timestamp(103, 81050, object()),
+            spot_tick_with_timestamp(101, 25050, datetime(2026, 7, 15, 9, 36, 15)),
+        ),
+    )
+
+    view = dashboard.main_window.refresh()
+    option_runtime = dashboard.live_option_chain_runtime.snapshot()
+    nifty = next(item for item in option_runtime.instruments if item.underlying is Instrument.NIFTY)
+    sensex = next(item for item in option_runtime.instruments if item.underlying is Instrument.SENSEX)
+    assert view.markets[0].last_price == 25050.0
+    assert nifty.option_token_count == 6
+    assert sensex.invalid_timestamp_rows == 1
+    assert "Rejected live tick: invalid timestamp" in sensex.last_timestamp_error
+    assert "desktop_access_token" not in sensex.last_timestamp_error
+    assert ticker.close_calls == 0
+    assert ticker.connect_calls == 1
+    dashboard.shutdown()
+
+
+def test_option_chain_callback_failure_is_isolated_from_spot_delivery(monkeypatch):
+    dashboard, ticker = create_dashboard()
+    ticker.callbacks["on_connect"](None, {})
+    manager = dashboard.live_option_chain_runtime
+    monkeypatch.setattr(manager, "deliver_spot_ticks", lambda rows: (_ for _ in ()).throw(RuntimeError("boom desktop_access_token")))
+
+    ticker.callbacks["on_ticks"](None, (spot_tick(101, 25050),))
+
+    view = dashboard.main_window.refresh()
+    assert view.markets[0].last_price == 25050.0
+    assert ticker.close_calls == 0
+    assert ticker.connect_calls == 1
+    assert "desktop_access_token" not in getattr(ticker, "_last_callback_error", "")
     dashboard.shutdown()
 
 

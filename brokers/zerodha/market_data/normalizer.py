@@ -4,20 +4,17 @@ Zerodha raw tick normalizer.
 
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import datetime
 from math import isfinite
-from zoneinfo import ZoneInfo
 
 from core.models.tick import Tick
 
 from brokers.zerodha.market_data.subscription_registry import ZerodhaSubscriptionRegistry
-
-
-IST = ZoneInfo("Asia/Kolkata")
+from brokers.zerodha.market_data.timestamps import default_zerodha_clock, normalize_zerodha_tick_timestamp
 
 
 def _default_clock() -> datetime:
-    return datetime.now(UTC)
+    return default_zerodha_clock()
 
 
 class ZerodhaTickNormalizer:
@@ -114,24 +111,7 @@ class ZerodhaTickNormalizer:
         return number
 
     def _timestamp(self, raw_tick: Mapping[str, object]) -> datetime:
-        value = raw_tick.get("exchange_timestamp") or raw_tick.get("last_trade_time")
-        if value is None:
-            value = self._clock()
-            if not isinstance(value, datetime):
-                raise TypeError("clock result must be a datetime")
-            if value.tzinfo is None or value.utcoffset() is None:
-                raise ValueError("clock result must be timezone-aware")
-            return value
-        if isinstance(value, datetime):
-            if value.tzinfo is None or value.utcoffset() is None:
-                return value.replace(tzinfo=IST)
-            return value
-        if isinstance(value, str):
-            parsed = datetime.fromisoformat(value)
-            if parsed.tzinfo is None or parsed.utcoffset() is None:
-                return parsed.replace(tzinfo=IST)
-            return parsed
-        raise TypeError("timestamp must be datetime or ISO-8601 string")
+        return normalize_zerodha_tick_timestamp(raw_tick, clock=self._clock).timestamp
 
     def _depth(self, value: object) -> tuple[float, float]:
         if not isinstance(value, Mapping):

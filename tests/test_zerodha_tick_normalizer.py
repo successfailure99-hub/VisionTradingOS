@@ -3,7 +3,8 @@ Tests for Zerodha raw tick normalization.
 """
 
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -102,15 +103,26 @@ def test_timestamp_priority_and_timezone_handling():
     naive = datetime(2026, 7, 12, 9, 15)
     aware = datetime(2026, 7, 12, 3, 45, tzinfo=UTC)
 
-    assert normalizer().normalize(raw_tick(exchange_timestamp=naive)).timestamp.tzinfo.key == "Asia/Kolkata"
+    localized = normalizer().normalize(raw_tick(exchange_timestamp=naive)).timestamp
+    assert localized == datetime(2026, 7, 12, 9, 15, tzinfo=ZoneInfo("Asia/Kolkata"))
+    assert localized.hour == 9
+    assert localized.minute == 15
     assert normalizer().normalize(raw_tick(exchange_timestamp=aware)).timestamp is aware
     assert normalizer().normalize(raw_tick(exchange_timestamp=None, last_trade_time=aware)).timestamp is aware
+    last_trade = normalizer().normalize(raw_tick(exchange_timestamp=None, last_trade_time=naive)).timestamp
+    assert last_trade == datetime(2026, 7, 12, 9, 15, tzinfo=ZoneInfo("Asia/Kolkata"))
     assert normalizer().normalize(raw_tick(exchange_timestamp=None, last_trade_time=None)).timestamp == NOW
 
 
 def test_naive_clock_result_rejected():
     with pytest.raises(ValueError):
         normalizer(clock=lambda: datetime(2026, 7, 12)).normalize(raw_tick(exchange_timestamp=None, last_trade_time=None))
+
+
+@pytest.mark.parametrize("bad_value", (object(), date(2026, 7, 12), True, "not-a-datetime", 123456))
+def test_invalid_timestamp_values_are_rejected_without_epoch_fallback(bad_value):
+    with pytest.raises((TypeError, ValueError)):
+        normalizer().normalize(raw_tick(exchange_timestamp=bad_value))
 
 
 def test_raw_payload_is_not_mutated_and_batch_order_preserved():

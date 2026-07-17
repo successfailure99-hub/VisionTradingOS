@@ -384,6 +384,8 @@ class _DesktopTickerRouter:
         self._spot_tokens = set(spot_tokens)
         self._option_chain_manager = None
         self._callbacks = {}
+        self._callback_error_count = 0
+        self._last_callback_error = None
 
     def set_option_chain_manager(self, manager: DesktopOptionChainRuntimeManager) -> None:
         self._option_chain_manager = manager
@@ -417,7 +419,10 @@ class _DesktopTickerRouter:
         spot_rows = tuple(row for row in rows if _tick_token(row) in self._spot_tokens)
         if self._option_chain_manager is not None:
             if spot_rows:
-                self._option_chain_manager.deliver_spot_ticks(spot_rows)
+                try:
+                    self._option_chain_manager.deliver_spot_ticks(spot_rows)
+                except Exception as exc:
+                    self._record_callback_error(exc)
             option_tokens = self._option_chain_manager.option_tokens()
         else:
             option_tokens = set()
@@ -425,10 +430,20 @@ class _DesktopTickerRouter:
         unknown_rows = tuple(row for row in rows if _tick_token(row) not in self._spot_tokens and _tick_token(row) not in option_tokens)
         spot_callback = self._callbacks.get("on_ticks")
         if spot_callback is not None and (spot_rows or unknown_rows):
-            spot_callback(ws, spot_rows + unknown_rows)
+            try:
+                spot_callback(ws, spot_rows + unknown_rows)
+            except Exception as exc:
+                self._record_callback_error(exc)
         if self._option_chain_manager is not None:
             if option_rows:
-                self._option_chain_manager.deliver_option_ticks(option_rows)
+                try:
+                    self._option_chain_manager.deliver_option_ticks(option_rows)
+                except Exception as exc:
+                    self._record_callback_error(exc)
+
+    def _record_callback_error(self, exc: Exception) -> None:
+        self._callback_error_count += 1
+        self._last_callback_error = f"{exc.__class__.__name__}: live tick callback isolated"
 
 
 def _tick_token(row) -> int | None:

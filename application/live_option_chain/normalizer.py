@@ -3,16 +3,13 @@ Raw Zerodha option tick normalizer.
 """
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from math import isfinite
 from numbers import Real
-from zoneinfo import ZoneInfo
 
 from application.live_option_chain.models import ZerodhaLiveOptionQuote
+from brokers.zerodha.market_data.timestamps import default_zerodha_clock, normalize_zerodha_tick_timestamp
 from brokers.zerodha.option_market_data import ZerodhaOptionSubscriptionEntry
-
-
-IST = ZoneInfo("Asia/Kolkata")
 
 
 class ZerodhaLiveOptionQuoteNormalizer:
@@ -24,7 +21,7 @@ class ZerodhaLiveOptionQuoteNormalizer:
         reject_crossed_market: bool = True,
     ):
         self._entries = _entry_map(entries)
-        self._clock = clock or (lambda: datetime.now(UTC))
+        self._clock = clock or default_zerodha_clock
         if type(reject_crossed_market) is not bool:
             raise TypeError("reject_crossed_market must be bool")
         self._reject_crossed_market = reject_crossed_market
@@ -112,23 +109,11 @@ def _non_negative_float(value, field_name: str) -> float:
 
 
 def _timestamp(raw_tick: Mapping[str, object], clock) -> datetime:
-    value = raw_tick.get("exchange_timestamp")
-    if value is None:
-        value = raw_tick.get("timestamp")
-    if value is None:
-        value = clock()
-    return _aware(_parse_datetime(value))
-
-
-def _parse_datetime(value) -> datetime:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        text = value.strip()
-        if text.endswith("Z"):
-            text = f"{text[:-1]}+00:00"
-        return datetime.fromisoformat(text)
-    raise ValueError("option tick timestamp must be datetime or ISO text")
+    return normalize_zerodha_tick_timestamp(
+        raw_tick,
+        clock=clock,
+        field_names=("exchange_timestamp", "timestamp"),
+    ).timestamp
 
 
 def _aware(value: datetime) -> datetime:

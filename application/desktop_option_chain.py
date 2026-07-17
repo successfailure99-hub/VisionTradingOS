@@ -5,7 +5,7 @@ Desktop live option-chain integration helpers.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import Enum
 from math import isfinite
 from numbers import Real
@@ -19,6 +19,11 @@ from application.live_option_chain_integration import LiveOptionChainIntegration
 from application.option_chain_analytics_integration import OptionChainAnalyticsIntegrationCoordinatorFactory
 from brokers.zerodha.instruments import KiteInstrumentClient
 from brokers.zerodha.market_data import ZerodhaInstrumentSubscription
+from brokers.zerodha.market_data.timestamps import (
+    ZerodhaTimestampNormalization,
+    default_zerodha_clock,
+    normalize_zerodha_tick_timestamp,
+)
 from brokers.zerodha.option_market_data import ZerodhaOptionMarketDataSubscriptionManagerFactory
 from brokers.zerodha.options import ZerodhaOptionContractDiscoveryService
 from core.enums.instrument import Instrument
@@ -87,6 +92,14 @@ class DesktopOptionChainInstrumentSnapshot:
     last_error: str | None
     state: DesktopOptionChainRuntimeState
     events: tuple[str, ...]
+    normalized_timestamp_count: int = 0
+    naive_timestamps_localized: int = 0
+    aware_timestamps_accepted: int = 0
+    clock_fallback_timestamps: int = 0
+    invalid_timestamp_rows: int = 0
+    last_timestamp_error: str | None = None
+    last_normalized_spot_timestamp: datetime | None = None
+    last_normalized_option_timestamp: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +115,12 @@ class DesktopOptionChainRuntimeSnapshot:
     last_updated_at: datetime | None
     last_error: str | None
     instruments: tuple[DesktopOptionChainInstrumentSnapshot, ...]
+    normalized_timestamp_count: int = 0
+    naive_timestamps_localized: int = 0
+    aware_timestamps_accepted: int = 0
+    clock_fallback_timestamps: int = 0
+    invalid_timestamp_rows: int = 0
+    last_timestamp_error: str | None = None
 
 
 @dataclass(slots=True)
@@ -123,6 +142,14 @@ class _MutableInstrumentState:
     last_error: str | None = None
     state: DesktopOptionChainRuntimeState = DesktopOptionChainRuntimeState.DISABLED
     events: list[str] = None
+    normalized_timestamp_count: int = 0
+    naive_timestamps_localized: int = 0
+    aware_timestamps_accepted: int = 0
+    clock_fallback_timestamps: int = 0
+    invalid_timestamp_rows: int = 0
+    last_timestamp_error: str | None = None
+    last_normalized_spot_timestamp: datetime | None = None
+    last_normalized_option_timestamp: datetime | None = None
 
     def __post_init__(self) -> None:
         if self.events is None:
@@ -203,6 +230,12 @@ class DesktopOptionChainRuntimeManager:
             last_updated_at=self._last_updated_at,
             last_error=self._last_error,
             instruments=instrument_snapshots,
+            normalized_timestamp_count=sum(item.normalized_timestamp_count for item in instrument_snapshots),
+            naive_timestamps_localized=sum(item.naive_timestamps_localized for item in instrument_snapshots),
+            aware_timestamps_accepted=sum(item.aware_timestamps_accepted for item in instrument_snapshots),
+            clock_fallback_timestamps=sum(item.clock_fallback_timestamps for item in instrument_snapshots),
+            invalid_timestamp_rows=sum(item.invalid_timestamp_rows for item in instrument_snapshots),
+            last_timestamp_error=next((item.last_timestamp_error for item in reversed(instrument_snapshots) if item.last_timestamp_error), None),
         )
 
     def start(self) -> DesktopOptionChainRuntimeSnapshot:
@@ -271,9 +304,15 @@ class DesktopOptionChainRuntimeManager:
             underlying = self._spot_by_token.get(token)
             if underlying not in SUPPORTED_OPTION_CHAIN_INSTRUMENTS:
                 continue
-            price = _raw_price(raw_tick)
-            timestamp = _raw_timestamp(raw_tick, self._clock)
             state = self._instrument_state[underlying]
+            try:
+                price = _raw_price(raw_tick)
+                timestamp_result = _raw_timestamp(raw_tick, self._clock)
+                timestamp = timestamp_result.timestamp
+                self._record_timestamp(state, timestamp_result, spot=True)
+            except Exception as exc:
+                self._record_tick_rejection(state, exc)
+                continue
             if state.state is DesktopOptionChainRuntimeState.ERROR and state.option_token_count == 0:
                 state.current_spot = price
                 state.last_spot_tick_at = timestamp
@@ -303,6 +342,15 @@ class DesktopOptionChainRuntimeManager:
         for raw_tick in tuple(raw_ticks):
             owner = self._token_owner.get(_raw_token(raw_tick))
             if owner is not None:
+                try:
+                    self._record_timestamp(
+                        self._instrument_state[owner],
+                        _raw_timestamp(raw_tick, self._clock),
+                        option=True,
+                    )
+                except Exception as exc:
+                    self._record_tick_rejection(self._instrument_state[owner], exc)
+                    continue
                 grouped.setdefault(owner, []).append(raw_tick)
         for underlying, rows in grouped.items():
             stack = self._stacks.get(underlying)
@@ -443,7 +491,44 @@ class DesktopOptionChainRuntimeManager:
             last_error=state.last_error,
             state=status,
             events=tuple(state.events[-8:]),
+            normalized_timestamp_count=state.normalized_timestamp_count,
+            naive_timestamps_localized=state.naive_timestamps_localized,
+            aware_timestamps_accepted=state.aware_timestamps_accepted,
+            clock_fallback_timestamps=state.clock_fallback_timestamps,
+            invalid_timestamp_rows=state.invalid_timestamp_rows,
+            last_timestamp_error=state.last_timestamp_error,
+            last_normalized_spot_timestamp=state.last_normalized_spot_timestamp,
+            last_normalized_option_timestamp=state.last_normalized_option_timestamp,
         )
+
+    def _record_timestamp(
+        self,
+        state: _MutableInstrumentState,
+        result: ZerodhaTimestampNormalization,
+        *,
+        spot: bool = False,
+        option: bool = False,
+    ) -> None:
+        state.normalized_timestamp_count += 1
+        if result.localized_naive:
+            state.naive_timestamps_localized += 1
+        if result.aware_input:
+            state.aware_timestamps_accepted += 1
+        if result.clock_fallback:
+            state.clock_fallback_timestamps += 1
+        if spot:
+            state.last_normalized_spot_timestamp = result.timestamp
+        if option:
+            state.last_normalized_option_timestamp = result.timestamp
+
+    def _record_tick_rejection(self, state: _MutableInstrumentState, exc: Exception) -> None:
+        error = _safe_error(exc, self._redactions)
+        message = f"Rejected live tick: invalid timestamp ({error})"
+        state.invalid_timestamp_rows += 1
+        state.last_timestamp_error = message
+        state.last_error = message
+        self._last_error = message
+        state.log(self._clock, message)
 
 
 def create_instrument_client(*, api_key: str, access_token: str):
@@ -469,13 +554,12 @@ def _raw_price(raw_tick) -> float:
     return price
 
 
-def _raw_timestamp(raw_tick, clock) -> datetime:
-    value = raw_tick.get("exchange_timestamp") if hasattr(raw_tick, "get") else None
-    if value is None and hasattr(raw_tick, "get"):
-        value = raw_tick.get("timestamp")
-    if value is None:
-        value = clock()
-    return _aware(value, "tick timestamp")
+def _raw_timestamp(raw_tick, clock) -> ZerodhaTimestampNormalization:
+    return normalize_zerodha_tick_timestamp(
+        raw_tick,
+        clock=clock,
+        field_names=("exchange_timestamp", "last_trade_time", "timestamp"),
+    )
 
 
 def _aware(value: datetime, field_name: str) -> datetime:
@@ -503,4 +587,4 @@ def _safe_now(clock) -> datetime | None:
 
 
 def _default_clock() -> datetime:
-    return datetime.now(UTC)
+    return default_zerodha_clock()
