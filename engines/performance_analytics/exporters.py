@@ -155,6 +155,15 @@ def _cell(value):
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, tuple):
-        return " | ".join(str(item) for item in value)
-    return getattr(value, "value", value)
+        return _safe_text(" | ".join(str(item) for item in value))
+    raw = getattr(value, "value", value)
+    if isinstance(raw, str):
+        return _safe_text(raw)
+    return raw
 
+
+def _safe_text(value: str) -> str:
+    text = value
+    if text.startswith(("=", "+", "-", "@", "*", "\t", "\r", "\n")):
+        return "'" + text
+    return text

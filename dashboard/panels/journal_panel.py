@@ -6,7 +6,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGroupBox, QVBoxLayout
 
 from dashboard import formatters
+from dashboard.models import DashboardAnalyticsView
 from dashboard.models import DashboardJournalView
+from dashboard.panels.analytics_panel import AnalyticsPanel
 from dashboard.widgets import FieldGrid, StatusBadge
 
 
@@ -49,6 +51,8 @@ class JournalPanel(QGroupBox):
         grid.layout().replaceWidget(grid.labels["Status"], status)
         grid.labels["Status"].deleteLater()
         self._labels["Status"] = status
+        self._analytics_panel = AnalyticsPanel()
+        layout.addWidget(self._analytics_panel)
 
     def render(self, view: DashboardJournalView) -> None:
         self._labels["Status"].set_status_text(view.status)
@@ -72,3 +76,6 @@ class JournalPanel(QGroupBox):
         self._labels["Losses"].setText(formatters.integer(view.losses))
         self._labels["Win Rate"].setText(formatters.ratio(view.win_rate))
         self._labels["Profit Factor"].setText(formatters.ratio(view.profit_factor))
+
+    def render_analytics(self, view: DashboardAnalyticsView) -> None:
+        self._analytics_panel.render(view)

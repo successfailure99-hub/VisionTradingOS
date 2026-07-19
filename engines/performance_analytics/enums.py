@@ -34,4 +34,3 @@ class AnalyticsRecordStatus(Enum):
     DUPLICATE = "duplicate"
     CONFLICT = "conflict"
     DISABLED = "disabled"
-

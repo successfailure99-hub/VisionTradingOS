@@ -37,4 +37,3 @@ def _positive_real(value: Real, name: str) -> float:
     if not isfinite(number) or number <= 0.0:
         raise ValueError(f"{name} must be positive finite number")
     return number
-
