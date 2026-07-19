@@ -21,6 +21,7 @@ from application.lifecycle_manager import ApplicationLifecycleManager
 from application.live_market_data import LiveMarketDataRuntime
 from dashboard.models import DashboardView
 from dashboard.panels.ai_panel import AIPanel
+from dashboard.panels.backtest_panel import BacktestPanel
 from dashboard.panels.journal_panel import JournalPanel
 from dashboard.panels.live_market_data_panel import LiveMarketDataPanel
 from dashboard.panels.market_panel import MarketPanel
@@ -46,6 +47,7 @@ class VisionMainWindow(QMainWindow):
         live_market_data_runtime: LiveMarketDataRuntime | None = None,
         live_option_chain_runtime=None,
         historical_replay_driver=None,
+        deterministic_backtest_driver=None,
         refresh_interval_ms: int = 500,
         clock=None,
         parent=None,
@@ -61,10 +63,12 @@ class VisionMainWindow(QMainWindow):
         self._live_market_data_runtime = live_market_data_runtime
         self._live_option_chain_runtime = live_option_chain_runtime
         self._historical_replay_driver = historical_replay_driver
+        self._deterministic_backtest_driver = deterministic_backtest_driver
         self._current_view: DashboardView | None = None
         self._clock = clock or _default_clock
         self._runtime_panel = RuntimePanel()
         self._live_market_data_panel = LiveMarketDataPanel()
+        self._backtest_panel = BacktestPanel(command_target=lifecycle.orchestrator)
         self._main_tabs = QTabWidget()
         self._tabs = QTabWidget()
         self._system_tabs = QTabWidget()
@@ -90,6 +94,8 @@ class VisionMainWindow(QMainWindow):
     def refresh(self) -> DashboardView:
         if self._historical_replay_driver is not None:
             self._historical_replay_driver.poll()
+        if self._deterministic_backtest_driver is not None:
+            self._deterministic_backtest_driver.poll()
         lifecycle_snapshot = self._lifecycle.snapshot()
         live_snapshot = (
             self._live_market_data_runtime.snapshot()
@@ -114,6 +120,7 @@ class VisionMainWindow(QMainWindow):
     def render(self, view: DashboardView) -> None:
         self._runtime_panel.render(view.runtime)
         self._live_market_data_panel.render(view.live_market_data)
+        self._backtest_panel.render(view.backtest)
         self._header_status.set_status_text(view.runtime.application_status)
         self._header_mode.set_status_text(view.runtime.safety_mode)
         self._sync_tabs(view)
@@ -163,6 +170,7 @@ class VisionMainWindow(QMainWindow):
         system_layout.setContentsMargins(0, 0, 0, 0)
         self._system_tabs.addTab(self._scroll_area(self._runtime_panel), "Runtime")
         self._system_tabs.addTab(self._scroll_area(self._live_market_data_panel), "Live Feed")
+        self._system_tabs.addTab(self._scroll_area(self._backtest_panel), "Backtest")
         system_layout.addWidget(self._system_tabs, 1)
 
         self._main_tabs.addTab(trading, "Trading")

@@ -225,3 +225,19 @@ HISTORICAL_REPLAY_PROGRESS_UPDATED = "historical_replay_progress_updated"
 HISTORICAL_REPLAY_COMPLETED = "historical_replay_completed"
 HISTORICAL_REPLAY_STOPPED = "historical_replay_stopped"
 HISTORICAL_REPLAY_FAILED = "historical_replay_failed"
+
+# ==================================================
+# Deterministic Backtest Events
+# ==================================================
+
+BACKTEST_READY = "backtest_ready"
+BACKTEST_STARTED = "backtest_started"
+BACKTEST_SESSION_STARTED = "backtest_session_started"
+BACKTEST_SESSION_COMPLETED = "backtest_session_completed"
+BACKTEST_SESSION_FAILED = "backtest_session_failed"
+BACKTEST_PAUSED = "backtest_paused"
+BACKTEST_RESUMED = "backtest_resumed"
+BACKTEST_STOPPED = "backtest_stopped"
+BACKTEST_COMPLETED = "backtest_completed"
+BACKTEST_FAILED = "backtest_failed"
+BACKTEST_UPDATED = "backtest_updated"

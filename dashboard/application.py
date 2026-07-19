@@ -19,6 +19,7 @@ class DashboardApplication:
         live_option_chain_runtime=None,
         live_futures_vwap_runtime=None,
         historical_replay_driver=None,
+        deterministic_backtest_driver=None,
         argv: list[str] | None = None,
         refresh_interval_ms: int = 500,
         clock=None,
@@ -32,12 +33,14 @@ class DashboardApplication:
         self._live_option_chain_runtime = live_option_chain_runtime
         self._live_futures_vwap_runtime = live_futures_vwap_runtime
         self._historical_replay_driver = historical_replay_driver
+        self._deterministic_backtest_driver = deterministic_backtest_driver
         self._qt_app = QApplication.instance() or QApplication(argv or [])
         self._main_window = VisionMainWindow(
             lifecycle,
             live_market_data_runtime=live_market_data_runtime,
             live_option_chain_runtime=live_option_chain_runtime,
             historical_replay_driver=historical_replay_driver,
+            deterministic_backtest_driver=deterministic_backtest_driver,
             refresh_interval_ms=refresh_interval_ms,
             clock=clock,
         )
@@ -66,6 +69,10 @@ class DashboardApplication:
     @property
     def historical_replay_driver(self):
         return self._historical_replay_driver
+
+    @property
+    def deterministic_backtest_driver(self):
+        return self._deterministic_backtest_driver
 
     def run(self) -> int:
         if self._lifecycle.status is not RuntimeStatus.RUNNING:

@@ -16,6 +16,8 @@ from engines.order_management.models import OrderCommand, OrderRequest, OrderSta
 from engines.position.models import PositionFill, PositionMark
 from engines.risk.models import AccountRiskState, RiskPolicy, TradeRiskPlan
 from engines.performance_analytics.engine import PerformanceAnalyticsEngine
+from engines.deterministic_backtest.engine import DeterministicBacktestEngine
+from engines.historical_market_replay import ReplayConfiguration, ReplayMode
 from engines.historical_market_replay.engine import HistoricalMarketReplayEngine
 from engines.live_market_validation.engine import LiveMarketValidationEngine
 from engines.trade_journal.models import TradeJournalSnapshot
@@ -55,9 +57,26 @@ class ApplicationOrchestrator:
             event_bus,
             configuration=self._configuration.live_validation_configuration,
         )
+        replay_configuration = self._configuration.historical_replay_configuration
+        if (
+            self._configuration.deterministic_backtest_configuration is not None
+            and self._configuration.deterministic_backtest_configuration.enabled
+            and (replay_configuration is None or not replay_configuration.enabled)
+        ):
+            backtest = self._configuration.deterministic_backtest_configuration
+            replay_configuration = ReplayConfiguration(
+                enabled=backtest.enabled,
+                mode=ReplayMode.ACCELERATED if backtest.enabled else ReplayMode.OFF,
+                source_path=backtest.session_paths[0] if backtest.session_paths else None,
+                speed_multiplier=1000.0,
+                output_dir=backtest.output_directory / "replay",
+                max_findings=backtest.max_findings,
+                auto_load=False,
+                auto_start=False,
+            )
         self.historical_replay_engine = HistoricalMarketReplayEngine(
             event_bus,
-            configuration=self._configuration.historical_replay_configuration,
+            configuration=replay_configuration,
         )
         self.broker_adapter = broker_adapter or ZerodhaBrokerAdapter(mode=BrokerExecutionMode.DRY_RUN)
         if self.broker_adapter.mode is not BrokerExecutionMode.DRY_RUN:
@@ -66,6 +85,11 @@ class ApplicationOrchestrator:
             instrument: SymbolRuntime(event_bus, self._configuration, instrument)
             for instrument in self._configuration.instruments
         }
+        self.deterministic_backtest_engine = DeterministicBacktestEngine(
+            event_bus,
+            configuration=self._configuration.deterministic_backtest_configuration,
+            orchestrator=self,
+        )
 
     @property
     def configuration(self) -> RuntimeConfiguration:
@@ -221,6 +245,7 @@ class ApplicationOrchestrator:
         self.performance_analytics_engine.reset(clear_persistent_data=False)
         self.live_validation_engine.reset(clear_persistent_data=False)
         self.historical_replay_engine.reset(clear_persistent_data=False)
+        self.deterministic_backtest_engine.reset()
         for runtime in self._runtimes.values():
             runtime.reset()
             if previous_status is RuntimeStatus.RUNNING:
@@ -229,6 +254,47 @@ class ApplicationOrchestrator:
                 runtime.stop()
         self._status = previous_status
         return self.snapshot()
+
+    def reset_backtest_run_state(self) -> OrchestratorSnapshot:
+        previous_status = self._status
+        self.market_data_engine.clear()
+        self.trade_journal_engine.reset()
+        self.performance_analytics_engine.reset(clear_persistent_data=False)
+        self.live_validation_engine.reset(clear_persistent_data=False)
+        self.historical_replay_engine.reset(clear_persistent_data=False)
+        for runtime in self._runtimes.values():
+            runtime.reset()
+            if previous_status is RuntimeStatus.RUNNING:
+                runtime.start()
+            elif previous_status is RuntimeStatus.STOPPED:
+                runtime.stop()
+        self._status = previous_status
+        return self.snapshot()
+
+    def prepare_backtest(self):
+        return self._run_backtest_command("prepare")
+
+    def start_backtest(self):
+        return self._run_backtest_command("start")
+
+    def pause_backtest(self):
+        return self._run_backtest_command("pause")
+
+    def resume_backtest(self):
+        return self._run_backtest_command("resume")
+
+    def stop_backtest(self):
+        return self._run_backtest_command("stop")
+
+    def reset_backtest(self):
+        return self._run_backtest_command("reset")
+
+    def _run_backtest_command(self, command_name: str):
+        command = getattr(self.deterministic_backtest_engine, command_name)
+        try:
+            return command()
+        except Exception as exc:
+            return self.deterministic_backtest_engine.record_command_error(_safe_error(exc))
 
     def snapshot(self) -> OrchestratorSnapshot:
         return OrchestratorSnapshot(
@@ -248,6 +314,7 @@ class ApplicationOrchestrator:
             performance_analytics=self.performance_analytics_engine.snapshot(),
             live_validation=self.live_validation_engine.snapshot(),
             historical_replay=self.historical_replay_engine.snapshot(),
+            deterministic_backtest=self.deterministic_backtest_engine.snapshot(),
         )
 
     def _runtime_for_core_instrument(self, instrument: Instrument) -> SymbolRuntime:
@@ -283,3 +350,10 @@ class ApplicationOrchestrator:
     def _require_running(self) -> None:
         if self._status is not RuntimeStatus.RUNNING:
             raise RuntimeError("ApplicationOrchestrator processing requires RUNNING status.")
+
+
+def _safe_error(exc) -> str:
+    text = str(exc).strip() or exc.__class__.__name__
+    for token in ("api_key", "api_secret", "access_token", "request_token"):
+        text = text.replace(token, "[REDACTED]")
+    return text[:500]

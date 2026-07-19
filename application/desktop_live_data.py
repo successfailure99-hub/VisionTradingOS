@@ -17,6 +17,7 @@ from application.lifecycle_manager import ApplicationLifecycleManager
 from application.live_market_data import LiveMarketDataConfiguration, LiveMarketDataRuntime, LiveMarketDataRuntimeFactory
 from application.live_market_data.enums import LiveMarketDataRuntimeStatus
 from application.models import RuntimeConfiguration
+from application.deterministic_backtest_driver import DeterministicBacktestDriver
 from application.historical_replay_driver import HistoricalReplayDriver
 from application.reference_data_bootstrap import run_reference_data_bootstrap
 from application.futures_vwap import DesktopFuturesVWAPRuntimeManager
@@ -24,6 +25,7 @@ from engines.risk.models import InstrumentLotSize, RiskConfiguration
 from engines.paper_trading import PaperIntrabarPolicy, PaperTradingConfiguration
 from engines.performance_analytics import PerformanceAnalyticsConfiguration
 from engines.historical_market_replay import ReplayConfiguration, ReplayLifecycleState, ReplayMode
+from engines.deterministic_backtest import BacktestConfiguration, BacktestLifecycleState, BacktestMode
 from application.desktop_option_chain import (
     DesktopOptionChainConfigurationError,
     DesktopOptionChainRuntimeManager,
@@ -108,6 +110,15 @@ ENV_HISTORICAL_REPLAY_OUTPUT_DIRECTORY = "HISTORICAL_REPLAY_OUTPUT_DIRECTORY"
 ENV_HISTORICAL_REPLAY_MAX_FINDINGS = "HISTORICAL_REPLAY_MAX_FINDINGS"
 ENV_HISTORICAL_REPLAY_MAX_RECENT_IDENTITIES = "HISTORICAL_REPLAY_MAX_RECENT_IDENTITIES"
 ENV_HISTORICAL_REPLAY_MAX_LATENCY_SAMPLES = "HISTORICAL_REPLAY_MAX_LATENCY_SAMPLES"
+ENV_BACKTEST_ENABLED = "BACKTEST_ENABLED"
+ENV_BACKTEST_MODE = "BACKTEST_MODE"
+ENV_BACKTEST_SESSION_PATHS = "BACKTEST_SESSION_PATHS"
+ENV_BACKTEST_OUTPUT_DIRECTORY = "BACKTEST_OUTPUT_DIRECTORY"
+ENV_BACKTEST_MAX_SESSIONS = "BACKTEST_MAX_SESSIONS"
+ENV_BACKTEST_MAX_FINDINGS = "BACKTEST_MAX_FINDINGS"
+ENV_BACKTEST_MAX_SESSION_RESULTS = "BACKTEST_MAX_SESSION_RESULTS"
+ENV_BACKTEST_REPRODUCIBILITY_CHECK = "BACKTEST_REPRODUCIBILITY_CHECK"
+ENV_BACKTEST_STOP_ON_SESSION_FAILURE = "BACKTEST_STOP_ON_SESSION_FAILURE"
 
 INSTRUMENT_TOKEN_ENV = (
     (Instrument.NIFTY, "NIFTY_INSTRUMENT_TOKEN", Exchange.NSE),
@@ -131,6 +142,7 @@ class DesktopLiveDataSettings:
     paper_trading_configuration: PaperTradingConfiguration
     performance_analytics_configuration: PerformanceAnalyticsConfiguration
     historical_replay_configuration: ReplayConfiguration
+    backtest_configuration: BacktestConfiguration
 
     def __repr__(self) -> str:
         return (
@@ -159,6 +171,7 @@ def load_desktop_live_configuration(
     paper_trading_configuration = _load_paper_trading_configuration(environ)
     performance_analytics_configuration = _load_performance_analytics_configuration(environ)
     historical_replay_configuration = _load_historical_replay_configuration(environ)
+    backtest_configuration = _load_backtest_configuration(environ)
     futures_vwap_enabled = _parse_bool(
         environ.get(ENV_LIVE_FUTURES_VWAP_ENABLED, "true"),
         ENV_LIVE_FUTURES_VWAP_ENABLED,
@@ -167,8 +180,8 @@ def load_desktop_live_configuration(
         environ.get(ENV_REFERENCE_DATA_BOOTSTRAP_ENABLED, "true"),
         ENV_REFERENCE_DATA_BOOTSTRAP_ENABLED,
     )
-    if enabled and auto_connect and historical_replay_configuration.auto_start:
-        raise DesktopLiveDataConfigurationError("HISTORICAL_REPLAY_AUTO_START cannot be combined with LIVE_MARKET_DATA_AUTO_CONNECT")
+    if enabled and auto_connect and (historical_replay_configuration.auto_start or backtest_configuration.enabled):
+        raise DesktopLiveDataConfigurationError("LIVE_MARKET_DATA_AUTO_CONNECT cannot be combined with active replay or backtest configuration")
     if not enabled:
         if option_chain.enabled:
             raise DesktopLiveDataConfigurationError("LIVE_OPTION_CHAIN_ENABLED requires LIVE_MARKET_DATA_ENABLED")
@@ -186,6 +199,7 @@ def load_desktop_live_configuration(
             paper_trading_configuration=paper_trading_configuration,
             performance_analytics_configuration=performance_analytics_configuration,
             historical_replay_configuration=historical_replay_configuration,
+            backtest_configuration=backtest_configuration,
         )
 
     missing = [
@@ -226,6 +240,7 @@ def load_desktop_live_configuration(
         paper_trading_configuration=paper_trading_configuration,
         performance_analytics_configuration=performance_analytics_configuration,
         historical_replay_configuration=historical_replay_configuration,
+        backtest_configuration=backtest_configuration,
     )
 
 
@@ -280,7 +295,9 @@ def create_desktop_live_runtime(
     if not lifecycle.is_running():
         lifecycle.start()
     if settings.auto_connect and _replay_is_active(lifecycle):
-        raise DesktopLiveDataConfigurationError("LIVE_MARKET_DATA_AUTO_CONNECT is blocked while historical replay is active")
+        raise DesktopLiveDataConfigurationError("LIVE_MARKET_DATA_AUTO_CONNECT is blocked because historical replay is active")
+    if settings.auto_connect and _backtest_is_active(lifecycle):
+        raise DesktopLiveDataConfigurationError("LIVE_MARKET_DATA_AUTO_CONNECT is blocked because deterministic backtest is active")
     configuration = LiveMarketDataConfiguration(
         api_key=settings.api_key,
         subscriptions=settings.subscriptions,
@@ -326,6 +343,7 @@ def create_dashboard_application(
             paper_trading_configuration=settings.paper_trading_configuration,
             performance_analytics_configuration=settings.performance_analytics_configuration,
             historical_replay_configuration=settings.historical_replay_configuration,
+            deterministic_backtest_configuration=settings.backtest_configuration,
         )
     ).create_application()
     session_manager = create_zerodha_session_manager(
@@ -363,6 +381,7 @@ def create_dashboard_application(
         and settings.historical_replay_configuration.mode is not ReplayMode.STEP
         else None
     )
+    backtest_driver = DeterministicBacktestDriver(lifecycle.orchestrator.deterministic_backtest_engine) if settings.backtest_configuration.enabled else None
     if settings.reference_data_bootstrap_enabled and settings.enabled and session_manager is not None:
         _try_reference_data_bootstrap(
             lifecycle=lifecycle,
@@ -406,6 +425,7 @@ def create_dashboard_application(
         live_option_chain_runtime=option_chain_manager,
         live_futures_vwap_runtime=futures_vwap_manager,
         historical_replay_driver=historical_replay_driver,
+        deterministic_backtest_driver=backtest_driver,
         clock=clock,
     )
 
@@ -638,6 +658,36 @@ def _load_historical_replay_configuration(environ: Mapping[str, str]) -> ReplayC
         raise DesktopLiveDataConfigurationError(_safe_configuration_message(exc)) from exc
 
 
+def _load_backtest_configuration(environ: Mapping[str, str]) -> BacktestConfiguration:
+    enabled = _parse_bool(environ.get(ENV_BACKTEST_ENABLED, "false"), ENV_BACKTEST_ENABLED)
+    mode_text = _text(environ.get(ENV_BACKTEST_MODE, "SINGLE_SESSION")).upper()
+    try:
+        mode = BacktestMode[mode_text]
+    except Exception as exc:
+        raise DesktopLiveDataConfigurationError("BACKTEST_MODE must be SINGLE_SESSION or BATCH") from exc
+    session_paths = tuple(
+        Path(item.strip())
+        for item in _text(environ.get(ENV_BACKTEST_SESSION_PATHS, "")).split(";")
+        if item.strip()
+    )
+    try:
+        return BacktestConfiguration(
+            enabled=enabled,
+            mode=mode,
+            session_paths=session_paths,
+            output_directory=_text(environ.get(ENV_BACKTEST_OUTPUT_DIRECTORY, "")) or "logs/backtests",
+            max_sessions=_parse_bounded_int(environ.get(ENV_BACKTEST_MAX_SESSIONS, "100"), ENV_BACKTEST_MAX_SESSIONS, minimum=1, maximum=10000),
+            max_findings=_parse_bounded_int(environ.get(ENV_BACKTEST_MAX_FINDINGS, "500"), ENV_BACKTEST_MAX_FINDINGS, minimum=1, maximum=100000),
+            max_session_results=_parse_bounded_int(environ.get(ENV_BACKTEST_MAX_SESSION_RESULTS, "100"), ENV_BACKTEST_MAX_SESSION_RESULTS, minimum=1, maximum=10000),
+            reproducibility_check_enabled=_parse_bool(environ.get(ENV_BACKTEST_REPRODUCIBILITY_CHECK, "false"), ENV_BACKTEST_REPRODUCIBILITY_CHECK),
+            stop_on_session_failure=_parse_bool(environ.get(ENV_BACKTEST_STOP_ON_SESSION_FAILURE, "true"), ENV_BACKTEST_STOP_ON_SESSION_FAILURE),
+        )
+    except DesktopLiveDataConfigurationError:
+        raise
+    except Exception as exc:
+        raise DesktopLiveDataConfigurationError(_safe_configuration_message(exc)) from exc
+
+
 def _configure_historical_replay(
     *,
     lifecycle: ApplicationLifecycleManager,
@@ -683,6 +733,11 @@ def _live_market_data_active(runtime: LiveMarketDataRuntime | None) -> bool:
 def _replay_is_active(lifecycle: ApplicationLifecycleManager) -> bool:
     state = lifecycle.orchestrator.historical_replay_engine.snapshot().lifecycle_state
     return state in {ReplayLifecycleState.RUNNING, ReplayLifecycleState.PAUSED}
+
+
+def _backtest_is_active(lifecycle: ApplicationLifecycleManager) -> bool:
+    state = lifecycle.orchestrator.deterministic_backtest_engine.snapshot().lifecycle_state
+    return state in {BacktestLifecycleState.RUNNING, BacktestLifecycleState.PAUSED}
 
 
 def _safe_configuration_message(exc: Exception) -> str:
