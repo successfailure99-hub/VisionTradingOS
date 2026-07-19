@@ -23,6 +23,7 @@ from engines.performance_analytics import (
     PaperTradeJournalRepository,
     ReviewClassification,
 )
+import engines.performance_analytics.repository as repository_module
 from engines.strategy.enums import TradeDirection
 
 
@@ -161,6 +162,82 @@ def test_repository_persistence_duplicates_conflicts_and_corrupt_lines(tmp_path)
     assert restarted.diagnostics.load_failures == 2
     assert restarted.records(instrument="NIFTY") == (first,)
     assert restarted.latest(1) == (first,)
+
+
+def test_repository_retries_partial_writes_until_complete_jsonl(monkeypatch, tmp_path):
+    original_write = repository_module.os.write
+    chunks = []
+    limits = [9, 13]
+
+    def partial_write(fd, payload):
+        data = bytes(payload)
+        size = limits.pop(0) if limits else len(data)
+        chunk = data[:size]
+        chunks.append(chunk)
+        return original_write(fd, chunk)
+
+    monkeypatch.setattr(repository_module.os, "write", partial_write)
+    path = tmp_path / "journal.jsonl"
+    repo = PaperTradeJournalRepository(path=path)
+    item = record("partial", 100)
+
+    assert repo.add(item).status is AnalyticsRecordStatus.ACCEPTED
+    assert repo.diagnostics.persistence_writes == 1
+    assert len(chunks) >= 3
+    payload = path.read_bytes()
+    assert payload.replace(b"\r\n", b"\n") == b"".join(chunks).replace(b"\r\n", b"\n")
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["record"]["trade_id"] == "partial"
+    assert PaperTradeJournalRepository(path=path).load() == (item,)
+
+
+def test_repository_retries_interrupted_write(monkeypatch, tmp_path):
+    original_write = repository_module.os.write
+    calls = {"count": 0}
+
+    def interrupted_once(fd, payload):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise InterruptedError()
+        return original_write(fd, payload)
+
+    monkeypatch.setattr(repository_module.os, "write", interrupted_once)
+    repo = PaperTradeJournalRepository(path=tmp_path / "journal.jsonl")
+
+    assert repo.add(record("interrupted", 100)).status is AnalyticsRecordStatus.ACCEPTED
+    assert calls["count"] == 2
+    assert repo.diagnostics.persistence_writes == 1
+
+
+def test_repository_zero_byte_write_fails_without_accepting_record(monkeypatch, tmp_path):
+    monkeypatch.setattr(repository_module.os, "write", lambda fd, payload: 0)
+    repo = PaperTradeJournalRepository(path=tmp_path / "journal.jsonl")
+
+    with pytest.raises(OSError):
+        repo.add(record("zero-write", 100))
+
+    assert repo.records() == ()
+    assert repo.diagnostics.persistence_writes == 0
+    assert repo.diagnostics.persistence_failures == 1
+
+
+def test_repository_write_failure_does_not_persist_or_store_trade(monkeypatch, tmp_path):
+    def failing_write(fd, payload):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(repository_module.os, "write", failing_write)
+    path = tmp_path / "journal.jsonl"
+    repo = PaperTradeJournalRepository(path=path)
+
+    with pytest.raises(OSError):
+        repo.add(record("failed", 100))
+
+    assert repo.records() == ()
+    assert repo.diagnostics.persistence_writes == 0
+    assert repo.diagnostics.persistence_failures == 1
+    assert path.read_bytes() == b""
+    assert PaperTradeJournalRepository(path=path).load() == ()
 
 
 def test_engine_event_ingestion_idempotent_reviews_replay_and_exports(tmp_path):

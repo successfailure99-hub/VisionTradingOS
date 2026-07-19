@@ -67,14 +67,13 @@ class PaperTradeJournalRepository:
             if existing != record:
                 return JournalRecordResult(AnalyticsRecordStatus.CONFLICT, existing, "Conflicting duplicate trade_id rejected.")
             return JournalRecordResult(AnalyticsRecordStatus.DUPLICATE, existing, "Duplicate trade ignored.")
-        self._records[record.trade_id] = record
-        self._order = tuple(sorted(self._records, key=lambda trade_id: (self._records[trade_id].exit_time, trade_id)))
         if persist and self._persistence_enabled and self._path is not None:
             try:
                 self._append(record)
             except Exception:
                 self._write_failures += 1
                 raise
+        self._store(record)
         return JournalRecordResult(AnalyticsRecordStatus.ACCEPTED, record, "Trade accepted.")
 
     def records(self, *, instrument=None, start_date=None, end_date=None, direction=None, setup=None) -> tuple[PaperTradeRecord, ...]:
@@ -108,6 +107,10 @@ class PaperTradeJournalRepository:
         if clear_persistent_data and self._path is not None and self._path.exists():
             self._path.unlink()
 
+    def _store(self, record: PaperTradeRecord) -> None:
+        self._records[record.trade_id] = record
+        self._order = tuple(sorted(self._records, key=lambda trade_id: (self._records[trade_id].exit_time, trade_id)))
+
     def _append(self, record: PaperTradeRecord) -> None:
         if self._path is None:
             return
@@ -119,11 +122,23 @@ class PaperTradeJournalRepository:
         flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
         fd = os.open(self._path, flags, 0o644)
         try:
-            os.write(fd, line)
+            _write_all(fd, line)
             os.fsync(fd)
         finally:
             os.close(fd)
         self._writes += 1
+
+
+def _write_all(fd: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        try:
+            written = os.write(fd, view)
+        except InterruptedError:
+            continue
+        if written <= 0:
+            raise OSError("Unable to append performance journal record.")
+        view = view[written:]
 
 
 def _record_to_payload(record: PaperTradeRecord) -> dict[str, object]:
