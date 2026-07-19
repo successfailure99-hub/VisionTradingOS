@@ -68,8 +68,7 @@ class VisionMainWindow(QMainWindow):
         self._clock = clock or _default_clock
         self._runtime_panel = RuntimePanel()
         self._live_market_data_panel = LiveMarketDataPanel()
-        backtest_engine = getattr(lifecycle.orchestrator, "deterministic_backtest_engine", None)
-        self._backtest_panel = BacktestPanel(command_target=backtest_engine)
+        self._backtest_panel = BacktestPanel(command_target=lifecycle.orchestrator)
         self._main_tabs = QTabWidget()
         self._tabs = QTabWidget()
         self._system_tabs = QTabWidget()

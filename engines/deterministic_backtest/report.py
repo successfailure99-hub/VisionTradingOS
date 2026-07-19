@@ -41,6 +41,20 @@ class BacktestReportRepository:
         self._writes += 1
         return path
 
+    def read_result_digest(self, deterministic_run_fingerprint: str) -> str | None:
+        if not isinstance(deterministic_run_fingerprint, str) or not deterministic_run_fingerprint.strip():
+            return None
+        path = self._output_directory / f"{deterministic_run_fingerprint[:16]}.json"
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            result = payload.get("result", {})
+            digest = result.get("result_digest")
+        except Exception:
+            return None
+        return digest if isinstance(digest, str) and digest.strip() else None
+
 
 def with_report_path(result: BacktestBatchResult, path: Path) -> BacktestBatchResult:
     return replace(result, report_path=path)

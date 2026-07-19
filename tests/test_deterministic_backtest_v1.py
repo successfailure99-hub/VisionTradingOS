@@ -36,9 +36,14 @@ from engines.deterministic_backtest import (
     ReproducibilityStatus,
 )
 from engines.historical_market_replay import ReplayConfiguration, ReplayMode
+from engines.paper_trading.configuration import PaperTradingConfiguration
 from engines.paper_trading.enums import PaperExitType
 from engines.paper_trading.models import PaperTradeRecord
+from engines.performance_analytics.configuration import PerformanceAnalyticsConfiguration
+from engines.risk.models import RiskConfiguration
 from engines.strategy.enums import TradeDirection
+from dashboard.panels.backtest_panel import BacktestPanel
+from PySide6.QtWidgets import QApplication, QPushButton
 
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -135,6 +140,13 @@ def orchestrator(tmp_path, *paths, **overrides):
         deterministic_backtest_configuration=config(tmp_path, *paths, **overrides),
     )
     return ApplicationOrchestrator(EventBus(), configuration)
+
+
+def run_to_terminal(engine):
+    engine.start()
+    while engine.snapshot().lifecycle_state is BacktestLifecycleState.RUNNING:
+        engine.process_batch()
+    return engine.snapshot().latest_result
 
 
 def auth_factory(api_key):
@@ -311,20 +323,139 @@ def test_state_isolation_equivalent_runs_fingerprints_and_digests_match(tmp_path
 
     def run_once():
         engine.reset()
-        engine.start()
-        while engine.snapshot().lifecycle_state is BacktestLifecycleState.RUNNING:
-            engine.process_batch()
-        result = engine.snapshot().latest_result
-        return result.deterministic_run_fingerprint, result.result_digest, result.session_results[0].trades_closed
+        result = run_to_terminal(engine)
+        return result.deterministic_run_fingerprint, result.result_digest, result.session_results[0].trades_closed, result.reproducibility_status
 
-    assert run_once() == run_once()
+    first = run_once()
+    second = run_once()
+    assert first[:3] == second[:3]
+    assert first[3] is ReproducibilityStatus.NOT_CHECKED
+    assert second[3] is ReproducibilityStatus.MATCH
     assert engine.snapshot().reproducibility_status is ReproducibilityStatus.MATCH
     changed = write_session(tmp_path, "changed.jsonl", rows=(tick_record(1, price=101.0),), header=manifest(1, session_id="changed"))
-    other = orchestrator(tmp_path, changed).deterministic_backtest_engine
-    other.start()
-    while other.snapshot().lifecycle_state is BacktestLifecycleState.RUNNING:
-        other.process_batch()
+    other = orchestrator(tmp_path, changed, reproducibility_check_enabled=True).deterministic_backtest_engine
+    other_result = run_to_terminal(other)
     assert other.snapshot().deterministic_run_fingerprint != engine.snapshot().deterministic_run_fingerprint
+    assert other_result.reproducibility_status is ReproducibilityStatus.NOT_CHECKED
+
+
+def test_same_fingerprint_changed_stable_output_reports_mismatch_and_reset_preserves_baseline(tmp_path, monkeypatch):
+    path = write_session(tmp_path)
+    app = orchestrator(tmp_path, path, reproducibility_check_enabled=True)
+    engine = app.deterministic_backtest_engine
+    digests = iter(("stable-a", "stable-b"))
+    monkeypatch.setattr("engines.deterministic_backtest.engine.session_result_digest", lambda *_args: next(digests))
+
+    first = run_to_terminal(engine)
+    assert first.reproducibility_status is ReproducibilityStatus.NOT_CHECKED
+    engine.reset()
+    second = run_to_terminal(engine)
+    assert first.deterministic_run_fingerprint == second.deterministic_run_fingerprint
+    assert second.reproducibility_status is ReproducibilityStatus.MISMATCH
+    assert any(item.code == "REPRODUCIBILITY_MISMATCH" for item in second.findings)
+
+
+def test_event_digest_is_ordered_stable_and_included_in_terminal_digest(tmp_path):
+    same_a = write_session(tmp_path, "same_a.jsonl")
+    same_b = write_session(tmp_path, "same_b.jsonl")
+    changed = write_session(tmp_path, "changed_events.jsonl", rows=(tick_record(1, price=101.0), tick_record(2, 100, price=102.0), tick_record(3, 200, price=103.0)), header=manifest(3, session_id="changed_events"))
+    reordered = write_session(tmp_path, "reordered.jsonl", rows=(tick_record(2, 100), tick_record(1), tick_record(3, 200)), header=manifest(3, session_id="reordered"))
+
+    first = run_to_terminal(orchestrator(tmp_path, same_a).deterministic_backtest_engine)
+    second = run_to_terminal(orchestrator(tmp_path, same_b).deterministic_backtest_engine)
+    changed_result = run_to_terminal(orchestrator(tmp_path, changed).deterministic_backtest_engine)
+    reordered_result = run_to_terminal(orchestrator(tmp_path, reordered).deterministic_backtest_engine)
+
+    assert first.session_results[0].session_event_digest == second.session_results[0].session_event_digest
+    assert first.session_results[0].session_event_digest != changed_result.session_results[0].session_event_digest
+    assert first.session_results[0].session_event_digest != reordered_result.session_results[0].session_event_digest
+    assert first.session_results[0].session_event_digest in json.dumps(json.loads(first.report_path.read_text(encoding="utf-8")), sort_keys=True)
+
+
+def test_configuration_fingerprint_inputs_and_exclusions(tmp_path):
+    path = write_session(tmp_path)
+
+    def prepared_fingerprint(runtime_configuration):
+        app = ApplicationOrchestrator(EventBus(), runtime_configuration)
+        return app.deterministic_backtest_engine.prepare().deterministic_run_fingerprint
+
+    base_backtest = config(tmp_path, path, reproducibility_check_enabled=True)
+    base = RuntimeConfiguration(deterministic_backtest_configuration=base_backtest)
+    assert prepared_fingerprint(base) == prepared_fingerprint(
+        RuntimeConfiguration(
+            deterministic_backtest_configuration=BacktestConfiguration(
+                enabled=True,
+                session_paths=(path,),
+                output_directory=tmp_path / "different-output",
+                reproducibility_check_enabled=True,
+            )
+        )
+    )
+    assert prepared_fingerprint(base) != prepared_fingerprint(RuntimeConfiguration(deterministic_backtest_configuration=base_backtest, risk_configuration=RiskConfiguration(maximum_lots=3)))
+    assert prepared_fingerprint(base) != prepared_fingerprint(RuntimeConfiguration(deterministic_backtest_configuration=base_backtest, paper_trading_configuration=PaperTradingConfiguration(slippage_points=0.25)))
+    assert prepared_fingerprint(base) != prepared_fingerprint(RuntimeConfiguration(deterministic_backtest_configuration=base_backtest, performance_analytics_configuration=PerformanceAnalyticsConfiguration(starting_equity=200000.0)))
+
+
+def test_no_persistent_clearing_during_reset_or_between_batch_sessions(tmp_path):
+    first = write_session(tmp_path, "first.jsonl")
+    second = write_session(tmp_path, "second.jsonl", rows=(tick_record(1),), header=manifest(1, session_id="second"))
+    app = orchestrator(tmp_path, first, second)
+    calls = []
+    original = app.performance_analytics_engine.reset
+
+    def spy_reset(*, clear_persistent_data=False):
+        calls.append(clear_persistent_data)
+        return original(clear_persistent_data=clear_persistent_data)
+
+    app.performance_analytics_engine.reset = spy_reset
+    result = run_to_terminal(app.deterministic_backtest_engine)
+    app.deterministic_backtest_engine.reset()
+    assert result.total_sessions == 2
+    assert calls
+    assert all(call is False for call in calls)
+
+
+def test_application_command_facade_delegates_sanitizes_and_dashboard_uses_facade(tmp_path, monkeypatch):
+    path = write_session(tmp_path)
+    app = orchestrator(tmp_path, path)
+    called = []
+
+    def fake_prepare():
+        called.append("prepare")
+        raise RuntimeError("api_secret leaked-token")
+
+    monkeypatch.setattr(app.deterministic_backtest_engine, "prepare", fake_prepare)
+    snapshot = app.prepare_backtest()
+    assert called == ["prepare"]
+    assert any(item.code == "BACKTEST_COMMAND_FAILED" and "[REDACTED]" in item.message for item in snapshot.findings)
+
+    qt = QApplication.instance() or QApplication([])
+    facade_calls = []
+
+    class Facade:
+        def prepare_backtest(self):
+            facade_calls.append("prepare_backtest")
+
+        def start_backtest(self):
+            facade_calls.append("start_backtest")
+
+        def pause_backtest(self):
+            facade_calls.append("pause_backtest")
+
+        def resume_backtest(self):
+            facade_calls.append("resume_backtest")
+
+        def stop_backtest(self):
+            facade_calls.append("stop_backtest")
+
+        def reset_backtest(self):
+            facade_calls.append("reset_backtest")
+
+    panel = BacktestPanel(command_target=Facade())
+    for button in panel.findChildren(QPushButton):
+        button.click()
+    qt.processEvents()
+    assert facade_calls == ["prepare_backtest", "start_backtest", "pause_backtest", "resume_backtest", "stop_backtest", "reset_backtest"]
 
 
 def test_live_exclusion_and_live_autoconnect_block_without_mutation(tmp_path):

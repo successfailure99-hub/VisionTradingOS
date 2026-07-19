@@ -259,7 +259,7 @@ class ApplicationOrchestrator:
         previous_status = self._status
         self.market_data_engine.clear()
         self.trade_journal_engine.reset()
-        self.performance_analytics_engine.reset(clear_persistent_data=True)
+        self.performance_analytics_engine.reset(clear_persistent_data=False)
         self.live_validation_engine.reset(clear_persistent_data=False)
         self.historical_replay_engine.reset(clear_persistent_data=False)
         for runtime in self._runtimes.values():
@@ -270,6 +270,31 @@ class ApplicationOrchestrator:
                 runtime.stop()
         self._status = previous_status
         return self.snapshot()
+
+    def prepare_backtest(self):
+        return self._run_backtest_command("prepare")
+
+    def start_backtest(self):
+        return self._run_backtest_command("start")
+
+    def pause_backtest(self):
+        return self._run_backtest_command("pause")
+
+    def resume_backtest(self):
+        return self._run_backtest_command("resume")
+
+    def stop_backtest(self):
+        return self._run_backtest_command("stop")
+
+    def reset_backtest(self):
+        return self._run_backtest_command("reset")
+
+    def _run_backtest_command(self, command_name: str):
+        command = getattr(self.deterministic_backtest_engine, command_name)
+        try:
+            return command()
+        except Exception as exc:
+            return self.deterministic_backtest_engine.record_command_error(_safe_error(exc))
 
     def snapshot(self) -> OrchestratorSnapshot:
         return OrchestratorSnapshot(
@@ -325,3 +350,10 @@ class ApplicationOrchestrator:
     def _require_running(self) -> None:
         if self._status is not RuntimeStatus.RUNNING:
             raise RuntimeError("ApplicationOrchestrator processing requires RUNNING status.")
+
+
+def _safe_error(exc) -> str:
+    text = str(exc).strip() or exc.__class__.__name__
+    for token in ("api_key", "api_secret", "access_token", "request_token"):
+        text = text.replace(token, "[REDACTED]")
+    return text[:500]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -116,6 +116,7 @@ class BacktestSessionResult:
     analytics_snapshot: AnalyticsSnapshot
     findings: tuple[BacktestFinding, ...]
     deterministic_session_fingerprint: str
+    session_event_digest: str
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source_path", Path(self.source_path))
@@ -225,18 +226,33 @@ class BacktestSnapshot:
 
 
 def configuration_fingerprint(configuration: BacktestConfiguration, session_fingerprints: tuple[str, ...]) -> str:
+    return runtime_configuration_fingerprint(configuration, session_fingerprints, None)
+
+
+def runtime_configuration_fingerprint(configuration: BacktestConfiguration, session_fingerprints: tuple[str, ...], runtime_configuration) -> str:
+    risk_configuration = getattr(runtime_configuration, "risk_configuration", None)
+    paper_configuration = getattr(runtime_configuration, "paper_trading_configuration", None)
+    analytics_configuration = getattr(runtime_configuration, "performance_analytics_configuration", None)
     payload = {
         "schema_version": BACKTEST_SCHEMA_VERSION,
         "mode": configuration.mode.value,
-        "session_paths": [path.name for path in configuration.session_paths],
         "session_fingerprints": session_fingerprints,
+        "strategy_configuration": {"version": "application_default_v1"},
+        "risk_configuration": _stable_configuration_payload(risk_configuration),
+        "paper_trading_configuration": _stable_configuration_payload(paper_configuration),
+        "performance_analytics_configuration": _stable_configuration_payload(
+            analytics_configuration,
+            excluded_fields={"journal_path", "export_directory"},
+        ),
+        "execution_policy": {
+            "safety_mode": configuration.safety_mode.value,
+            "broker_mode": configuration.broker_mode.value,
+            "intrabar_policy": getattr(getattr(paper_configuration, "intrabar_policy", None), "value", None),
+        },
         "max_sessions": configuration.max_sessions,
         "max_findings": configuration.max_findings,
         "max_session_results": configuration.max_session_results,
-        "reproducibility_check_enabled": configuration.reproducibility_check_enabled,
         "stop_on_session_failure": configuration.stop_on_session_failure,
-        "safety_mode": configuration.safety_mode.value,
-        "broker_mode": configuration.broker_mode.value,
     }
     return stable_digest(payload)
 
@@ -258,6 +274,7 @@ def session_result_digest(results: tuple[BacktestSessionResult, ...], findings: 
                 "open_positions": item.open_positions,
                 "analytics": _summary_payload(item.analytics_snapshot.overall),
                 "fingerprint": item.deterministic_session_fingerprint,
+                "event_digest": item.session_event_digest,
             }
             for item in results
         ],
@@ -319,6 +336,32 @@ def _summary_payload(summary: PerformanceSummary) -> dict[str, object]:
         "maximum_drawdown": summary.maximum_drawdown,
         "win_rate": summary.win_rate,
     }
+
+
+def _stable_configuration_payload(configuration, *, excluded_fields: set[str] | None = None):
+    if configuration is None:
+        return {"default": True}
+    excluded = excluded_fields or set()
+    if is_dataclass(configuration):
+        payload = {}
+        for item in fields(configuration):
+            if item.name in excluded:
+                continue
+            payload[item.name] = _stable_configuration_value(getattr(configuration, item.name))
+        return payload
+    return _stable_configuration_value(configuration)
+
+
+def _stable_configuration_value(value):
+    if isinstance(value, Path):
+        return "<path>"
+    if isinstance(value, tuple):
+        return tuple(_stable_configuration_value(item) for item in value)
+    if isinstance(value, list):
+        return tuple(_stable_configuration_value(item) for item in value)
+    if is_dataclass(value):
+        return _stable_configuration_payload(value)
+    return getattr(value, "value", value)
 
 
 def _json_default(value):

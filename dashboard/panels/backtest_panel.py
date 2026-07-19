@@ -71,12 +71,12 @@ class BacktestPanel(QGroupBox):
     def _controls(self):
         layout = QHBoxLayout()
         for label, method in (
-            ("Prepare", "prepare"),
-            ("Start", "start"),
-            ("Pause", "pause"),
-            ("Resume", "resume"),
-            ("Stop", "stop"),
-            ("Reset", "reset"),
+            ("Prepare", "prepare_backtest"),
+            ("Start", "start_backtest"),
+            ("Pause", "pause_backtest"),
+            ("Resume", "resume_backtest"),
+            ("Stop", "stop_backtest"),
+            ("Reset", "reset_backtest"),
         ):
             button = QPushButton(label)
             connector = getattr(button.clicked, "connect")

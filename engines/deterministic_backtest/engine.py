@@ -40,7 +40,7 @@ from engines.deterministic_backtest.models import (
     BacktestSessionResult,
     BacktestSnapshot,
     aggregate_analytics,
-    configuration_fingerprint,
+    runtime_configuration_fingerprint,
     session_result_digest,
     stable_digest,
 )
@@ -92,8 +92,9 @@ class DeterministicBacktestEngine:
         self._processing = False
         self._routing_event = False
         self._terminal_persisted = False
-        self._event_hash = stable_digest({"events": ()})
+        self._session_event_hash = stable_digest({"events": ()})
         self._last_result_digest = "-"
+        self._result_digests_by_fingerprint = {}
         self._event_bus.subscribe(NEW_TICK, self._on_tick)
         self._event_bus.subscribe(OPTION_CHAIN_UPDATED, self._on_option_chain)
 
@@ -122,7 +123,11 @@ class DeterministicBacktestEngine:
         self._ensure_orchestrator()
         self._ensure_live_inactive()
         self._session_fingerprints = tuple(self._manifest_fingerprint(path) for path in self._configuration.session_paths)
-        self._run_fingerprint = configuration_fingerprint(self._configuration, self._session_fingerprints)
+        self._run_fingerprint = runtime_configuration_fingerprint(
+            self._configuration,
+            self._session_fingerprints,
+            getattr(self._orchestrator, "configuration", None),
+        )
         self._run_id = f"backtest-{self._run_fingerprint[:12]}"
         self._state = BacktestLifecycleState.READY
         self._add_finding(BacktestSeverity.INFO, "BACKTEST_PREPARED", "Backtest prepared.")
@@ -139,7 +144,7 @@ class DeterministicBacktestEngine:
         self._session_index = -1
         self._session_results = ()
         self._terminal_persisted = False
-        self._event_hash = stable_digest({"events": ()})
+        self._session_event_hash = stable_digest({"events": ()})
         self._add_finding(BacktestSeverity.INFO, "BACKTEST_STARTED", "Backtest started.")
         self._publish(BACKTEST_STARTED)
         return self.snapshot()
@@ -226,7 +231,7 @@ class DeterministicBacktestEngine:
         self._processing = False
         self._routing_event = False
         self._terminal_persisted = False
-        self._event_hash = stable_digest({"events": ()})
+        self._session_event_hash = stable_digest({"events": ()})
         self._last_result_digest = "-"
         if self._orchestrator is not None:
             self._orchestrator.reset_backtest_run_state()
@@ -278,6 +283,7 @@ class DeterministicBacktestEngine:
     def _start_next_session(self) -> None:
         self._session_index += 1
         path = self._configuration.session_paths[self._session_index]
+        self._session_event_hash = stable_digest({"events": ()})
         self._orchestrator.reset_backtest_run_state()
         if self._orchestrator.status is not RuntimeStatus.RUNNING:
             self._orchestrator.start()
@@ -322,6 +328,7 @@ class DeterministicBacktestEngine:
             analytics_snapshot=analytics,
             findings=findings,
             deterministic_session_fingerprint=self._session_fingerprints[self._session_index] if self._session_index >= 0 and self._session_index < len(self._session_fingerprints) else "-",
+            session_event_digest=self._session_event_hash,
         )
         self._session_results = (*self._session_results, result)[-self._configuration.max_session_results :]
         if outcome is BacktestOutcome.FAILED:
@@ -359,10 +366,17 @@ class DeterministicBacktestEngine:
         digest = session_result_digest(self._session_results, findings, self._run_fingerprint)
         reproducibility = ReproducibilityStatus.NOT_CHECKED
         if self._configuration.reproducibility_check_enabled:
-            reproducibility = ReproducibilityStatus.MATCH if self._last_result_digest in {"-", digest} else ReproducibilityStatus.MISMATCH
-            code = "REPRODUCIBILITY_MATCH" if reproducibility is ReproducibilityStatus.MATCH else "REPRODUCIBILITY_MISMATCH"
-            self._add_finding(BacktestSeverity.INFO if reproducibility is ReproducibilityStatus.MATCH else BacktestSeverity.ERROR, code, code.replace("_", " ").title())
-            findings = tuple(self._findings[key] for key in self._finding_order if key in self._findings)
+            baseline = self._comparison_digest(self._run_fingerprint)
+            if baseline is None:
+                reproducibility = ReproducibilityStatus.NOT_CHECKED
+            elif baseline == digest:
+                reproducibility = ReproducibilityStatus.MATCH
+                self._add_finding(BacktestSeverity.INFO, "REPRODUCIBILITY_MATCH", "Equivalent backtest result matched the comparison baseline.")
+                findings = tuple(self._findings[key] for key in self._finding_order if key in self._findings)
+            else:
+                reproducibility = ReproducibilityStatus.MISMATCH
+                self._add_finding(BacktestSeverity.ERROR, "REPRODUCIBILITY_MISMATCH", "Equivalent backtest result differed from the comparison baseline.")
+                findings = tuple(self._findings[key] for key in self._finding_order if key in self._findings)
         result = BacktestBatchResult(
             run_id=self._run_id,
             deterministic_run_fingerprint=self._run_fingerprint,
@@ -388,8 +402,22 @@ class DeterministicBacktestEngine:
         except Exception as exc:
             self._add_finding(BacktestSeverity.ERROR, "REPORT_WRITE_FAILED", _safe_error(exc))
         self._last_result_digest = digest
+        self._result_digests_by_fingerprint[self._run_fingerprint] = digest
         self._latest_result = result
         self._publish(event_name)
+
+    def record_command_error(self, message: str) -> BacktestSnapshot:
+        self._add_finding(BacktestSeverity.ERROR, "BACKTEST_COMMAND_FAILED", _safe_error(ValueError(message)))
+        return self.snapshot()
+
+    def _comparison_digest(self, fingerprint: str) -> str | None:
+        digest = self._result_digests_by_fingerprint.get(fingerprint)
+        if digest:
+            return digest
+        digest = self._repository.read_result_digest(fingerprint)
+        if digest:
+            self._result_digests_by_fingerprint[fingerprint] = digest
+        return digest
 
     def _manifest_fingerprint(self, path: Path) -> str:
         replay = self._replay()
@@ -398,12 +426,13 @@ class DeterministicBacktestEngine:
             replay.reset(clear_persistent_data=False)
             loaded = replay.load_session(path)
             manifest = {
+                "schema_version": "historical_replay_session_v1",
                 "session_id": loaded.session_id,
-                "source": Path(path).name,
                 "trading_date": loaded.trading_date.isoformat() if loaded.trading_date else None,
                 "instruments": [getattr(item, "value", str(item)) for item in loaded.instruments],
                 "records": loaded.total_records,
                 "first": loaded.first_event_timestamp.isoformat() if loaded.first_event_timestamp else None,
+                "content_digest": _file_digest(path),
             }
             return stable_digest(manifest)
         finally:
@@ -413,7 +442,7 @@ class DeterministicBacktestEngine:
     def _on_tick(self, payload) -> None:
         if self._routing_event or self._state is not BacktestLifecycleState.RUNNING or not isinstance(payload, Tick):
             return
-        self._event_hash = stable_digest({"previous": self._event_hash, "tick": [payload.symbol.value, payload.timestamp.isoformat(), payload.last_price, payload.volume]})
+        self._session_event_hash = stable_digest({"previous": self._session_event_hash, "tick": [payload.symbol.value, payload.timestamp.isoformat(), payload.last_price, payload.volume]})
         self._routing_event = True
         try:
             self._orchestrator.process_tick(payload)
@@ -423,7 +452,7 @@ class DeterministicBacktestEngine:
     def _on_option_chain(self, payload) -> None:
         if self._routing_event or self._state is not BacktestLifecycleState.RUNNING or not isinstance(payload, OptionChainSnapshot):
             return
-        self._event_hash = stable_digest({"previous": self._event_hash, "option": [payload.symbol, payload.timestamp.isoformat(), len(payload.strikes)]})
+        self._session_event_hash = stable_digest({"previous": self._session_event_hash, "option": [payload.symbol, payload.timestamp.isoformat(), len(payload.strikes)]})
         self._routing_event = True
         try:
             self._orchestrator.process_option_chain(payload.symbol, payload)
@@ -525,3 +554,14 @@ def _safe_text(value) -> str:
     for token in ("api_key", "api_secret", "access_token", "request_token"):
         text = text.replace(token, "[REDACTED]")
     return text[:500]
+
+
+def _file_digest(path: Path) -> str:
+    digest = stable_digest({"file": "empty"})
+    with Path(path).open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest = stable_digest({"previous": digest, "chunk": chunk.hex()})
+    return digest
