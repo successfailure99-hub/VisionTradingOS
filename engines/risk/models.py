@@ -2,27 +2,71 @@
 Immutable Risk Engine V1 models.
 """
 
-from dataclasses import dataclass
-from datetime import datetime
+import hashlib
+import json
+from dataclasses import dataclass, field
+from datetime import date, datetime, time
 from math import isfinite
 from numbers import Real
 
-from engines.risk.enums import RiskDecision, RiskRejectionReason, RiskReductionReason, RiskTier
+from engines.risk.enums import (
+    RiskDecision,
+    RiskDecisionStatus,
+    RiskLifecycleState,
+    RiskReasonCode,
+    RiskRejectionReason,
+    RiskReductionReason,
+    RiskSeverity,
+    RiskTier,
+)
 from engines.strategy.enums import TradeDirection
 from engines.strategy.models import StrategyDecisionState
 
 
 @dataclass(frozen=True, slots=True)
 class RiskPolicy:
-    max_risk_percent: float
-    reduced_risk_percent: float
-    max_daily_loss_percent: float
-    max_consecutive_losses: int
-    reduced_after_consecutive_losses: int
-    max_trades_per_day: int
-    reduced_after_trades: int
-    max_lots: int
-    minimum_reward_risk: float
+    max_risk_percent: float = 1.0
+    reduced_risk_percent: float = 0.5
+    max_daily_loss_percent: float = 2.0
+    max_consecutive_losses: int = 2
+    reduced_after_consecutive_losses: int = 1
+    max_trades_per_day: int = 3
+    reduced_after_trades: int = 2
+    max_lots: int = 2
+    minimum_reward_risk: float = 1.5
+    enabled: bool = True
+    risk_per_trade_percentage: float = 1.0
+    maximum_risk_per_trade_amount: float | None = None
+    maximum_daily_loss_amount: float | None = None
+    maximum_daily_loss_percentage: float | None = 2.0
+    daily_profit_lock_trigger: float | None = None
+    daily_profit_giveback_limit: float | None = None
+    maximum_trades_per_session: int = 3
+    maximum_consecutive_losses: int = 2
+    cooldown_minutes_after_loss: int = 15
+    revenge_trade_window_minutes: int = 10
+    minimum_reward_to_risk: float = 1.5
+    maximum_stop_distance_percentage: float | None = 2.0
+    minimum_stop_distance_percentage: float | None = 0.05
+    maximum_total_open_risk: float | None = None
+    maximum_instrument_open_risk: float | None = None
+    maximum_quantity: int | None = None
+    maximum_lots: int = 2
+    lot_sizes_by_instrument: dict[str, int] = field(
+        default_factory=lambda: {"NIFTY": 75, "BANKNIFTY": 35, "SENSEX": 20}
+    )
+    allow_averaging_down: bool = False
+    allow_duplicate_direction: bool = False
+    allow_fomo_entry: bool = False
+    trading_start_time: time = time(9, 15)
+    last_entry_time: time = time(14, 30)
+    force_exit_time: time = time(15, 15)
+    require_stop_loss: bool = True
+    require_target: bool = True
+    manual_approval_required: bool = True
+
+    def fingerprint(self) -> str:
+        return _fingerprint(_model_payload(self))
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,19 +266,54 @@ class RiskEvaluation:
 
 @dataclass(frozen=True, slots=True)
 class AccountRiskState:
-    account_equity: float
-    realized_pnl_today: float
-    trades_today: int
-    consecutive_losses: int
+    account_equity: float = 0.0
+    realized_pnl_today: float = 0.0
+    trades_today: int = 0
+    consecutive_losses: int = 0
+    starting_capital: float | None = None
+    available_capital: float | None = None
+    realized_pnl: float | None = None
+    unrealized_pnl: float = 0.0
+    daily_pnl: float | None = None
+    open_risk: float = 0.0
+    margin_used: float = 0.0
+    session_date: date | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class TradeRiskPlan:
     entry_price: float
-    stop_price: float
-    target_price: float
-    lot_size: int
-    requested_lots: int
+    stop_price: float | None = None
+    target_price: float | None = None
+    lot_size: int = 1
+    requested_lots: int = 1
+    instrument: str = "NIFTY"
+    direction: TradeDirection | str = TradeDirection.BULLISH
+    stop_loss_price: float | None = None
+    requested_quantity: int | None = None
+    order_type: str = "MARKET"
+    strategy_id: str | None = None
+    signal_id: str | None = None
+    setup_name: str | None = None
+    timestamp: datetime | None = None
+    is_retest_entry: bool = False
+    is_fomo_entry: bool = False
+    is_averaging_entry: bool = False
+    is_revenge_entry: bool = False
+    existing_position_direction: TradeDirection | str | None = None
+    existing_position_quantity: int = 0
+    manual_approval: bool = False
+
+    @property
+    def effective_stop_loss_price(self) -> float | None:
+        return self.stop_loss_price if self.stop_loss_price is not None else self.stop_price
+
+    @property
+    def effective_target_price(self) -> float | None:
+        return self.target_price
+
+    def fingerprint(self) -> str:
+        return _fingerprint(_model_payload(self))
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,6 +379,163 @@ class RiskDecisionState:
     trade_plan_ready: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class RiskFinding:
+    finding_id: str
+    timestamp: datetime
+    severity: RiskSeverity
+    code: RiskReasonCode
+    message: str
+    field_name: str | None = None
+    observed_value: str | None = None
+    limit_value: str | None = None
+    occurrence_count: int = 1
+
+    def __post_init__(self) -> None:
+        _aware_datetime(self.timestamp, "timestamp")
+        if not isinstance(self.severity, RiskSeverity):
+            raise TypeError("severity must be RiskSeverity")
+        if not isinstance(self.code, RiskReasonCode):
+            raise TypeError("code must be RiskReasonCode")
+        _positive_int(self.occurrence_count, "occurrence_count")
+        object.__setattr__(self, "message", _safe_text(self.message, "message"))
+        if not isinstance(self.finding_id, str) or not self.finding_id.strip():
+            raise ValueError("finding_id must be non-empty text")
+
+
+@dataclass(frozen=True, slots=True)
+class SessionRiskState:
+    trading_date: date
+    trades_taken: int = 0
+    winning_trades: int = 0
+    losing_trades: int = 0
+    consecutive_losses: int = 0
+    last_trade_timestamp: datetime | None = None
+    last_loss_timestamp: datetime | None = None
+    last_entry_timestamp: datetime | None = None
+    realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    current_open_risk: float = 0.0
+    instrument_open_risk: dict[str, float] = field(default_factory=dict)
+    manual_lock_active: bool = False
+    emergency_lock_active: bool = False
+    daily_profit_lock_active: bool = False
+    peak_daily_profit: float = 0.0
+    cooldown_until: datetime | None = None
+    revenge_lock_until: datetime | None = None
+    findings: tuple[RiskFinding, ...] = ()
+
+    def __post_init__(self) -> None:
+        if isinstance(self.trading_date, datetime) or not isinstance(self.trading_date, date):
+            raise TypeError("trading_date must be a date")
+        for name in ("trades_taken", "winning_trades", "losing_trades", "consecutive_losses"):
+            _non_negative_int(getattr(self, name), name)
+        for name in ("realized_pnl", "unrealized_pnl", "current_open_risk", "peak_daily_profit"):
+            _finite_real(getattr(self, name), name)
+        if self.current_open_risk < 0:
+            raise ValueError("current_open_risk must be non-negative")
+        instrument_risk = {}
+        for key, value in dict(self.instrument_open_risk).items():
+            symbol = _safe_text(key, "instrument").upper()
+            amount = _finite_real(value, "instrument_open_risk")
+            if amount < 0:
+                raise ValueError("instrument open risk must be non-negative")
+            instrument_risk[symbol] = amount
+        object.__setattr__(self, "instrument_open_risk", instrument_risk)
+        object.__setattr__(self, "findings", tuple(self.findings[-50:]))
+
+
+@dataclass(frozen=True, slots=True)
+class RiskDecisionRecord:
+    decision_id: str
+    timestamp: datetime
+    status: RiskDecisionStatus
+    approved: bool
+    instrument: str
+    direction: TradeDirection
+    requested_quantity: int
+    approved_quantity: int
+    requested_lots: int
+    approved_lots: int
+    entry_price: float
+    stop_loss_price: float | None
+    target_price: float | None
+    risk_per_unit: float
+    reward_per_unit: float
+    reward_to_risk: float
+    requested_trade_risk: float
+    approved_trade_risk: float
+    maximum_allowed_trade_risk: float
+    estimated_reward: float
+    capital_at_risk_percentage: float
+    total_open_risk_after_trade: float
+    instrument_open_risk_after_trade: float
+    primary_reason: RiskReasonCode
+    findings: tuple[RiskFinding, ...]
+    manual_approval_required: bool
+    policy_fingerprint: str
+    plan_fingerprint: str
+    input_fingerprint: str
+
+    def __post_init__(self) -> None:
+        _aware_datetime(self.timestamp, "timestamp")
+        if not isinstance(self.status, RiskDecisionStatus):
+            raise TypeError("status must be RiskDecisionStatus")
+        if type(self.approved) is not bool:
+            raise TypeError("approved must be bool")
+        object.__setattr__(self, "instrument", _safe_text(self.instrument, "instrument").upper())
+        if not isinstance(self.direction, TradeDirection):
+            raise TypeError("direction must be TradeDirection")
+        for name in ("requested_quantity", "approved_quantity", "requested_lots", "approved_lots"):
+            _non_negative_int(getattr(self, name), name)
+        for name in (
+            "entry_price",
+            "risk_per_unit",
+            "reward_per_unit",
+            "reward_to_risk",
+            "requested_trade_risk",
+            "approved_trade_risk",
+            "maximum_allowed_trade_risk",
+            "estimated_reward",
+            "capital_at_risk_percentage",
+            "total_open_risk_after_trade",
+            "instrument_open_risk_after_trade",
+        ):
+            _non_negative_real(getattr(self, name), name)
+        if not isinstance(self.primary_reason, RiskReasonCode):
+            raise TypeError("primary_reason must be RiskReasonCode")
+        object.__setattr__(self, "findings", tuple(self.findings[:50]))
+
+
+@dataclass(frozen=True, slots=True)
+class RiskEngineSnapshot:
+    enabled: bool
+    lifecycle_state: RiskLifecycleState
+    trading_date: date
+    manual_lock_active: bool
+    emergency_lock_active: bool
+    daily_profit_lock_active: bool
+    trades_taken: int
+    winning_trades: int
+    losing_trades: int
+    consecutive_losses: int
+    realized_pnl: float
+    unrealized_pnl: float
+    daily_pnl: float
+    current_open_risk: float
+    instrument_open_risk: dict[str, float]
+    cooldown_until: datetime | None
+    revenge_lock_until: datetime | None
+    last_decision: RiskDecisionRecord | None
+    findings: tuple[RiskFinding, ...]
+    evaluation_count: int
+    approved_count: int
+    reduced_size_count: int
+    rejected_count: int
+    locked_count: int
+    broker_order_calls: int = 0
+
+
 def _finite_real(value: Real, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, Real):
         raise TypeError(f"{name} must be finite number")
@@ -342,3 +578,49 @@ def _non_negative_int(value: int, name: str) -> None:
         raise TypeError(f"{name} must be non-negative integer")
     if value < 0:
         raise ValueError(f"{name} must be non-negative")
+
+
+def _aware_datetime(value: datetime, name: str) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{name} must be timezone-aware datetime")
+    return value
+
+
+def _safe_text(value: object, name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be text")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{name} must be non-empty text")
+    for token in ("api_key", "api_secret", "access_token", "request_token"):
+        normalized = normalized.replace(token, "[REDACTED]")
+    return normalized[:500]
+
+
+def _model_payload(value):
+    if hasattr(value, "__dataclass_fields__"):
+        return {
+            key: _model_payload(getattr(value, key))
+            for key in sorted(value.__dataclass_fields__)
+            if key not in {"finding_id", "decision_id"}
+        }
+    if isinstance(value, dict):
+        return {str(key): _model_payload(value[key]) for key in sorted(value)}
+    if isinstance(value, tuple):
+        return [_model_payload(item) for item in value]
+    if isinstance(value, list):
+        return [_model_payload(item) for item in value]
+    if hasattr(value, "value"):
+        return value.value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, time):
+        return value.isoformat()
+    return value
+
+
+def _fingerprint(payload) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()

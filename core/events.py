@@ -82,6 +82,14 @@ STRATEGY_DECISION_V2_READY = "strategy_decision_v2_ready"
 RISK_UPDATED = "risk_updated"
 RISK_MANAGEMENT_V2_UPDATED = "risk_management_v2_updated"
 RISK_MANAGEMENT_V2_READY = "risk_management_v2_ready"
+RISK_EVALUATED = "risk_evaluated"
+RISK_APPROVED = "risk_approved"
+RISK_REJECTED = "risk_rejected"
+RISK_LOCKED = "risk_locked"
+RISK_STATE_UPDATED = "risk_state_updated"
+RISK_SESSION_RESET = "risk_session_reset"
+RISK_MANUAL_LOCKED = "risk_manual_locked"
+RISK_EMERGENCY_LOCKED = "risk_emergency_locked"
 
 # ==================================================
 # Execution Runtime Events
