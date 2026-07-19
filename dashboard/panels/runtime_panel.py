@@ -39,6 +39,13 @@ class RuntimePanel(QGroupBox):
                 "Started At",
                 "Stopped At",
                 "Last Error",
+                "Validation Mode",
+                "Validation State",
+                "Validation Health",
+                "Validation Findings",
+                "Validation Reconnects",
+                "Validation P95 Latency",
+                "Validation Broker Calls",
             )
         )
         layout.addWidget(grid)
@@ -66,3 +73,10 @@ class RuntimePanel(QGroupBox):
         self._labels["Started At"].setText(formatters.timestamp(view.last_started_at))
         self._labels["Stopped At"].setText(formatters.timestamp(view.last_stopped_at))
         self._labels["Last Error"].setText(formatters.text(view.last_error))
+        self._labels["Validation Mode"].setText(formatters.text(view.validation_mode))
+        self._labels["Validation State"].setText(formatters.text(view.validation_state))
+        self._labels["Validation Health"].setText(formatters.text(view.validation_health))
+        self._labels["Validation Findings"].setText(formatters.integer(view.validation_findings))
+        self._labels["Validation Reconnects"].setText(formatters.integer(view.validation_reconnects))
+        self._labels["Validation P95 Latency"].setText(formatters.ratio(view.validation_p95_latency_ms))
+        self._labels["Validation Broker Calls"].setText(formatters.integer(view.validation_broker_order_calls))

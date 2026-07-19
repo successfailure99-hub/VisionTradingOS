@@ -74,6 +74,33 @@ Definitions: wins are `net_pnl > 0`, losses are `net_pnl < 0`, and breakeven tra
 
 The deterministic post-trade review is generated from stored trade facts only. It does not call external AI services and does not infer unsupported psychological or market claims.
 
+## Live Market Validation
+
+Live Market Validation V1 is an optional observability layer for checking real-time market-data flow and downstream engine consistency. It is not a market-data engine, candle engine, option-chain engine, strategy engine, analytics engine, or broker execution feature.
+
+Default state:
+
+```text
+LIVE_VALIDATION_ENABLED=false
+LIVE_VALIDATION_MODE=OFF
+```
+
+Supported modes are `OFF`, `SIMULATION`, and `LIVE_OBSERVE`. Simulation mode consumes deterministic test or replayed events without broker connectivity. Live observe mode watches real incoming market data and existing engine outputs only after explicit configuration and user action. Neither mode can place, modify, cancel, or submit broker orders.
+
+Supported validation instruments are NIFTY, BANKNIFTY, and SENSEX. Safety remains protected: `ANALYSIS_ONLY` and `DRY_RUN` are preserved, live order execution remains disabled, and `broker_order_calls` must remain `0`.
+
+The validator observes existing `EventBus` events, `ApplicationOrchestrator` runtime snapshots, candle output, price-action output, option-chain output, CPR, Camarilla, VWAP, paper-trading events, and performance analytics events. It validates data quality, freshness, event flow, reconnect recovery, latency, bounded-memory behavior, and persistence health without recalculating trading decisions.
+
+Reports are written under `logs/live_validation` by default. Findings use JSON Lines with explicit schema versions, and final session reports use deterministic JSON with atomic replacement. Secrets, access tokens, API keys, and raw broker payloads are excluded.
+
+Health statuses are deterministic: active critical findings produce failed health, active errors produce unhealthy health, active warnings produce degraded health, observed clean components become healthy, and unobserved components remain unknown or not enabled. Final outcomes are `PASS`, `PASS_WITH_WARNINGS`, `FAIL`, or `INCOMPLETE`.
+
+Focused validation tests:
+
+```powershell
+python -m pytest tests/test_live_market_validation_v1.py -v
+```
+
 ## Testing
 
 Full regression suite:

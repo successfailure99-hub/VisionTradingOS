@@ -34,6 +34,13 @@ class DashboardRuntimeView:
     last_started_at: datetime | None
     last_stopped_at: datetime | None
     last_error: str | None
+    validation_mode: str = "Off"
+    validation_state: str = "Idle"
+    validation_health: str = "Unknown"
+    validation_findings: int = 0
+    validation_reconnects: int = 0
+    validation_p95_latency_ms: float | None = None
+    validation_broker_order_calls: int = 0
 
 
 @dataclass(frozen=True, slots=True)

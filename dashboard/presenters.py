@@ -156,6 +156,9 @@ def build_market_session_view(
 
 def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntimeView:
     orchestrator = lifecycle_snapshot.orchestrator_snapshot
+    validation = getattr(orchestrator, "live_validation", None)
+    latency = tuple(getattr(validation, "latency_summaries", ()) or ())
+    p95 = max((item.p95_ms for item in latency), default=None)
     return DashboardRuntimeView(
         application_status=_enum_text(lifecycle_snapshot.status),
         broker_mode=_enum_text(orchestrator.broker_mode),
@@ -169,6 +172,13 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
         last_started_at=lifecycle_snapshot.last_started_at,
         last_stopped_at=lifecycle_snapshot.last_stopped_at,
         last_error=lifecycle_snapshot.last_error,
+        validation_mode=_enum_text(getattr(validation, "mode", None)),
+        validation_state=_enum_text(getattr(validation, "lifecycle_state", None)),
+        validation_health=_enum_text(getattr(validation, "overall_health", None)),
+        validation_findings=len(tuple(getattr(validation, "active_findings", ()) or ())),
+        validation_reconnects=getattr(getattr(validation, "reconnect_summary", None), "reconnect_count", 0),
+        validation_p95_latency_ms=p95,
+        validation_broker_order_calls=getattr(getattr(validation, "counters", None), "broker_order_calls", 0),
     )
 
 
