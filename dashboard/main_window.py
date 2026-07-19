@@ -45,6 +45,7 @@ class VisionMainWindow(QMainWindow):
         *,
         live_market_data_runtime: LiveMarketDataRuntime | None = None,
         live_option_chain_runtime=None,
+        historical_replay_driver=None,
         refresh_interval_ms: int = 500,
         clock=None,
         parent=None,
@@ -59,6 +60,7 @@ class VisionMainWindow(QMainWindow):
         self._lifecycle = lifecycle
         self._live_market_data_runtime = live_market_data_runtime
         self._live_option_chain_runtime = live_option_chain_runtime
+        self._historical_replay_driver = historical_replay_driver
         self._current_view: DashboardView | None = None
         self._clock = clock or _default_clock
         self._runtime_panel = RuntimePanel()
@@ -86,6 +88,8 @@ class VisionMainWindow(QMainWindow):
             self._timer.stop()
 
     def refresh(self) -> DashboardView:
+        if self._historical_replay_driver is not None:
+            self._historical_replay_driver.poll()
         lifecycle_snapshot = self._lifecycle.snapshot()
         live_snapshot = (
             self._live_market_data_runtime.snapshot()

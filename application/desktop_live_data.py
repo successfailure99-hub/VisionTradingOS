@@ -17,6 +17,7 @@ from application.lifecycle_manager import ApplicationLifecycleManager
 from application.live_market_data import LiveMarketDataConfiguration, LiveMarketDataRuntime, LiveMarketDataRuntimeFactory
 from application.live_market_data.enums import LiveMarketDataRuntimeStatus
 from application.models import RuntimeConfiguration
+from application.historical_replay_driver import HistoricalReplayDriver
 from application.reference_data_bootstrap import run_reference_data_bootstrap
 from application.futures_vwap import DesktopFuturesVWAPRuntimeManager
 from engines.risk.models import InstrumentLotSize, RiskConfiguration
@@ -33,6 +34,7 @@ from application.desktop_option_chain import (
 from brokers.zerodha.auth import KiteConnectAuthClient, ZerodhaCredentials, ZerodhaSessionManager
 from brokers.zerodha.historical import KiteHistoricalClient
 from brokers.zerodha.market_data import KiteTickerClient, ZerodhaInstrumentSubscription, ZerodhaSubscriptionMode
+from brokers.zerodha.market_data import ZerodhaWebSocketStatus
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
 from dashboard.application import DashboardApplication
@@ -355,6 +357,12 @@ def create_dashboard_application(
         settings=settings,
         live_market_data_runtime=runtime,
     )
+    historical_replay_driver = (
+        HistoricalReplayDriver(lifecycle.orchestrator.historical_replay_engine)
+        if settings.historical_replay_configuration.enabled
+        and settings.historical_replay_configuration.mode is not ReplayMode.STEP
+        else None
+    )
     if settings.reference_data_bootstrap_enabled and settings.enabled and session_manager is not None:
         _try_reference_data_bootstrap(
             lifecycle=lifecycle,
@@ -397,6 +405,7 @@ def create_dashboard_application(
         live_market_data_runtime=runtime,
         live_option_chain_runtime=option_chain_manager,
         live_futures_vwap_runtime=futures_vwap_manager,
+        historical_replay_driver=historical_replay_driver,
         clock=clock,
     )
 
@@ -657,9 +666,12 @@ def _live_market_data_active(runtime: LiveMarketDataRuntime | None) -> bool:
     if websocket is not None:
         websocket_active = bool(
             websocket.connected
-            or websocket.delivered_tick_count > 0
-            or websocket.normalized_tick_count > 0
-            or websocket.raw_tick_count > 0
+            or websocket.status in {
+                ZerodhaWebSocketStatus.CONNECTED,
+                ZerodhaWebSocketStatus.CONNECTING,
+                ZerodhaWebSocketStatus.RECONNECTING,
+                ZerodhaWebSocketStatus.DISCONNECTING,
+            }
         )
     return snapshot.status in {
         LiveMarketDataRuntimeStatus.STARTING,

@@ -17,12 +17,16 @@ from application.desktop_live_data import (
     create_desktop_live_runtime,
     create_zerodha_session_manager,
     load_desktop_live_configuration,
+    _live_market_data_active,
 )
 from application.enums import RuntimeInstrument, RuntimeStatus
+from application.historical_replay_driver import HistoricalReplayDriver
 from application.lifecycle_manager import ApplicationLifecycleManager, LifecycleSnapshot
 from application.models import RuntimeConfiguration
-from application.live_market_data import LiveMarketDataRuntimeFactory
+from application.live_market_data import LiveMarketDataRuntimeFactory, LiveMarketDataRuntimeSnapshot, LiveMarketDataRuntimeStatus
 from brokers.zerodha.enums import BrokerExecutionMode
+from brokers.zerodha.market_data import ZerodhaInstrumentSubscription, ZerodhaWebSocketSnapshot, ZerodhaWebSocketStatus
+from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
 from core.event_bus import EventBus
 from core.events import CANDLE_CLOSED, NEW_TICK, OPTION_CHAIN_UPDATED
@@ -223,6 +227,64 @@ def replay_env(path, **overrides):
     return env
 
 
+class FakeLiveRuntimeSnapshotSource:
+    def __init__(self, snapshot):
+        self._snapshot = snapshot
+
+    def snapshot(self):
+        return self._snapshot
+
+
+def websocket_snapshot(
+    *,
+    status=ZerodhaWebSocketStatus.DISCONNECTED,
+    connected=False,
+    raw_ticks=0,
+    normalized_ticks=0,
+    delivered_ticks=0,
+):
+    return ZerodhaWebSocketSnapshot(
+        status=status,
+        connected=connected,
+        subscribed_instruments=(
+            ZerodhaInstrumentSubscription(101, Instrument.NIFTY, Exchange.NSE),
+        ),
+        connection_count=1 if connected else 0,
+        disconnection_count=0,
+        reconnect_count=0,
+        raw_tick_count=raw_ticks,
+        normalized_tick_count=normalized_ticks,
+        delivered_tick_count=delivered_ticks,
+        rejected_tick_count=0,
+        last_connected_at=TS if connected else None,
+        last_disconnected_at=None,
+        last_tick_at=TS if raw_ticks else None,
+        last_error=None,
+    )
+
+
+def live_runtime_snapshot(status, *, ws=None):
+    ready = status in {
+        LiveMarketDataRuntimeStatus.READY,
+        LiveMarketDataRuntimeStatus.STARTING,
+        LiveMarketDataRuntimeStatus.RUNNING,
+        LiveMarketDataRuntimeStatus.STOPPING,
+    }
+    return LiveMarketDataRuntimeSnapshot(
+        status=status,
+        ready=ready,
+        running=status is LiveMarketDataRuntimeStatus.RUNNING,
+        configured_instruments=(Instrument.NIFTY,),
+        configured_tokens=(101,),
+        websocket=ws or websocket_snapshot(),
+        start_count=1,
+        stop_count=0,
+        last_started_at=TS if status is not LiveMarketDataRuntimeStatus.CREATED else None,
+        last_stopped_at=None,
+        last_error=None,
+    )
+
+
 def test_configuration_defaults_and_validation(tmp_path):
     default = ReplayConfiguration(output_dir=tmp_path)
     assert default.enabled is False
@@ -409,6 +471,52 @@ def test_cooperative_realtime_start_batches_pause_resume_stop_and_completion_onc
     assert completed == [ReplayOutcome.PASS]
 
 
+def test_replay_driver_polls_bounded_batches_and_prevents_reentrant_processing(tmp_path):
+    rows = tuple(tick_record(index + 1, index * 1000, price=100 + index) for index in range(4))
+    path = write_session(tmp_path, rows=rows, header=manifest(len(rows)))
+    item = engine(tmp_path, mode=ReplayMode.ACCELERATED, source=path, max_batch_records=2)
+    driver = HistoricalReplayDriver(item)
+    events = []
+
+    def on_tick(payload):
+        events.append(payload.last_price)
+        driver.poll()
+
+    item._event_bus.subscribe(NEW_TICK, on_tick)
+    item.load_session()
+    item.start()
+    assert driver.poll().counters.published_records == 2
+    assert events == [100.0, 101.0]
+    assert driver.poll_count == 1
+    item.pause()
+    assert driver.poll().counters.published_records == 2
+    assert events == [100.0, 101.0]
+    item.resume()
+    assert driver.poll().counters.published_records == 4
+    assert events == [100.0, 101.0, 102.0, 103.0]
+    assert item.snapshot().lifecycle_state is ReplayLifecycleState.COMPLETED
+    assert driver.poll_count == 2
+    assert driver.poll().counters.published_records == 4
+    assert driver.poll_count == 2
+
+
+def test_replay_driver_stop_prevents_later_scheduled_publication(tmp_path):
+    rows = tuple(tick_record(index + 1, index * 1000, price=100 + index) for index in range(3))
+    path = write_session(tmp_path, rows=rows, header=manifest(len(rows)))
+    item = engine(tmp_path, mode=ReplayMode.REALTIME, source=path, max_batch_records=1)
+    driver = HistoricalReplayDriver(item)
+    events = []
+    item._event_bus.subscribe(NEW_TICK, lambda payload: events.append(payload.last_price))
+    item.load_session()
+    item.start()
+    driver.poll()
+    item.stop()
+    driver.poll()
+    assert events == [100.0]
+    assert item.snapshot().lifecycle_state is ReplayLifecycleState.STOPPED
+    assert item.snapshot().counters.broker_order_calls == 0
+
+
 def test_failure_on_publish_stops_and_persists_report(tmp_path):
     path = write_session(tmp_path, rows=(tick_record(1),), header=manifest(1))
     item = engine(tmp_path, mode=ReplayMode.REALTIME, source=path)
@@ -547,11 +655,50 @@ def test_desktop_replay_autostart_uses_cooperative_execution_and_no_live_file_di
 
     dashboard = create_dashboard_application(environ=replay_env(path))
     replay = dashboard.lifecycle.orchestrator.historical_replay_engine
+    driver = dashboard.historical_replay_driver
+    events = []
+    completed = []
+    replay._event_bus.subscribe(NEW_TICK, lambda payload: events.append(("tick", payload.timestamp, payload.last_price)))
+    replay._event_bus.subscribe(OPTION_CHAIN_UPDATED, lambda payload: events.append(("option", payload.timestamp, len(payload.strikes))))
+    replay._event_bus.subscribe("historical_replay_completed", lambda payload: completed.append(payload.outcome))
     snapshot = replay.snapshot()
     assert snapshot.lifecycle_state is ReplayLifecycleState.RUNNING
     assert snapshot.counters.published_records == 0
-    assert replay.process_batch().counters.published_records == 1
+    assert driver.poll_count == 0
+    dashboard.main_window.refresh()
+    assert replay.snapshot().counters.published_records == 1
+    assert events == [("tick", TS, 100.0)]
+    dashboard.main_window.refresh()
+    assert replay.snapshot().counters.published_records == 2
+    dashboard.main_window.refresh()
+    assert replay.snapshot().lifecycle_state is ReplayLifecycleState.COMPLETED
+    assert replay.snapshot().counters.published_records == 3
+    assert completed == [ReplayOutcome.PASS]
+    assert replay.latest_report().report_path.exists()
+    assert replay._repository.report_writes == 1
+    dashboard.main_window.refresh()
+    assert replay._repository.report_writes == 1
+    assert driver.poll_count == 3
     dashboard.shutdown()
+
+
+def test_desktop_replay_ready_step_and_disabled_states_are_not_auto_driven(tmp_path):
+    path = write_session(tmp_path)
+    ready = create_dashboard_application(environ=replay_env(path, HISTORICAL_REPLAY_AUTO_START="false"))
+    assert ready.historical_replay_driver is not None
+    ready.main_window.refresh()
+    assert ready.lifecycle.orchestrator.historical_replay_engine.snapshot().lifecycle_state is ReplayLifecycleState.READY
+    assert ready.historical_replay_driver.poll_count == 0
+    ready.shutdown()
+
+    step = create_dashboard_application(environ=replay_env(path, HISTORICAL_REPLAY_MODE="STEP"))
+    replay = step.lifecycle.orchestrator.historical_replay_engine
+    replay._event_bus.subscribe(NEW_TICK, lambda payload: pytest.fail("STEP replay was auto-driven"))
+    assert step.historical_replay_driver is None
+    step.main_window.refresh()
+    assert replay.snapshot().lifecycle_state is ReplayLifecycleState.RUNNING
+    assert replay.snapshot().counters.published_records == 0
+    step.shutdown()
 
 
 def test_desktop_live_runtime_active_blocks_replay_without_disconnect_or_config_mutation(tmp_path):
@@ -580,6 +727,43 @@ def test_desktop_live_runtime_active_blocks_replay_without_disconnect_or_config_
     assert ticker.close_calls == 0
     assert dashboard.lifecycle.orchestrator.snapshot().historical_replay.counters.broker_order_calls == 0
     dashboard.shutdown()
+
+
+@pytest.mark.parametrize(
+    "status",
+    (
+        LiveMarketDataRuntimeStatus.STARTING,
+        LiveMarketDataRuntimeStatus.RUNNING,
+        LiveMarketDataRuntimeStatus.STOPPING,
+    ),
+)
+def test_current_live_runtime_states_block_replay(status):
+    runtime = FakeLiveRuntimeSnapshotSource(live_runtime_snapshot(status))
+    assert _live_market_data_active(runtime) is True
+
+
+def test_connected_websocket_blocks_replay_but_stopped_disconnected_counters_do_not():
+    connected_runtime = FakeLiveRuntimeSnapshotSource(
+        live_runtime_snapshot(
+            LiveMarketDataRuntimeStatus.STOPPED,
+            ws=websocket_snapshot(status=ZerodhaWebSocketStatus.CONNECTED, connected=True),
+        )
+    )
+    assert _live_market_data_active(connected_runtime) is True
+
+    disconnected_with_old_counts = FakeLiveRuntimeSnapshotSource(
+        live_runtime_snapshot(
+            LiveMarketDataRuntimeStatus.STOPPED,
+            ws=websocket_snapshot(
+                status=ZerodhaWebSocketStatus.DISCONNECTED,
+                connected=False,
+                raw_ticks=10,
+                normalized_ticks=9,
+                delivered_ticks=8,
+            ),
+        )
+    )
+    assert _live_market_data_active(disconnected_with_old_counts) is False
 
 
 def test_desktop_live_auto_connect_conflict_and_replay_active_live_start_rejection(tmp_path):
