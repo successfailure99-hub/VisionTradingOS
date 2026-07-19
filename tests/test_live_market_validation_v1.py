@@ -12,6 +12,7 @@ from application.models import RuntimeConfiguration
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
+from core.enums.timeframe import TimeFrame
 from core.event_bus import EventBus
 from core.events import CANDLE_CLOSED, NEW_TICK, PERFORMANCE_ANALYTICS_UPDATED
 from core.models.candle import Candle
@@ -65,6 +66,32 @@ class Mono:
         self.value += seconds
 
 
+class SpyRepository(LiveValidationRepository):
+    def __init__(self, output_dir, *, fail_findings=False, fail_report=False):
+        super().__init__(output_dir)
+        self.append_calls = 0
+        self.finding_batch_calls = 0
+        self.report_calls = 0
+        self.fail_findings = fail_findings
+        self.fail_report = fail_report
+
+    def append_finding(self, finding) -> None:
+        self.append_calls += 1
+        super().append_finding(finding)
+
+    def write_findings(self, findings) -> None:
+        self.finding_batch_calls += 1
+        if self.fail_findings:
+            raise OSError("finding batch failed")
+        super().write_findings(findings)
+
+    def write_report(self, report):
+        self.report_calls += 1
+        if self.fail_report:
+            raise OSError("report failed")
+        return super().write_report(report)
+
+
 def cfg(tmp_path, **overrides):
     values = {
         "enabled": True,
@@ -98,8 +125,8 @@ def tick(ts=NOW, price=100.0, volume=1, symbol=Instrument.NIFTY):
     return Tick(symbol, Exchange.NSE, ts, price, volume, 99.0, 101.0, 0)
 
 
-def candle(start=NOW, symbol="NIFTY", high=102.0, low=99.0, open_=100.0, close=101.0, volume=0):
-    return Candle(symbol, "1m", start, start + timedelta(minutes=1), open_, high, low, close, volume)
+def candle(start=NOW, symbol="NIFTY", high=102.0, low=99.0, open_=100.0, close=101.0, volume=0, timeframe="1m", minutes=1):
+    return Candle(symbol, timeframe, start, start + timedelta(minutes=minutes), open_, high, low, close, volume)
 
 
 def option_state(ts=NOW, *, strikes=None, symbol="NIFTY", expiry=date(2026, 7, 30)):
@@ -180,6 +207,41 @@ def test_invalid_lifecycle_transitions_are_rejected(tmp_path):
         item.start_session(session_id="s2")
 
 
+def test_subset_session_uses_only_selected_instruments_and_reset_is_safe(tmp_path):
+    item = engine(tmp_path)
+    snap = item.start_session(session_id="subset", instruments=(RuntimeInstrument.NIFTY,))
+    assert snap.instruments == (RuntimeInstrument.NIFTY,)
+    assert tuple(summary.instrument for summary in snap.instrument_summaries) == (RuntimeInstrument.NIFTY,)
+    assert all(fresh.instrument in (None, RuntimeInstrument.NIFTY) for fresh in snap.component_freshness)
+
+    item.observe_tick(tick(symbol=Instrument.BANKNIFTY))
+    codes = {finding.code for finding in item.active_findings()}
+    assert "UNSUPPORTED_SESSION_INSTRUMENT" in codes
+    assert RuntimeInstrument.BANKNIFTY not in item._tick_metrics
+
+    report = item.complete_session()
+    assert report.instruments == (RuntimeInstrument.NIFTY,)
+    assert tuple(summary.instrument for summary in report.instrument_summaries) == (RuntimeInstrument.NIFTY,)
+
+    item.reset()
+    idle = item.snapshot()
+    assert idle.instruments == cfg(tmp_path).instruments
+    assert len(idle.instrument_summaries) == len(cfg(tmp_path).instruments)
+
+
+def test_two_instrument_session_scope_is_consistent(tmp_path):
+    item = engine(tmp_path)
+    selected = (RuntimeInstrument.NIFTY, RuntimeInstrument.BANKNIFTY)
+    snap = item.start_session(session_id="two", instruments=selected)
+    assert snap.instruments == selected
+    item.observe_tick(tick(symbol=Instrument.NIFTY))
+    item.observe_tick(tick(symbol=Instrument.BANKNIFTY))
+    summary_by_instrument = {summary.instrument: summary for summary in item.snapshot().instrument_summaries}
+    assert set(summary_by_instrument) == set(selected)
+    assert summary_by_instrument[RuntimeInstrument.NIFTY].tick_metrics.valid_ticks == 1
+    assert summary_by_instrument[RuntimeInstrument.BANKNIFTY].tick_metrics.valid_ticks == 1
+
+
 @pytest.mark.parametrize(
     ("observed", "code"),
     [
@@ -251,6 +313,54 @@ def test_duplicate_closed_candle_and_zero_volume_is_valid(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("timeframe", "minutes"),
+    [
+        (TimeFrame.ONE_MINUTE, 1),
+        (TimeFrame.FIVE_MINUTES, 5),
+        (TimeFrame.FIFTEEN_MINUTES, 15),
+    ],
+)
+def test_supported_candle_timeframes_validate_against_enum_duration(tmp_path, timeframe, minutes):
+    subject = started(tmp_path)
+    subject.observe_candle(candle(timeframe=timeframe, minutes=minutes), closed=True)
+    codes = {finding.code for finding in subject.active_findings()}
+    assert "INVALID_CANDLE" not in codes
+    assert "UNEXPECTED_CANDLE_DURATION" not in codes
+
+
+@pytest.mark.parametrize(
+    ("timeframe", "minutes"),
+    [
+        (TimeFrame.ONE_MINUTE, 2),
+        (TimeFrame.FIVE_MINUTES, 1),
+        (TimeFrame.FIFTEEN_MINUTES, 5),
+    ],
+)
+def test_invalid_duration_is_detected_per_timeframe(tmp_path, timeframe, minutes):
+    subject = started(tmp_path)
+    subject.observe_candle(candle(timeframe=timeframe, minutes=minutes), closed=True)
+    assert "UNEXPECTED_CANDLE_DURATION" in {finding.code for finding in subject.active_findings()}
+
+
+def test_missing_interval_uses_five_minute_duration(tmp_path):
+    subject = started(tmp_path)
+    subject.observe_candle(candle(timeframe=TimeFrame.FIVE_MINUTES, minutes=5), closed=True)
+    subject.observe_candle(candle(start=NOW + timedelta(minutes=15), timeframe=TimeFrame.FIVE_MINUTES, minutes=5), closed=True)
+    summary = subject.snapshot().instrument_summaries[0]
+    assert summary.candle_metrics.missing_intervals == 1
+    assert "MISSING_CANDLE_INTERVAL" in {finding.code for finding in subject.active_findings()}
+
+
+def test_parallel_timeframes_keep_independent_candle_order(tmp_path):
+    subject = started(tmp_path)
+    subject.observe_candle(candle(timeframe=TimeFrame.ONE_MINUTE, minutes=1), closed=True)
+    subject.observe_candle(candle(timeframe=TimeFrame.FIVE_MINUTES, minutes=5), closed=True)
+    subject.observe_candle(candle(start=NOW + timedelta(minutes=1), timeframe=TimeFrame.ONE_MINUTE, minutes=1), closed=True)
+    subject.observe_candle(candle(start=NOW + timedelta(minutes=5), timeframe=TimeFrame.FIVE_MINUTES, minutes=5), closed=True)
+    assert "OUT_OF_ORDER_CANDLE" not in {finding.code for finding in subject.active_findings()}
+
+
+@pytest.mark.parametrize(
     ("observer", "payload", "code"),
     [
         ("observe_cpr", CPRLevels(NOW.date(), 110, 90, 100, 100, 99, 101, 2, 2), None),
@@ -267,6 +377,42 @@ def test_indicator_validation_scenarios(tmp_path, observer, payload, code):
     codes = {finding.code for finding in subject.active_findings()}
     if code:
         assert code in codes
+
+
+def test_unsupported_instruments_are_findings_not_metric_entries(tmp_path):
+    subject = started(tmp_path)
+
+    subject.observe_candle(candle(symbol="MIDCPNIFTY"), closed=True)
+    subject.observe_option_chain(option_state(symbol="MIDCPNIFTY"))
+    subject.observe_vwap(type("VWAPPayload", (), {"symbol": "MIDCPNIFTY", "timestamp": NOW, "vwap": 100})())
+    subject.record_event("market_updated", type("Payload", (), {"symbol": "MIDCPNIFTY", "timestamp": NOW})())
+
+    codes = {finding.code for finding in subject.active_findings()}
+    assert {
+        "UNSUPPORTED_CANDLE_INSTRUMENT",
+        "UNSUPPORTED_OPTION_CHAIN_INSTRUMENT",
+        "UNSUPPORTED_VWAP_INSTRUMENT",
+        "UNSUPPORTED_EVENT_INSTRUMENT",
+    }.issubset(codes)
+    assert RuntimeInstrument.NIFTY in subject._tick_metrics
+    assert all(str(key) != "MIDCPNIFTY" for key in subject._tick_metrics)
+    assert all(str(key) != "MIDCPNIFTY" for key in subject._candle_metrics)
+    assert all(str(key) != "MIDCPNIFTY" for key in subject._option_metrics)
+
+
+def test_malformed_instruments_are_findings_not_exceptions(tmp_path):
+    subject = started(tmp_path)
+
+    subject.observe_candle(candle(symbol=""), closed=True)
+    assert subject.observe_option_chain(option_state(symbol="")) is OptionSnapshotQuality.UNAVAILABLE
+    subject.observe_vwap(type("VWAPPayload", (), {"symbol": object(), "timestamp": NOW, "vwap": 100})())
+    subject.record_event("market_updated", type("Payload", (), {"symbol": object(), "timestamp": NOW})())
+
+    codes = {finding.code for finding in subject.active_findings()}
+    assert "UNSUPPORTED_CANDLE_INSTRUMENT" in codes
+    assert "UNSUPPORTED_OPTION_CHAIN_INSTRUMENT" in codes
+    assert "UNSUPPORTED_VWAP_INSTRUMENT" in codes
+    assert "UNSUPPORTED_EVENT_INSTRUMENT" in codes
 
 
 @pytest.mark.parametrize(
@@ -376,6 +522,73 @@ def test_latency_missing_correlation_ignored_bounded_and_threshold_finding(tmp_p
         subject.record_event(PERFORMANCE_ANALYTICS_UPDATED, object())
     assert subject.snapshot().latency_summaries[0].count == 5
     assert "LATENCY_CRITICAL" in {finding.code for finding in subject.active_findings()}
+
+
+def test_default_monotonic_clock_uses_production_clock_without_sleep(tmp_path):
+    from time import monotonic
+
+    subject = LiveMarketValidationEngine(EventBus(), cfg(tmp_path), clock=Clock())
+    assert subject._monotonic_clock is monotonic
+
+
+def test_observing_findings_does_not_write_to_repository_until_completion(tmp_path):
+    repo = SpyRepository(tmp_path)
+    subject = LiveMarketValidationEngine(EventBus(), cfg(tmp_path), clock=Clock(), repository=repo)
+    subject.start_session(session_id="memory-only")
+    for _ in range(5):
+        subject.observe_tick(tick(price=0))
+    assert repo.append_calls == 0
+    assert repo.finding_batch_calls == 0
+    assert subject.active_findings()[0].occurrence_count == 5
+
+    report = subject.complete_session()
+    assert repo.finding_batch_calls == 1
+    assert repo.report_calls == 1
+    assert report.report_path is not None
+    assert subject.snapshot().counters.persistence_writes == 2
+
+
+def test_failure_completion_persists_aggregated_findings(tmp_path):
+    repo = SpyRepository(tmp_path)
+    subject = LiveMarketValidationEngine(EventBus(), cfg(tmp_path), clock=Clock(), repository=repo)
+    subject.start_session(session_id="failed")
+    subject.observe_tick(tick(price=0))
+    report = subject.fail_session("manual failure")
+    assert repo.append_calls == 0
+    assert repo.finding_batch_calls == 1
+    assert repo.report_calls == 1
+    assert report.lifecycle_result is ValidationLifecycleState.FAILED
+
+
+def test_persistence_failure_is_recorded_without_recursive_append(tmp_path):
+    repo = SpyRepository(tmp_path, fail_findings=True)
+    subject = LiveMarketValidationEngine(EventBus(), cfg(tmp_path), clock=Clock(), repository=repo)
+    subject.start_session(session_id="persist-fail")
+    subject.observe_tick(tick(price=0))
+    report = subject.complete_session()
+    assert repo.append_calls == 0
+    assert repo.finding_batch_calls == 1
+    assert repo.report_calls == 1
+    assert subject.snapshot().counters.persistence_failures == 1
+    assert "FINDINGS_WRITE_FAILED" in {finding.code for finding in subject.active_findings()}
+    assert "FINDINGS_WRITE_FAILED" in {finding.code for finding in report.findings}
+
+
+def test_duplicate_ticks_do_not_fsync_per_tick(monkeypatch, tmp_path):
+    fsync_calls = {"count": 0}
+    original = __import__("engines.live_market_validation.repository", fromlist=["os"]).os.fsync
+
+    def fake_fsync(fd):
+        fsync_calls["count"] += 1
+        return original(fd)
+
+    monkeypatch.setattr("engines.live_market_validation.repository.os.fsync", fake_fsync)
+    subject = started(tmp_path)
+    for _ in range(4):
+        subject.observe_tick(tick())
+    assert fsync_calls["count"] == 0
+    subject.complete_session()
+    assert fsync_calls["count"] == 2
 
 
 def test_persistence_report_reload_and_partial_write_retry(monkeypatch, tmp_path):

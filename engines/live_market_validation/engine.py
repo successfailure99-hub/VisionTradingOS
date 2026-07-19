@@ -5,10 +5,12 @@ from collections import deque
 from dataclasses import replace
 from datetime import datetime, timedelta
 from itertools import count
+from time import monotonic
 
 from application.enums import RuntimeInstrument
 from core.base_engine import BaseEngine
 from core.enums.instrument import Instrument
+from core.enums.timeframe import TimeFrame
 from core.events import (
     AI_DECISION_READY,
     AI_REASONING_V2_READY,
@@ -92,6 +94,7 @@ _VALIDATION_EVENTS = {
     VALIDATION_SESSION_COMPLETED,
     VALIDATION_SESSION_FAILED,
 }
+_INVALID_INSTRUMENT = object()
 
 _EVENT_COMPONENTS = {
     NEW_TICK: ValidationComponent.MARKET_DATA,
@@ -154,7 +157,7 @@ class LiveMarketValidationEngine(BaseEngine):
         if not isinstance(self._configuration, LiveMarketValidationConfiguration):
             raise TypeError("configuration must be LiveMarketValidationConfiguration")
         self._clock = clock or (lambda: datetime.now(IST))
-        self._monotonic_clock = monotonic_clock or (lambda: 0.0)
+        self._monotonic_clock = monotonic_clock or monotonic
         self._repository = repository or LiveValidationRepository(self._configuration.output_dir)
         self._counter = count(1)
         self._subscribed = False
@@ -166,11 +169,15 @@ class LiveMarketValidationEngine(BaseEngine):
         self._failure_reason = None
         self._final_summary = "-"
         self._last_report = None
+        self._session_instruments = self._configuration.instruments
         self._findings: dict[tuple, ValidationFinding] = {}
         self._finding_order: deque[tuple] = deque(maxlen=self._configuration.max_findings)
         self._recent_events = deque(maxlen=self._configuration.max_recent_identities)
         self._recent_ticks = {instrument: deque(maxlen=self._configuration.max_recent_identities) for instrument in self._configuration.instruments}
         self._recent_candles = {instrument: deque(maxlen=self._configuration.max_recent_identities) for instrument in self._configuration.instruments}
+        self._last_candle_end = {}
+        self._last_option_identity = {}
+        self._last_option_expiry = {}
         self._tick_metrics = {instrument: TickValidationMetrics() for instrument in self._configuration.instruments}
         self._candle_metrics = {instrument: CandleValidationMetrics() for instrument in self._configuration.instruments}
         self._option_metrics = {instrument: OptionChainValidationMetrics() for instrument in self._configuration.instruments}
@@ -218,13 +225,7 @@ class LiveMarketValidationEngine(BaseEngine):
         self._ended_at = self._now()
         self._final_summary = str(reason).strip() or "Validation session completed."
         report = build_report(self.snapshot(), ended_at=self._ended_at)
-        try:
-            path = self._repository.write_report(report)
-            report = replace(report, report_path=path)
-            self._counters = replace(self._counters, persistence_writes=self._counters.persistence_writes + 1)
-        except Exception as exc:
-            self._counters = replace(self._counters, persistence_failures=self._counters.persistence_failures + 1)
-            self._add_finding(ValidationSeverity.ERROR, ValidationComponent.PERSISTENCE, "REPORT_WRITE_FAILED", str(exc))
+        report = self._persist_final_report(report, self._ended_at)
         self._last_report = report
         self._data = self.snapshot()
         self._publish(VALIDATION_SESSION_COMPLETED, report)
@@ -238,12 +239,7 @@ class LiveMarketValidationEngine(BaseEngine):
         self._failure_reason = str(reason).strip() or "Validation session failed."
         self._add_finding(ValidationSeverity.CRITICAL, ValidationComponent.EVENT_FLOW, "SESSION_FAILED", self._failure_reason)
         report = build_report(self.snapshot(), ended_at=self._ended_at)
-        try:
-            path = self._repository.write_report(report)
-            report = replace(report, report_path=path)
-            self._counters = replace(self._counters, persistence_writes=self._counters.persistence_writes + 1)
-        except Exception:
-            self._counters = replace(self._counters, persistence_failures=self._counters.persistence_failures + 1)
+        report = self._persist_final_report(report, self._ended_at)
         self._last_report = report
         self._publish(VALIDATION_SESSION_FAILED, report)
         return report
@@ -251,7 +247,7 @@ class LiveMarketValidationEngine(BaseEngine):
     def snapshot(self) -> ValidationSessionSnapshot:
         findings = tuple(self._findings[key] for key in self._finding_order if key in self._findings and self._findings[key].resolution is FindingResolution.ACTIVE)
         component_freshness = self._freshness_tuple(findings)
-        summaries = tuple(self._instrument_summary(instrument, findings) for instrument in self._configuration.instruments)
+        summaries = tuple(self._instrument_summary(instrument, findings) for instrument in self._session_instruments)
         health = self._overall_health(findings, component_freshness)
         return ValidationSessionSnapshot(
             session_id=self._session_id,
@@ -259,7 +255,7 @@ class LiveMarketValidationEngine(BaseEngine):
             lifecycle_state=self._state,
             started_at=self._started_at,
             ended_at=self._ended_at,
-            instruments=self._configuration.instruments,
+            instruments=self._session_instruments,
             expected_market_session=self._expected_session_text(),
             counters=self._counters,
             active_findings=findings,
@@ -299,8 +295,7 @@ class LiveMarketValidationEngine(BaseEngine):
         except Exception:
             self._add_finding(ValidationSeverity.ERROR, ValidationComponent.MARKET_DATA, "UNSUPPORTED_INSTRUMENT", "Unsupported market-data instrument.", getattr(tick, "symbol", None))
             return self.snapshot()
-        if instrument not in self._configuration.instruments:
-            self._add_finding(ValidationSeverity.ERROR, ValidationComponent.MARKET_DATA, "UNSUPPORTED_INSTRUMENT", "Unsupported market-data instrument.", getattr(tick, "symbol", None))
+        if not self._session_instrument_allowed(instrument, ValidationComponent.MARKET_DATA, getattr(tick, "symbol", None)):
             return self.snapshot()
         metrics = self._tick_metrics[instrument]
         timestamp = getattr(tick, "timestamp", None)
@@ -363,16 +358,20 @@ class LiveMarketValidationEngine(BaseEngine):
     def observe_candle(self, candle: Candle, *, closed: bool = False) -> ValidationSessionSnapshot:
         if not self._active():
             return self.snapshot()
-        instrument = RuntimeInstrument(str(getattr(candle, "symbol", "")).strip().upper())
-        if instrument not in self._configuration.instruments:
-            self._add_finding(ValidationSeverity.ERROR, ValidationComponent.CANDLE, "UNSUPPORTED_CANDLE_INSTRUMENT", "Unsupported candle instrument.", getattr(candle, "symbol", None))
+        instrument = self._safe_runtime_instrument(getattr(candle, "symbol", None))
+        if instrument is None:
+            self._add_finding(ValidationSeverity.ERROR, ValidationComponent.CANDLE, "UNSUPPORTED_CANDLE_INSTRUMENT", "Unsupported candle instrument.", observed_value=getattr(candle, "symbol", None))
             return self.snapshot()
+        if not self._session_instrument_allowed(instrument, ValidationComponent.CANDLE, getattr(candle, "symbol", None)):
+            return self.snapshot()
+        timeframe = self._candle_timeframe(getattr(candle, "timeframe", None))
+        expected_duration = timeframe.duration.total_seconds() if timeframe is not None else None
         metrics = self._candle_metrics[instrument]
         if closed:
             metrics = replace(metrics, closed_candles=metrics.closed_candles + 1)
         else:
             metrics = replace(metrics, updated_candles=metrics.updated_candles + 1)
-        identity = (candle.symbol, candle.timeframe, candle.start_time, candle.end_time, closed)
+        identity = (candle.symbol, timeframe.value if timeframe else getattr(candle, "timeframe", None), candle.start_time, candle.end_time, closed)
         if closed and identity in self._recent_candles[instrument]:
             metrics = replace(metrics, duplicate_closed_candles=metrics.duplicate_closed_candles + 1)
             self._add_finding(ValidationSeverity.WARNING, ValidationComponent.CANDLE, "DUPLICATE_CANDLE_CLOSE", "Duplicate closed candle observed.", instrument)
@@ -381,7 +380,7 @@ class LiveMarketValidationEngine(BaseEngine):
             not _aware(candle.start_time)
             or not _aware(candle.end_time)
             or candle.start_time >= candle.end_time
-            or candle.timeframe != "1m"
+            or timeframe is None
             or min(candle.open, candle.high, candle.low, candle.close) <= 0
             or candle.volume < 0
             or candle.high < candle.low
@@ -395,21 +394,20 @@ class LiveMarketValidationEngine(BaseEngine):
             self._add_finding(ValidationSeverity.ERROR, ValidationComponent.CANDLE, "INVALID_CANDLE", "Candle violates OHLC or timing invariants.", instrument)
         if _aware(candle.start_time) and _aware(candle.end_time):
             duration = (candle.end_time - candle.start_time).total_seconds()
-            if duration != 60:
+            if expected_duration is None or duration != expected_duration:
                 metrics = replace(metrics, late_closes=metrics.late_closes + 1)
-                self._add_finding(ValidationSeverity.WARNING, ValidationComponent.CANDLE, "UNEXPECTED_CANDLE_DURATION", "Candle duration is not one minute.", instrument)
-            previous = getattr(self, "_last_candle_end", {}).get(instrument)
+                self._add_finding(ValidationSeverity.WARNING, ValidationComponent.CANDLE, "UNEXPECTED_CANDLE_DURATION", "Candle duration does not match timeframe.", instrument)
+            candle_key = (instrument, timeframe) if timeframe is not None else (instrument, getattr(candle, "timeframe", None))
+            previous = self._last_candle_end.get(candle_key)
             if previous is not None:
                 gap = (candle.start_time - previous).total_seconds()
                 if gap < 0:
                     metrics = replace(metrics, out_of_order_candles=metrics.out_of_order_candles + 1)
                     self._add_finding(ValidationSeverity.ERROR, ValidationComponent.CANDLE, "OUT_OF_ORDER_CANDLE", "Candle order moved backward.", instrument)
-                elif gap > 60:
-                    metrics = replace(metrics, missing_intervals=metrics.missing_intervals + int(gap // 60) - 1)
+                elif expected_duration is not None and gap > expected_duration:
+                    metrics = replace(metrics, missing_intervals=metrics.missing_intervals + int(gap // expected_duration) - 1)
                     self._add_finding(ValidationSeverity.WARNING, ValidationComponent.CANDLE, "MISSING_CANDLE_INTERVAL", "Missing candle interval detected.", instrument)
-            if not hasattr(self, "_last_candle_end"):
-                self._last_candle_end = {}
-            self._last_candle_end[instrument] = candle.end_time
+            self._last_candle_end[candle_key] = candle.end_time
             if candle.start_time.astimezone(IST).date() != self._now().astimezone(IST).date():
                 self._add_finding(ValidationSeverity.ERROR, ValidationComponent.CANDLE, "CANDLE_TRADING_DATE_MISMATCH", "Candle trading date does not match validator date.", instrument)
             self._observe_component(ValidationComponent.CANDLE, instrument, candle.end_time)
@@ -436,7 +434,12 @@ class LiveMarketValidationEngine(BaseEngine):
     def observe_vwap(self, levels) -> None:
         if not self._active() or levels is None:
             return
-        instrument = self._runtime_instrument(getattr(levels, "symbol", None))
+        instrument = self._safe_runtime_instrument(getattr(levels, "symbol", None))
+        if instrument is None:
+            self._add_finding(ValidationSeverity.ERROR, ValidationComponent.VWAP, "UNSUPPORTED_VWAP_INSTRUMENT", "Unsupported VWAP instrument.", observed_value=getattr(levels, "symbol", None))
+            return
+        if not self._session_instrument_allowed(instrument, ValidationComponent.VWAP, getattr(levels, "symbol", None)):
+            return
         if not _finite_positive_or_zero(getattr(levels, "vwap", None)) or getattr(levels, "vwap", 0) <= 0:
             self._add_finding(ValidationSeverity.ERROR, ValidationComponent.VWAP, "INVALID_VWAP", "VWAP must be finite and positive.", instrument)
         self._observe_component(ValidationComponent.VWAP, instrument, getattr(levels, "timestamp", self._now()))
@@ -444,7 +447,12 @@ class LiveMarketValidationEngine(BaseEngine):
     def observe_option_chain(self, state) -> OptionSnapshotQuality:
         if not self._active() or state is None:
             return OptionSnapshotQuality.UNAVAILABLE
-        instrument = RuntimeInstrument(str(getattr(state, "symbol", "")).strip().upper())
+        instrument = self._safe_runtime_instrument(getattr(state, "symbol", None))
+        if instrument is None:
+            self._add_finding(ValidationSeverity.ERROR, ValidationComponent.OPTION_CHAIN, "UNSUPPORTED_OPTION_CHAIN_INSTRUMENT", "Unsupported option-chain instrument.", observed_value=getattr(state, "symbol", None))
+            return OptionSnapshotQuality.UNAVAILABLE
+        if not self._session_instrument_allowed(instrument, ValidationComponent.OPTION_CHAIN, getattr(state, "symbol", None)):
+            return OptionSnapshotQuality.UNAVAILABLE
         metrics = self._option_metrics[instrument]
         strikes = tuple(getattr(state, "strikes", ()) or ())
         strike_values = tuple(getattr(strike, "strike_price", None) for strike in strikes)
@@ -477,15 +485,11 @@ class LiveMarketValidationEngine(BaseEngine):
             quality = OptionSnapshotQuality.COMPLETE
             metrics = replace(metrics, complete_snapshots=metrics.complete_snapshots + 1)
         identity = (instrument.value, getattr(state, "expiry_date", None), getattr(state, "timestamp", None), strike_values)
-        if getattr(self, "_last_option_identity", {}).get(instrument) == identity:
+        if self._last_option_identity.get(instrument) == identity:
             metrics = replace(metrics, duplicate_snapshots=metrics.duplicate_snapshots + 1)
-        if not hasattr(self, "_last_option_identity"):
-            self._last_option_identity = {}
-        previous_expiry = getattr(self, "_last_option_expiry", {}).get(instrument)
+        previous_expiry = self._last_option_expiry.get(instrument)
         if previous_expiry is not None and previous_expiry != getattr(state, "expiry_date", None):
             self._add_finding(ValidationSeverity.INFO, ValidationComponent.OPTION_CHAIN, "OPTION_EXPIRY_TRANSITION", "Option-chain expiry transitioned.", instrument)
-        if not hasattr(self, "_last_option_expiry"):
-            self._last_option_expiry = {}
         self._last_option_identity[instrument] = identity
         self._last_option_expiry[instrument] = getattr(state, "expiry_date", None)
         metrics = replace(metrics, snapshots_received=metrics.snapshots_received + 1, latest_snapshot_age_seconds=age, quality=quality)
@@ -512,7 +516,9 @@ class LiveMarketValidationEngine(BaseEngine):
             self._add_finding(ValidationSeverity.WARNING, ValidationComponent.EVENT_FLOW, "DUPLICATE_EVENT", "Duplicate event identity observed.")
         component = _EVENT_COMPONENTS.get(event_name)
         if component is not None:
-            self._observe_component(component, self._payload_instrument(payload), observed_at)
+            instrument = self._payload_instrument(payload, component)
+            if instrument is not _INVALID_INSTRUMENT:
+                self._observe_component(component, instrument, observed_at)
         if event_name in (CANDLE_UPDATED, CANDLE_OPENED) and isinstance(payload, Candle):
             self.observe_candle(payload, closed=False)
         elif event_name == CANDLE_CLOSED and isinstance(payload, Candle):
@@ -565,11 +571,15 @@ class LiveMarketValidationEngine(BaseEngine):
         return self._state in (ValidationLifecycleState.RUNNING, ValidationLifecycleState.DEGRADED)
 
     def _reset_transient(self, instruments) -> None:
+        self._session_instruments = tuple(instruments)
         self._findings = {}
         self._finding_order = deque(maxlen=self._configuration.max_findings)
         self._recent_events = deque(maxlen=self._configuration.max_recent_identities)
         self._recent_ticks = {instrument: deque(maxlen=self._configuration.max_recent_identities) for instrument in instruments}
         self._recent_candles = {instrument: deque(maxlen=self._configuration.max_recent_identities) for instrument in instruments}
+        self._last_candle_end = {}
+        self._last_option_identity = {}
+        self._last_option_expiry = {}
         self._tick_metrics = {instrument: TickValidationMetrics() for instrument in instruments}
         self._candle_metrics = {instrument: CandleValidationMetrics() for instrument in instruments}
         self._option_metrics = {instrument: OptionChainValidationMetrics() for instrument in instruments}
@@ -610,16 +620,11 @@ class LiveMarketValidationEngine(BaseEngine):
         self._findings[key] = finding
         if severity in (ValidationSeverity.WARNING, ValidationSeverity.ERROR, ValidationSeverity.CRITICAL) and self._state is ValidationLifecycleState.RUNNING:
             self._state = ValidationLifecycleState.DEGRADED
-        try:
-            self._repository.append_finding(finding)
-            self._counters = replace(self._counters, persistence_writes=self._counters.persistence_writes + 1)
-        except Exception:
-            self._counters = replace(self._counters, persistence_failures=self._counters.persistence_failures + 1)
         self._publish(VALIDATION_FINDING, finding)
         return finding
 
     def _observe_component(self, component, instrument, source_at) -> None:
-        if instrument is not None and instrument not in self._configuration.instruments:
+        if instrument is not None and instrument not in self._session_instruments:
             return
         key = (component, instrument)
         now = self._now()
@@ -643,7 +648,7 @@ class LiveMarketValidationEngine(BaseEngine):
         for component in ValidationComponent:
             if component in (ValidationComponent.EVENT_FLOW, ValidationComponent.RECONNECT, ValidationComponent.PERSISTENCE):
                 continue
-            for instrument in self._configuration.instruments:
+            for instrument in self._session_instruments:
                 key = (component, instrument)
                 item = self._component_freshness.get(key)
                 if item is None:
@@ -691,6 +696,24 @@ class LiveMarketValidationEngine(BaseEngine):
             p95_ms=_percentile(values, 0.95),
         )
 
+    def _persist_final_report(self, report, ended_at):
+        try:
+            self._repository.write_findings(report.findings)
+            if report.findings:
+                self._counters = replace(self._counters, persistence_writes=self._counters.persistence_writes + 1)
+        except Exception as exc:
+            self._counters = replace(self._counters, persistence_failures=self._counters.persistence_failures + 1)
+            self._add_finding(ValidationSeverity.ERROR, ValidationComponent.PERSISTENCE, "FINDINGS_WRITE_FAILED", str(exc))
+            report = build_report(self.snapshot(), ended_at=ended_at)
+        try:
+            path = self._repository.write_report(report)
+            self._counters = replace(self._counters, persistence_writes=self._counters.persistence_writes + 1)
+            return replace(report, report_path=path, counters=self._counters)
+        except Exception as exc:
+            self._counters = replace(self._counters, persistence_failures=self._counters.persistence_failures + 1)
+            self._add_finding(ValidationSeverity.ERROR, ValidationComponent.PERSISTENCE, "REPORT_WRITE_FAILED", str(exc))
+            return build_report(self.snapshot(), ended_at=ended_at)
+
     def _record_latency(self, name: str, started: float | None) -> None:
         if started is None:
             return
@@ -718,11 +741,16 @@ class LiveMarketValidationEngine(BaseEngine):
     def _payload_identity(self, payload) -> str:
         return str((payload.__class__.__name__, getattr(payload, "symbol", None), getattr(payload, "timestamp", None), getattr(payload, "updated_at", None)))
 
-    def _payload_instrument(self, payload):
-        try:
-            return self._runtime_instrument(getattr(payload, "symbol", None))
-        except Exception:
+    def _payload_instrument(self, payload, component):
+        if payload is None or not hasattr(payload, "symbol"):
             return None
+        instrument = self._safe_runtime_instrument(getattr(payload, "symbol", None))
+        if instrument is None:
+            self._add_finding(ValidationSeverity.ERROR, component, "UNSUPPORTED_EVENT_INSTRUMENT", "Unsupported event payload instrument.", observed_value=getattr(payload, "symbol", None))
+            return _INVALID_INSTRUMENT
+        if not self._session_instrument_allowed(instrument, component, getattr(payload, "symbol", None)):
+            return _INVALID_INSTRUMENT
+        return instrument
 
     def _runtime_instrument(self, value):
         if isinstance(value, RuntimeInstrument):
@@ -730,6 +758,35 @@ class LiveMarketValidationEngine(BaseEngine):
         if isinstance(value, Instrument):
             return RuntimeInstrument(value.value)
         return RuntimeInstrument(str(getattr(value, "value", value)).strip().upper())
+
+    def _safe_runtime_instrument(self, value):
+        try:
+            return self._runtime_instrument(value)
+        except Exception:
+            return None
+
+    def _session_instrument_allowed(self, instrument, component, observed_value) -> bool:
+        if instrument not in self._configuration.instruments:
+            self._add_finding(ValidationSeverity.ERROR, component, "UNSUPPORTED_INSTRUMENT", "Unsupported validation instrument.", observed_value=observed_value)
+            return False
+        if instrument not in self._session_instruments:
+            self._add_finding(ValidationSeverity.ERROR, component, "UNSUPPORTED_SESSION_INSTRUMENT", "Instrument is not active in this validation session.", instrument, observed_value=observed_value)
+            return False
+        return True
+
+    def _candle_timeframe(self, value) -> TimeFrame | None:
+        if isinstance(value, TimeFrame):
+            timeframe = value
+        else:
+            try:
+                timeframe = TimeFrame.from_value(str(value))
+            except Exception:
+                return None
+        try:
+            timeframe.duration
+        except ValueError:
+            return None
+        return timeframe
 
     def _event_timestamp(self, payload):
         for name in ("timestamp", "updated_at", "closed_at", "exit_time"):

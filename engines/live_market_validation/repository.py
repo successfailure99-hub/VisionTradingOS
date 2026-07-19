@@ -41,6 +41,19 @@ class LiveValidationRepository:
             raise
         self._finding_writes += 1
 
+    def write_findings(self, findings) -> None:
+        items = tuple(findings)
+        if not items:
+            return
+        payload = b"".join(self._json_line({"schema_version": SCHEMA_VERSION, "finding": finding}) for finding in items)
+        path = self._output_dir / "findings.jsonl"
+        try:
+            _append_complete(path, payload)
+        except Exception:
+            self._failures += 1
+            raise
+        self._finding_writes += 1
+
     def write_report(self, report) -> Path:
         path = self._output_dir / f"{report.session_id}.json"
         payload = self._json_bytes({"schema_version": SCHEMA_VERSION, "report": report})
@@ -121,4 +134,3 @@ def _write_all(fd: int, payload: bytes) -> None:
         if written <= 0:
             raise OSError("Unable to persist live validation record.")
         view = view[written:]
-
