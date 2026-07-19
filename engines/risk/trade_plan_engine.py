@@ -46,6 +46,23 @@ class RiskTradePlanEngine:
         self._daily_state = None
         self._latest_evaluation = None
 
+    def record_paper_trade_close(self, *, realized_pnl: float) -> RiskDecisionState | None:
+        if self._daily_state is None or self._active_state is None:
+            return self._active_state
+        reserved = self._active_plan.risk_amount if self._active_plan is not None else 0.0
+        self._daily_state = replace(
+            self._daily_state,
+            trades_completed=self._daily_state.trades_completed + 1,
+            realized_pnl=round(self._daily_state.realized_pnl + float(realized_pnl), 2),
+            risk_reserved=round(max(0.0, self._daily_state.risk_reserved - reserved), 2),
+        )
+        self._active_state = replace(
+            self._active_state,
+            realized_pnl_today=round(self._daily_state.realized_pnl, 2),
+            remaining_daily_loss_capacity=round(max(self._active_state.daily_loss_limit_amount + self._daily_state.realized_pnl, 0), 2),
+        )
+        return self._active_state
+
     def evaluate(
         self,
         *,

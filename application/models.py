@@ -16,6 +16,8 @@ from engines.cpr.levels import CPRLevels
 from engines.market_context.models import MarketContextState
 from engines.option_chain.models import OptionChainState
 from engines.order_management.models import OrderState
+from engines.paper_trading.configuration import PaperTradingConfiguration
+from engines.paper_trading.models import PaperTradingSnapshot
 from engines.position.models import PositionState
 from engines.price_action.models import PriceActionState
 from engines.risk.models import RiskConfiguration, RiskDecisionState
@@ -116,6 +118,7 @@ class RuntimeConfiguration:
     option_expiry_date: date = date(1970, 1, 1)
     safety_mode: ExecutionSafetyMode = ExecutionSafetyMode.ANALYSIS_ONLY
     risk_configuration: RiskConfiguration | None = None
+    paper_trading_configuration: PaperTradingConfiguration | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.instruments, tuple) or not self.instruments:
@@ -140,6 +143,8 @@ class RuntimeConfiguration:
             raise ValueError("RuntimeConfiguration safety_mode must be an ExecutionSafetyMode.")
         if self.risk_configuration is not None and not isinstance(self.risk_configuration, RiskConfiguration):
             raise TypeError("RuntimeConfiguration risk_configuration must be RiskConfiguration or None.")
+        if self.paper_trading_configuration is not None and not isinstance(self.paper_trading_configuration, PaperTradingConfiguration):
+            raise TypeError("RuntimeConfiguration paper_trading_configuration must be PaperTradingConfiguration or None.")
         object.__setattr__(self, "instruments", tuple(normalized))
         object.__setattr__(self, "exchange", self.exchange.strip().upper())
         object.__setattr__(self, "timeframe", timeframe)
@@ -166,6 +171,7 @@ class RuntimeSnapshot:
     latest_journal_record: TradeJournalRecord | None
     updated_at: datetime | None
     vwap_source: RuntimeVWAPSource | None = None
+    paper_trading: PaperTradingSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)

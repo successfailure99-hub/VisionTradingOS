@@ -377,6 +377,46 @@ def build_strategy_view(runtime_snapshot: RuntimeSnapshot) -> DashboardStrategyV
 def build_position_view(runtime_snapshot: RuntimeSnapshot) -> DashboardPositionView:
     position = runtime_snapshot.position
     tick = runtime_snapshot.latest_tick
+    paper = runtime_snapshot.paper_trading
+    paper_order = getattr(paper, "order", None)
+    paper_position = getattr(paper, "position", None)
+    latest_record = getattr(getattr(paper, "journal_summary", None), "latest_record", None)
+    if paper_order is not None and getattr(paper_order, "state", None).value == "pending":
+        return DashboardPositionView(
+            symbol=_enum_text(runtime_snapshot.symbol),
+            status="Pending Paper Entry",
+            has_position=False,
+            side=_enum_text(getattr(paper_order, "direction", None)),
+            quantity=getattr(paper_order, "quantity", None),
+            average_price=None,
+            last_price=getattr(tick, "last_price", None),
+            unrealized_pnl=None,
+            realized_pnl=None,
+            stop_price=getattr(paper_order, "stop_price", None),
+            target_price=getattr(paper_order, "target_price", None),
+            entry_price=getattr(paper_order, "entry_price", None),
+            valid_until=getattr(paper_order, "valid_until", None),
+            plan_id=_short_id(getattr(paper_order, "plan_id", None)),
+        )
+    if paper_position is not None:
+        return DashboardPositionView(
+            symbol=_enum_text(runtime_snapshot.symbol),
+            status="Paper Position Open",
+            has_position=True,
+            side=_enum_text(getattr(paper_position, "direction", None)),
+            quantity=getattr(paper_position, "quantity", None),
+            average_price=getattr(paper_position, "entry_price", None),
+            last_price=getattr(paper_position, "last_price", None),
+            unrealized_pnl=getattr(paper_position, "unrealized_pnl", None),
+            realized_pnl=None,
+            stop_price=getattr(paper_position, "stop_price", None),
+            target_price=getattr(paper_position, "target_price", None),
+            entry_price=getattr(paper_position, "entry_price", None),
+            plan_id=_short_id(getattr(paper_position, "plan_id", None)),
+            opened_at=getattr(paper_position, "opened_at", None),
+            mfe=getattr(paper_position, "maximum_favourable_excursion", None),
+            mae=getattr(paper_position, "maximum_adverse_excursion", None),
+        )
     has_position = position is not None and getattr(position, "absolute_quantity", 0) > 0
     return DashboardPositionView(
         symbol=_enum_text(runtime_snapshot.symbol),
@@ -387,13 +427,44 @@ def build_position_view(runtime_snapshot: RuntimeSnapshot) -> DashboardPositionV
         average_price=getattr(position, "average_entry_price", None),
         last_price=getattr(tick, "last_price", None) or getattr(position, "mark_price", None),
         unrealized_pnl=getattr(position, "unrealized_pnl", None),
-        realized_pnl=getattr(position, "realized_pnl", None),
+        realized_pnl=getattr(latest_record, "net_pnl", None) if latest_record is not None and not has_position else getattr(position, "realized_pnl", None),
         stop_price=getattr(runtime_snapshot.risk, "stop_price", None),
         target_price=getattr(runtime_snapshot.risk, "target_price", None),
+        closed_at=getattr(latest_record, "exit_time", None),
+        exit_type=_enum_text(getattr(latest_record, "exit_type", None)),
+        mfe=getattr(latest_record, "maximum_favourable_excursion", None),
+        mae=getattr(latest_record, "maximum_adverse_excursion", None),
     )
 
 
 def build_journal_view(runtime_snapshot: RuntimeSnapshot) -> DashboardJournalView:
+    paper_summary = getattr(getattr(runtime_snapshot, "paper_trading", None), "journal_summary", None)
+    if paper_summary is not None:
+        record = paper_summary.latest_record
+        return DashboardJournalView(
+            symbol=_enum_text(runtime_snapshot.symbol),
+            status="Ready",
+            records=paper_summary.record_count,
+            message="Latest completed DRY_RUN trade" if record is not None else "No completed DRY_RUN trades",
+            latest_trade_id=getattr(record, "trade_id", None),
+            latest_exit_type=_enum_text(getattr(record, "exit_type", None)),
+            latest_realized_pnl=getattr(record, "net_pnl", None),
+            latest_opened_at=getattr(record, "entry_time", None),
+            latest_closed_at=getattr(record, "exit_time", None),
+            latest_instrument=getattr(record, "instrument", "-") if record is not None else "-",
+            latest_side=_enum_text(getattr(record, "direction", None)),
+            latest_quantity=getattr(record, "quantity", None),
+            latest_entry_price=getattr(record, "entry_price", None),
+            latest_exit_price=getattr(record, "exit_price", None),
+            latest_holding_seconds=getattr(record, "holding_seconds", None),
+            latest_mfe=getattr(record, "maximum_favourable_excursion", None),
+            latest_mae=getattr(record, "maximum_adverse_excursion", None),
+            daily_pnl=paper_summary.daily_realized_pnl,
+            wins=paper_summary.winning_trades,
+            losses=paper_summary.losing_trades,
+            win_rate=paper_summary.win_rate,
+            profit_factor=paper_summary.profit_factor,
+        )
     record = runtime_snapshot.latest_journal_record
     has_record = record is not None
     return DashboardJournalView(
@@ -427,6 +498,13 @@ def _safe_error(value) -> str | None:
     if not isinstance(value, str):
         return value.__class__.__name__
     return value
+
+
+def _short_id(value) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = value.strip()
+    return normalized if len(normalized) <= 18 else f"{normalized[:8]}...{normalized[-6:]}"
 
 
 def _build_option_chain_strike_view(strike, atm_strike: float | None) -> DashboardOptionChainStrikeView:

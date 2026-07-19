@@ -1,0 +1,14 @@
+"""
+Paper Trading & Position Lifecycle V1 event names.
+"""
+
+from core.events import (
+    PAPER_ORDER_CANCELLED,
+    PAPER_ORDER_CREATED,
+    PAPER_ORDER_EXPIRED,
+    PAPER_ORDER_TRIGGERED,
+    PAPER_POSITION_CLOSED,
+    PAPER_POSITION_OPENED,
+    PAPER_POSITION_UPDATED,
+    PAPER_TRADE_RECORDED,
+)

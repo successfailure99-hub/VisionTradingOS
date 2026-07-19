@@ -122,6 +122,19 @@ POSITION_INVALIDATED_DRY_RUN = "position_invalidated_dry_run"
 POSITION_OBJECTIVE_REACHED = "position_objective_reached"
 
 # ==================================================
+# Paper Trading Events
+# ==================================================
+
+PAPER_ORDER_CREATED = "paper_order_created"
+PAPER_ORDER_TRIGGERED = "paper_order_triggered"
+PAPER_ORDER_CANCELLED = "paper_order_cancelled"
+PAPER_ORDER_EXPIRED = "paper_order_expired"
+PAPER_POSITION_OPENED = "paper_position_opened"
+PAPER_POSITION_UPDATED = "paper_position_updated"
+PAPER_POSITION_CLOSED = "paper_position_closed"
+PAPER_TRADE_RECORDED = "paper_trade_recorded"
+
+# ==================================================
 # Trade Lifecycle Events
 # ==================================================
 

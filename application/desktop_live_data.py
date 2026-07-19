@@ -17,6 +17,7 @@ from application.models import RuntimeConfiguration
 from application.reference_data_bootstrap import run_reference_data_bootstrap
 from application.futures_vwap import DesktopFuturesVWAPRuntimeManager
 from engines.risk.models import InstrumentLotSize, RiskConfiguration
+from engines.paper_trading import PaperIntrabarPolicy, PaperTradingConfiguration
 from application.desktop_option_chain import (
     DesktopOptionChainConfigurationError,
     DesktopOptionChainRuntimeManager,
@@ -73,6 +74,17 @@ ENV_RISK_MAX_DAILY_LOSS = "RISK_MAX_DAILY_LOSS"
 ENV_RISK_ALLOW_LOW_CONFIDENCE = "RISK_ALLOW_LOW_CONFIDENCE"
 ENV_RISK_ALLOW_MIXED_SIGNALS = "RISK_ALLOW_MIXED_SIGNALS"
 ENV_TRADE_PLAN_VALIDITY_MINUTES = "TRADE_PLAN_VALIDITY_MINUTES"
+ENV_PAPER_TRADING_ENABLED = "PAPER_TRADING_ENABLED"
+ENV_PAPER_AUTO_CREATE_ORDER = "PAPER_AUTO_CREATE_ORDER"
+ENV_PAPER_SLIPPAGE_POINTS = "PAPER_SLIPPAGE_POINTS"
+ENV_PAPER_FIXED_FEE_PER_TRADE = "PAPER_FIXED_FEE_PER_TRADE"
+ENV_PAPER_FEE_PERCENTAGE = "PAPER_FEE_PERCENTAGE"
+ENV_PAPER_INTRABAR_POLICY = "PAPER_INTRABAR_POLICY"
+ENV_PAPER_EXIT_ON_STRATEGY_INVALIDATION = "PAPER_EXIT_ON_STRATEGY_INVALIDATION"
+ENV_PAPER_CLOSE_AT_SESSION_END = "PAPER_CLOSE_AT_SESSION_END"
+ENV_PAPER_CANCEL_PENDING_AT_SESSION_END = "PAPER_CANCEL_PENDING_AT_SESSION_END"
+ENV_PAPER_MAX_ACTIVE_POSITIONS_PER_INSTRUMENT = "PAPER_MAX_ACTIVE_POSITIONS_PER_INSTRUMENT"
+ENV_PAPER_STALE_DATA_SECONDS = "PAPER_STALE_DATA_SECONDS"
 
 INSTRUMENT_TOKEN_ENV = (
     (Instrument.NIFTY, "NIFTY_INSTRUMENT_TOKEN", Exchange.NSE),
@@ -93,6 +105,7 @@ class DesktopLiveDataSettings:
     reference_data_bootstrap_enabled: bool
     futures_vwap_enabled: bool
     risk_configuration: RiskConfiguration | None
+    paper_trading_configuration: PaperTradingConfiguration
 
     def __repr__(self) -> str:
         return (
@@ -103,7 +116,8 @@ class DesktopLiveDataSettings:
             f"option_chain_enabled={self.option_chain.enabled}, "
             f"reference_data_bootstrap_enabled={self.reference_data_bootstrap_enabled}, "
             f"futures_vwap_enabled={self.futures_vwap_enabled}, "
-            f"risk_enabled={self.risk_configuration is not None})"
+            f"risk_enabled={self.risk_configuration is not None}, "
+            f"paper_trading_enabled={self.paper_trading_configuration.enabled})"
         )
 
     __str__ = __repr__
@@ -116,6 +130,7 @@ def load_desktop_live_configuration(
     auto_connect = _parse_bool(environ.get(ENV_LIVE_MARKET_DATA_AUTO_CONNECT, "true"), ENV_LIVE_MARKET_DATA_AUTO_CONNECT)
     option_chain = _load_option_chain_settings(environ)
     risk_configuration = _load_risk_configuration(environ)
+    paper_trading_configuration = _load_paper_trading_configuration(environ)
     futures_vwap_enabled = _parse_bool(
         environ.get(ENV_LIVE_FUTURES_VWAP_ENABLED, "true"),
         ENV_LIVE_FUTURES_VWAP_ENABLED,
@@ -138,6 +153,7 @@ def load_desktop_live_configuration(
             reference_data_bootstrap_enabled=False,
             futures_vwap_enabled=False,
             risk_configuration=None,
+            paper_trading_configuration=paper_trading_configuration,
         )
 
     missing = [
@@ -175,6 +191,7 @@ def load_desktop_live_configuration(
         reference_data_bootstrap_enabled=reference_bootstrap,
         futures_vwap_enabled=futures_vwap_enabled,
         risk_configuration=risk_configuration,
+        paper_trading_configuration=paper_trading_configuration,
     )
 
 
@@ -270,6 +287,7 @@ def create_dashboard_application(
                 RuntimeInstrument.SENSEX,
             ),
             risk_configuration=settings.risk_configuration,
+            paper_trading_configuration=settings.paper_trading_configuration,
         )
     ).create_application()
     session_manager = create_zerodha_session_manager(
@@ -492,6 +510,25 @@ def _load_risk_configuration(environ: Mapping[str, str]) -> RiskConfiguration | 
         allow_mixed_signals=_parse_bool(environ.get(ENV_RISK_ALLOW_MIXED_SIGNALS, "false"), ENV_RISK_ALLOW_MIXED_SIGNALS),
         trade_plan_validity_minutes=_parse_bounded_int(environ.get(ENV_TRADE_PLAN_VALIDITY_MINUTES, "15"), ENV_TRADE_PLAN_VALIDITY_MINUTES, minimum=1, maximum=240),
         lot_sizes=tuple(lot_sizes),
+    )
+
+
+def _load_paper_trading_configuration(environ: Mapping[str, str]) -> PaperTradingConfiguration:
+    policy = _text(environ.get(ENV_PAPER_INTRABAR_POLICY, "STOP_FIRST")).upper()
+    if policy != "STOP_FIRST":
+        raise DesktopLiveDataConfigurationError("PAPER_INTRABAR_POLICY must be STOP_FIRST")
+    return PaperTradingConfiguration(
+        enabled=_parse_bool(environ.get(ENV_PAPER_TRADING_ENABLED, "true"), ENV_PAPER_TRADING_ENABLED),
+        auto_create_order=_parse_bool(environ.get(ENV_PAPER_AUTO_CREATE_ORDER, "true"), ENV_PAPER_AUTO_CREATE_ORDER),
+        slippage_points=_parse_non_negative_float(environ.get(ENV_PAPER_SLIPPAGE_POINTS, "0"), ENV_PAPER_SLIPPAGE_POINTS),
+        fixed_fee_per_trade=_parse_non_negative_float(environ.get(ENV_PAPER_FIXED_FEE_PER_TRADE, "0"), ENV_PAPER_FIXED_FEE_PER_TRADE),
+        fee_percentage=_parse_non_negative_float(environ.get(ENV_PAPER_FEE_PERCENTAGE, "0"), ENV_PAPER_FEE_PERCENTAGE),
+        intrabar_policy=PaperIntrabarPolicy.STOP_FIRST,
+        exit_on_strategy_invalidation=_parse_bool(environ.get(ENV_PAPER_EXIT_ON_STRATEGY_INVALIDATION, "false"), ENV_PAPER_EXIT_ON_STRATEGY_INVALIDATION),
+        close_at_session_end=_parse_bool(environ.get(ENV_PAPER_CLOSE_AT_SESSION_END, "true"), ENV_PAPER_CLOSE_AT_SESSION_END),
+        cancel_pending_at_session_end=_parse_bool(environ.get(ENV_PAPER_CANCEL_PENDING_AT_SESSION_END, "true"), ENV_PAPER_CANCEL_PENDING_AT_SESSION_END),
+        max_active_positions_per_instrument=_parse_bounded_int(environ.get(ENV_PAPER_MAX_ACTIVE_POSITIONS_PER_INSTRUMENT, "1"), ENV_PAPER_MAX_ACTIVE_POSITIONS_PER_INSTRUMENT, minimum=1, maximum=1),
+        stale_data_seconds=_parse_bounded_int(environ.get(ENV_PAPER_STALE_DATA_SECONDS, "300"), ENV_PAPER_STALE_DATA_SECONDS, minimum=1, maximum=86400),
     )
 def _parse_bounded_int(value: str | None, variable_name: str, *, minimum: int, maximum: int) -> int:
     try:

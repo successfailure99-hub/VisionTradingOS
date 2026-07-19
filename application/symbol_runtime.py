@@ -20,6 +20,7 @@ from engines.option_chain.models import OptionChainSnapshot, OptionChainState
 from engines.option_chain.option_chain_engine import OptionChainEngine
 from engines.order_management.models import OrderCommand, OrderRequest, OrderSnapshot, OrderState
 from engines.order_management.order_management_engine import OrderManagementEngine
+from engines.paper_trading.engine import PaperTradingEngine
 from engines.position.models import PositionFill, PositionMark, PositionState
 from engines.position.position_engine import PositionEngine
 from engines.price_action.price_action_engine import PriceActionEngine
@@ -80,6 +81,13 @@ class SymbolRuntime:
         self.strategy_engine = StrategyEngine(event_bus, instrument.value, configuration.timeframe)
         self.risk_engine = RiskEngine(event_bus, instrument.value, configuration.timeframe)
         self.trade_plan_engine = RiskTradePlanEngine()
+        self.paper_trading_engine = PaperTradingEngine(
+            event_bus,
+            instrument=instrument.value,
+            timeframe=configuration.timeframe,
+            safety_mode=configuration.safety_mode,
+            configuration=configuration.paper_trading_configuration,
+        )
         self.order_engine = OrderManagementEngine(event_bus, instrument.value, configuration.timeframe)
         self.position_engine = PositionEngine(event_bus, instrument.value, configuration.exchange, configuration.timeframe)
         self.candle_engine = CandleEngine(event_bus, TimeFrame.from_value(configuration.timeframe))
@@ -114,6 +122,7 @@ class SymbolRuntime:
         self._status = RuntimeStatus.RUNNING
 
     def stop(self) -> None:
+        self._shutdown_paper_trading()
         self._status = RuntimeStatus.STOPPED
 
     def mark_error(self) -> None:
@@ -151,6 +160,7 @@ class SymbolRuntime:
         self._last_tick = tick
         self._updated_at = tick.timestamp
         self._refresh_dashboard_analysis(tick.timestamp, tick.last_price)
+        self._process_paper_tick(tick)
         return self.snapshot()
 
     def process_vwap_tick(
@@ -360,6 +370,12 @@ class SymbolRuntime:
                 now=state.timestamp,
             )
             self.risk_engine.record_decision(risk_state)
+            self.paper_trading_engine.receive_plan(
+                self.trade_plan_engine.active_plan,
+                risk_state,
+                strategy=state,
+                ai_reasoning=ai_reasoning,
+            )
         self._updated_at = state.timestamp
         return state
 
@@ -433,6 +449,7 @@ class SymbolRuntime:
         self.strategy_engine.reset()
         self.risk_engine.reset()
         self.trade_plan_engine.reset()
+        self.paper_trading_engine.reset()
         self.order_engine.reset()
         self.position_engine.reset()
         self._last_tick = None
@@ -485,7 +502,27 @@ class SymbolRuntime:
             latest_journal_record=latest_journal_record,
             updated_at=self._updated_at,
             vwap_source=self._vwap_source_snapshot(),
+            paper_trading=self.paper_trading_engine.snapshot(),
         )
+
+    def _process_paper_tick(self, tick: Tick) -> None:
+        record = self.paper_trading_engine.on_tick(
+            tick,
+            strategy=None,
+            risk=None,
+        )
+        if record is not None:
+            updated = self.trade_plan_engine.record_paper_trade_close(realized_pnl=record.net_pnl)
+            if updated is not None:
+                self.risk_engine.record_decision(updated)
+
+    def _shutdown_paper_trading(self) -> None:
+        timestamp = self._updated_at or getattr(self._last_tick, "timestamp", None)
+        record = self.paper_trading_engine.shutdown(timestamp=timestamp) if timestamp is not None else self.paper_trading_engine.shutdown()
+        if record is not None:
+            updated = self.trade_plan_engine.record_paper_trade_close(realized_pnl=record.net_pnl)
+            if updated is not None:
+                self.risk_engine.record_decision(updated)
 
     def _process_closed_candles(self) -> None:
         history = self.candle_engine.get_history(self._core_instrument)

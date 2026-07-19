@@ -493,6 +493,14 @@ class DashboardPositionView:
     realized_pnl: float | None
     stop_price: float | None
     target_price: float | None
+    entry_price: float | None = None
+    valid_until: datetime | None = None
+    plan_id: str | None = None
+    opened_at: datetime | None = None
+    closed_at: datetime | None = None
+    exit_type: str = "-"
+    mfe: float | None = None
+    mae: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -506,6 +514,19 @@ class DashboardJournalView:
     latest_realized_pnl: float | None
     latest_opened_at: datetime | None
     latest_closed_at: datetime | None
+    latest_instrument: str = "-"
+    latest_side: str = "-"
+    latest_quantity: int | None = None
+    latest_entry_price: float | None = None
+    latest_exit_price: float | None = None
+    latest_holding_seconds: int | None = None
+    latest_mfe: float | None = None
+    latest_mae: float | None = None
+    daily_pnl: float | None = None
+    wins: int = 0
+    losses: int = 0
+    win_rate: float | None = None
+    profit_factor: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
