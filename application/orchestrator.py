@@ -16,6 +16,7 @@ from engines.order_management.models import OrderCommand, OrderRequest, OrderSta
 from engines.position.models import PositionFill, PositionMark
 from engines.risk.models import AccountRiskState, RiskPolicy, TradeRiskPlan
 from engines.performance_analytics.engine import PerformanceAnalyticsEngine
+from engines.live_market_validation.engine import LiveMarketValidationEngine
 from engines.trade_journal.models import TradeJournalSnapshot
 from engines.trade_journal.trade_journal_engine import TradeJournalEngine
 
@@ -48,6 +49,10 @@ class ApplicationOrchestrator:
         self.performance_analytics_engine = PerformanceAnalyticsEngine(
             configuration=self._configuration.performance_analytics_configuration,
             event_bus=event_bus,
+        )
+        self.live_validation_engine = LiveMarketValidationEngine(
+            event_bus,
+            configuration=self._configuration.live_validation_configuration,
         )
         self.broker_adapter = broker_adapter or ZerodhaBrokerAdapter(mode=BrokerExecutionMode.DRY_RUN)
         if self.broker_adapter.mode is not BrokerExecutionMode.DRY_RUN:
@@ -206,6 +211,7 @@ class ApplicationOrchestrator:
         self.market_data_engine.clear()
         self.trade_journal_engine.reset()
         self.performance_analytics_engine.reset(clear_persistent_data=False)
+        self.live_validation_engine.reset(clear_persistent_data=False)
         for runtime in self._runtimes.values():
             runtime.reset()
             if previous_status is RuntimeStatus.RUNNING:
@@ -231,6 +237,7 @@ class ApplicationOrchestrator:
                 for runtime in self._runtimes.values()
             ),
             performance_analytics=self.performance_analytics_engine.snapshot(),
+            live_validation=self.live_validation_engine.snapshot(),
         )
 
     def _runtime_for_core_instrument(self, instrument: Instrument) -> SymbolRuntime:

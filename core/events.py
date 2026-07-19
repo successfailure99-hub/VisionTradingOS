@@ -202,3 +202,13 @@ PRODUCTION_SAFETY_INCIDENT_RESOLVED = "production_safety_incident_resolved"
 PRODUCTION_SAFETY_RECOVERY_PENDING = "production_safety_recovery_pending"
 PRODUCTION_SAFETY_RECOVERED = "production_safety_recovered"
 PRODUCTION_SAFETY_ERROR = "production_safety_error"
+
+# ==================================================
+# Live Market Validation Events
+# ==================================================
+
+LIVE_VALIDATION_SESSION_STARTED = "live_validation_session_started"
+LIVE_VALIDATION_UPDATED = "live_validation_updated"
+LIVE_VALIDATION_FINDING = "live_validation_finding"
+LIVE_VALIDATION_SESSION_COMPLETED = "live_validation_session_completed"
+LIVE_VALIDATION_SESSION_FAILED = "live_validation_session_failed"
