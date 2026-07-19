@@ -18,6 +18,7 @@ from application.reference_data_bootstrap import run_reference_data_bootstrap
 from application.futures_vwap import DesktopFuturesVWAPRuntimeManager
 from engines.risk.models import InstrumentLotSize, RiskConfiguration
 from engines.paper_trading import PaperIntrabarPolicy, PaperTradingConfiguration
+from engines.performance_analytics import PerformanceAnalyticsConfiguration
 from application.desktop_option_chain import (
     DesktopOptionChainConfigurationError,
     DesktopOptionChainRuntimeManager,
@@ -85,6 +86,12 @@ ENV_PAPER_CLOSE_AT_SESSION_END = "PAPER_CLOSE_AT_SESSION_END"
 ENV_PAPER_CANCEL_PENDING_AT_SESSION_END = "PAPER_CANCEL_PENDING_AT_SESSION_END"
 ENV_PAPER_MAX_ACTIVE_POSITIONS_PER_INSTRUMENT = "PAPER_MAX_ACTIVE_POSITIONS_PER_INSTRUMENT"
 ENV_PAPER_STALE_DATA_SECONDS = "PAPER_STALE_DATA_SECONDS"
+ENV_PERFORMANCE_ANALYTICS_ENABLED = "PERFORMANCE_ANALYTICS_ENABLED"
+ENV_PERFORMANCE_JOURNAL_PERSISTENCE_ENABLED = "PERFORMANCE_JOURNAL_PERSISTENCE_ENABLED"
+ENV_PERFORMANCE_JOURNAL_PATH = "PERFORMANCE_JOURNAL_PATH"
+ENV_PERFORMANCE_STARTING_EQUITY = "PERFORMANCE_STARTING_EQUITY"
+ENV_PERFORMANCE_RECENT_TRADE_LIMIT = "PERFORMANCE_RECENT_TRADE_LIMIT"
+ENV_PERFORMANCE_EXPORT_DIRECTORY = "PERFORMANCE_EXPORT_DIRECTORY"
 
 INSTRUMENT_TOKEN_ENV = (
     (Instrument.NIFTY, "NIFTY_INSTRUMENT_TOKEN", Exchange.NSE),
@@ -106,6 +113,7 @@ class DesktopLiveDataSettings:
     futures_vwap_enabled: bool
     risk_configuration: RiskConfiguration | None
     paper_trading_configuration: PaperTradingConfiguration
+    performance_analytics_configuration: PerformanceAnalyticsConfiguration
 
     def __repr__(self) -> str:
         return (
@@ -131,6 +139,7 @@ def load_desktop_live_configuration(
     option_chain = _load_option_chain_settings(environ)
     risk_configuration = _load_risk_configuration(environ)
     paper_trading_configuration = _load_paper_trading_configuration(environ)
+    performance_analytics_configuration = _load_performance_analytics_configuration(environ)
     futures_vwap_enabled = _parse_bool(
         environ.get(ENV_LIVE_FUTURES_VWAP_ENABLED, "true"),
         ENV_LIVE_FUTURES_VWAP_ENABLED,
@@ -154,6 +163,7 @@ def load_desktop_live_configuration(
             futures_vwap_enabled=False,
             risk_configuration=None,
             paper_trading_configuration=paper_trading_configuration,
+            performance_analytics_configuration=performance_analytics_configuration,
         )
 
     missing = [
@@ -192,6 +202,7 @@ def load_desktop_live_configuration(
         futures_vwap_enabled=futures_vwap_enabled,
         risk_configuration=risk_configuration,
         paper_trading_configuration=paper_trading_configuration,
+        performance_analytics_configuration=performance_analytics_configuration,
     )
 
 
@@ -288,6 +299,7 @@ def create_dashboard_application(
             ),
             risk_configuration=settings.risk_configuration,
             paper_trading_configuration=settings.paper_trading_configuration,
+            performance_analytics_configuration=settings.performance_analytics_configuration,
         )
     ).create_application()
     session_manager = create_zerodha_session_manager(
@@ -529,6 +541,20 @@ def _load_paper_trading_configuration(environ: Mapping[str, str]) -> PaperTradin
         cancel_pending_at_session_end=_parse_bool(environ.get(ENV_PAPER_CANCEL_PENDING_AT_SESSION_END, "true"), ENV_PAPER_CANCEL_PENDING_AT_SESSION_END),
         max_active_positions_per_instrument=_parse_bounded_int(environ.get(ENV_PAPER_MAX_ACTIVE_POSITIONS_PER_INSTRUMENT, "1"), ENV_PAPER_MAX_ACTIVE_POSITIONS_PER_INSTRUMENT, minimum=1, maximum=1),
         stale_data_seconds=_parse_bounded_int(environ.get(ENV_PAPER_STALE_DATA_SECONDS, "300"), ENV_PAPER_STALE_DATA_SECONDS, minimum=1, maximum=86400),
+    )
+
+
+def _load_performance_analytics_configuration(environ: Mapping[str, str]) -> PerformanceAnalyticsConfiguration:
+    return PerformanceAnalyticsConfiguration(
+        enabled=_parse_bool(environ.get(ENV_PERFORMANCE_ANALYTICS_ENABLED, "true"), ENV_PERFORMANCE_ANALYTICS_ENABLED),
+        persistence_enabled=_parse_bool(
+            environ.get(ENV_PERFORMANCE_JOURNAL_PERSISTENCE_ENABLED, "true"),
+            ENV_PERFORMANCE_JOURNAL_PERSISTENCE_ENABLED,
+        ),
+        journal_path=_text(environ.get(ENV_PERFORMANCE_JOURNAL_PATH, "")) or "logs/performance_journal.jsonl",
+        starting_equity=_parse_positive_float(environ.get(ENV_PERFORMANCE_STARTING_EQUITY, "100000"), ENV_PERFORMANCE_STARTING_EQUITY),
+        recent_trade_limit=_parse_bounded_int(environ.get(ENV_PERFORMANCE_RECENT_TRADE_LIMIT, "50"), ENV_PERFORMANCE_RECENT_TRADE_LIMIT, minimum=1, maximum=1000),
+        export_directory=_text(environ.get(ENV_PERFORMANCE_EXPORT_DIRECTORY, "")) or "logs/exports",
     )
 def _parse_bounded_int(value: str | None, variable_name: str, *, minimum: int, maximum: int) -> int:
     try:

@@ -15,6 +15,7 @@ from engines.market_data.market_data_engine import MarketDataEngine
 from engines.order_management.models import OrderCommand, OrderRequest, OrderState
 from engines.position.models import PositionFill, PositionMark
 from engines.risk.models import AccountRiskState, RiskPolicy, TradeRiskPlan
+from engines.performance_analytics.engine import PerformanceAnalyticsEngine
 from engines.trade_journal.models import TradeJournalSnapshot
 from engines.trade_journal.trade_journal_engine import TradeJournalEngine
 
@@ -44,6 +45,10 @@ class ApplicationOrchestrator:
         self._status = RuntimeStatus.CREATED
         self.market_data_engine = MarketDataEngine(event_bus)
         self.trade_journal_engine = TradeJournalEngine(event_bus)
+        self.performance_analytics_engine = PerformanceAnalyticsEngine(
+            configuration=self._configuration.performance_analytics_configuration,
+            event_bus=event_bus,
+        )
         self.broker_adapter = broker_adapter or ZerodhaBrokerAdapter(mode=BrokerExecutionMode.DRY_RUN)
         if self.broker_adapter.mode is not BrokerExecutionMode.DRY_RUN:
             raise ValueError("Application Orchestrator V1 requires a DRY_RUN Zerodha adapter by default.")
@@ -200,6 +205,7 @@ class ApplicationOrchestrator:
         previous_status = self._status
         self.market_data_engine.clear()
         self.trade_journal_engine.reset()
+        self.performance_analytics_engine.reset(clear_persistent_data=False)
         for runtime in self._runtimes.values():
             runtime.reset()
             if previous_status is RuntimeStatus.RUNNING:
@@ -218,9 +224,13 @@ class ApplicationOrchestrator:
             shared_market_data_ready=self.market_data_engine.is_ready(),
             shared_trade_journal_ready=self.trade_journal_engine.is_ready(),
             runtime_snapshots=tuple(
-                runtime.snapshot(self._latest_journal_record_for(runtime.instrument))
+                runtime.snapshot(
+                    self._latest_journal_record_for(runtime.instrument),
+                    performance_analytics=self.performance_analytics_engine.snapshot(instrument=runtime.instrument.value),
+                )
                 for runtime in self._runtimes.values()
             ),
+            performance_analytics=self.performance_analytics_engine.snapshot(),
         )
 
     def _runtime_for_core_instrument(self, instrument: Instrument) -> SymbolRuntime:

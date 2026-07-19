@@ -62,6 +62,7 @@ class PaperTradingEngine:
         self._records: dict[str, PaperTradeRecord] = {}
         self._processed_plan_ids: set[str] = set()
         self._closed_position_ids: set[str] = set()
+        self._trade_contexts: dict[str, dict[str, object]] = {}
         self._previous_price: float | None = None
         self._latest_price: float | None = None
         self._last_event = "-"
@@ -116,6 +117,12 @@ class PaperTradingEngine:
             source_plan_identity=plan.source_strategy_id,
         )
         self._order = order
+        self._trade_contexts[plan.plan_id] = _trade_context(
+            plan,
+            strategy=strategy,
+            ai_reasoning=ai_reasoning,
+            timeframe=self._timeframe,
+        )
         self._processed_plan_ids.add(plan.plan_id)
         self._orders_created += 1
         self._last_event = PAPER_ORDER_CREATED
@@ -175,6 +182,7 @@ class PaperTradingEngine:
         self._records.clear()
         self._processed_plan_ids.clear()
         self._closed_position_ids.clear()
+        self._trade_contexts.clear()
         self._previous_price = None
         self._latest_price = None
         self._last_event = "-"
@@ -308,6 +316,7 @@ class PaperTradingEngine:
         self._position = closed
         self._closed_position_ids.add(position.position_id)
         self._positions_closed += 1
+        context = self._trade_contexts.get(position.plan_id, {})
         trade = PaperTradeRecord(
             trade_id=f"paper-trade:{position.plan_id}",
             position_id=position.position_id,
@@ -336,6 +345,21 @@ class PaperTradingEngine:
             strategy_confidence="-",
             strategy_reasoning=(),
             trading_date=timestamp.astimezone(IST).date(),
+            entry_type=str(context.get("entry_type", "-")),
+            timeframe=str(context.get("timeframe", self._timeframe)),
+            ai_confidence=context.get("ai_confidence"),
+            ai_decision=str(context.get("ai_decision", "-")),
+            ai_reasoning_summary=str(context.get("ai_reasoning_summary", "-")),
+            price_action_setup=str(context.get("price_action_setup", "-")),
+            market_phase=str(context.get("market_phase", "-")),
+            day_bias=str(context.get("day_bias", "-")),
+            option_chain_bias=str(context.get("option_chain_bias", "-")),
+            cpr_relationship=str(context.get("cpr_relationship", "-")),
+            cpr_width_classification=str(context.get("cpr_width_classification", "-")),
+            camarilla_relationship=str(context.get("camarilla_relationship", "-")),
+            vwap_relationship=str(context.get("vwap_relationship", "-")),
+            source_strategy_id=str(context.get("source_strategy_id", "-")),
+            source_plan_identity=str(context.get("source_plan_identity", "-")),
         )
         self._records.setdefault(trade.trade_id, trade)
         self._last_event = PAPER_POSITION_CLOSED
@@ -470,6 +494,40 @@ def _summary(records: tuple[PaperTradeRecord, ...]) -> PaperJournalSummary:
         average_loss=round(-gross_loss / len(losses), 2) if losses else None,
         profit_factor=round(gross_profit / gross_loss, 4) if gross_loss else None,
     )
+
+
+def _trade_context(plan, *, strategy=None, ai_reasoning=None, timeframe: str) -> dict[str, object]:
+    market_context = getattr(strategy, "market_context", None)
+    return {
+        "entry_type": getattr(plan, "entry_type", "-"),
+        "timeframe": timeframe,
+        "ai_confidence": _optional_float(getattr(ai_reasoning, "confidence", None)),
+        "ai_decision": _label(getattr(ai_reasoning, "decision", None)),
+        "ai_reasoning_summary": _label(getattr(ai_reasoning, "explanation", None) or getattr(ai_reasoning, "market_summary", None)),
+        "price_action_setup": _label(getattr(strategy, "setup_quality", None)),
+        "market_phase": _label(getattr(market_context, "market_phase", None)),
+        "day_bias": _label(getattr(market_context, "market_bias", None)),
+        "option_chain_bias": _label(getattr(market_context, "option_chain_direction", None)),
+        "cpr_relationship": _label(getattr(market_context, "cpr_relationship", None)),
+        "cpr_width_classification": _label(getattr(market_context, "cpr_width_classification", None)),
+        "camarilla_relationship": _label(getattr(market_context, "camarilla_relationship", None)),
+        "vwap_relationship": _label(getattr(market_context, "vwap_relationship", None)),
+        "source_strategy_id": _label(getattr(plan, "source_strategy_id", None)),
+        "source_plan_identity": _label(getattr(plan, "source_strategy_id", None)),
+    }
+
+
+def _label(value) -> str:
+    raw = getattr(value, "value", value)
+    text = str(raw).strip() if raw is not None else ""
+    return text or "-"
+
+
+def _optional_float(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if isfinite(number) else None
 
 
 def _positive_price(value) -> float | None:

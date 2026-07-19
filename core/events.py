@@ -166,6 +166,15 @@ TRADE_JOURNAL_TRADE_RECORDED = "trade_journal_trade_recorded"
 TRADE_JOURNAL_RUNTIME_INTEGRATION_ERROR = "trade_journal_runtime_integration_error"
 
 # ==================================================
+# Performance Analytics Events
+# ==================================================
+
+PERFORMANCE_TRADE_ACCEPTED = "performance_trade_accepted"
+PERFORMANCE_ANALYTICS_UPDATED = "performance_analytics_updated"
+PERFORMANCE_EXPORT_COMPLETED = "performance_export_completed"
+PERFORMANCE_EXPORT_FAILED = "performance_export_failed"
+
+# ==================================================
 # Alert & Notification Events
 # ==================================================
 

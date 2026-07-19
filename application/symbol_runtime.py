@@ -477,7 +477,7 @@ class SymbolRuntime:
         self._vwap_last_error = None
         self._status = RuntimeStatus.CREATED
 
-    def snapshot(self, latest_journal_record=None) -> RuntimeSnapshot:
+    def snapshot(self, latest_journal_record=None, *, performance_analytics=None) -> RuntimeSnapshot:
         latest_candle = self.candle_engine.get_current(self._core_instrument)
         if latest_candle is None:
             history = self.candle_engine.get_history(self._core_instrument)
@@ -503,6 +503,7 @@ class SymbolRuntime:
             updated_at=self._updated_at,
             vwap_source=self._vwap_source_snapshot(),
             paper_trading=self.paper_trading_engine.snapshot(),
+            performance_analytics=performance_analytics,
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:

@@ -8,8 +8,12 @@ from zoneinfo import ZoneInfo
 from application.lifecycle_manager import LifecycleSnapshot
 from application.live_market_data import LiveMarketDataRuntimeSnapshot
 from application.models import RuntimeSnapshot
+from dashboard import formatters
 from dashboard.models import (
     DashboardAIView,
+    DashboardAnalyticsMetricView,
+    DashboardAnalyticsRowView,
+    DashboardAnalyticsView,
     DashboardJournalView,
     DashboardLiveMarketDataView,
     DashboardLiveSubscriptionView,
@@ -57,6 +61,7 @@ def build_dashboard_view(
         strategies=tuple(build_strategy_view(snapshot) for snapshot in runtime_snapshots),
         positions=tuple(build_position_view(snapshot) for snapshot in runtime_snapshots),
         journals=tuple(build_journal_view(snapshot) for snapshot in runtime_snapshots),
+        analytics=tuple(build_analytics_view(snapshot) for snapshot in runtime_snapshots),
         option_chains=tuple(
             build_option_chain_view(
                 snapshot,
@@ -480,6 +485,102 @@ def build_journal_view(runtime_snapshot: RuntimeSnapshot) -> DashboardJournalVie
     )
 
 
+def build_analytics_view(runtime_snapshot: RuntimeSnapshot) -> DashboardAnalyticsView:
+    snapshot = getattr(runtime_snapshot, "performance_analytics", None)
+    symbol = _enum_text(runtime_snapshot.symbol)
+    if snapshot is None:
+        return DashboardAnalyticsView(
+            symbol=symbol,
+            status="Disabled",
+            selected_instrument=symbol,
+            total_trades=0,
+            net_pnl=0.0,
+            daily_pnl=0.0,
+            weekly_pnl=0.0,
+            monthly_pnl=0.0,
+            win_rate=None,
+            loss_rate=None,
+            profit_factor=None,
+            expectancy=None,
+            average_r=None,
+            maximum_drawdown=0.0,
+            current_streak="-",
+            maximum_consecutive_wins=0,
+            maximum_consecutive_losses=0,
+            average_holding_seconds=None,
+            best_setup="-",
+            weakest_setup="-",
+            last_error=None,
+        )
+    summary = snapshot.selected_instrument
+    daily = snapshot.daily_performance[-1].summary.net_profit if snapshot.daily_performance else 0.0
+    weekly = snapshot.weekly_performance[-1].summary.net_profit if snapshot.weekly_performance else 0.0
+    monthly = snapshot.monthly_performance[-1].summary.net_profit if snapshot.monthly_performance else 0.0
+    best_setup, weakest_setup = _setup_extremes(snapshot.setup_statistics)
+    status = "Error" if snapshot.diagnostics.last_error else "Ready"
+    return DashboardAnalyticsView(
+        symbol=symbol,
+        status=status,
+        selected_instrument=symbol,
+        total_trades=summary.record_count,
+        net_pnl=summary.net_profit,
+        daily_pnl=daily,
+        weekly_pnl=weekly,
+        monthly_pnl=monthly,
+        win_rate=summary.win_rate,
+        loss_rate=summary.loss_rate,
+        profit_factor=summary.profit_factor,
+        expectancy=summary.expectancy,
+        average_r=summary.average_r,
+        maximum_drawdown=summary.maximum_drawdown,
+        current_streak=_current_streak(summary),
+        maximum_consecutive_wins=summary.maximum_consecutive_wins,
+        maximum_consecutive_losses=summary.maximum_consecutive_losses,
+        average_holding_seconds=summary.average_holding_seconds,
+        best_setup=best_setup,
+        weakest_setup=weakest_setup,
+        last_error=snapshot.diagnostics.last_error,
+        metric_cards=(
+            DashboardAnalyticsMetricView("Total Trades", formatters.integer(summary.record_count)),
+            DashboardAnalyticsMetricView("Net P&L", formatters.price(summary.net_profit), formatters.pnl_kind(summary.net_profit)),
+            DashboardAnalyticsMetricView("Daily P&L", formatters.price(daily), formatters.pnl_kind(daily)),
+            DashboardAnalyticsMetricView("Weekly P&L", formatters.price(weekly), formatters.pnl_kind(weekly)),
+            DashboardAnalyticsMetricView("Monthly P&L", formatters.price(monthly), formatters.pnl_kind(monthly)),
+            DashboardAnalyticsMetricView("Win Rate", formatters.ratio(summary.win_rate)),
+            DashboardAnalyticsMetricView("Profit Factor", formatters.ratio(summary.profit_factor)),
+            DashboardAnalyticsMetricView("Max Drawdown", formatters.price(summary.maximum_drawdown), "warning" if summary.maximum_drawdown else "neutral"),
+        ),
+        recent_trades=tuple(
+            DashboardAnalyticsRowView(
+                (
+                    record.trade_id,
+                    record.instrument,
+                    _enum_text(record.direction),
+                    formatters.price(record.net_pnl),
+                    formatters.timestamp(record.exit_time),
+                )
+            )
+            for record in snapshot.latest_records[:10]
+        ),
+        equity_curve=tuple(
+            DashboardAnalyticsRowView((str(point.sequence), point.trade_id, formatters.price(point.cumulative_pnl), formatters.price(point.drawdown)))
+            for point in snapshot.equity_curve[-20:]
+        ),
+        period_performance=tuple(
+            DashboardAnalyticsRowView((item.label, formatters.integer(item.summary.record_count), formatters.price(item.summary.net_profit), formatters.ratio(item.summary.win_rate)))
+            for item in snapshot.daily_performance[-10:]
+        ),
+        setup_statistics=tuple(
+            DashboardAnalyticsRowView((item.group_key, formatters.integer(item.summary.record_count), formatters.price(item.summary.net_profit), formatters.ratio(item.summary.win_rate)))
+            for item in snapshot.setup_statistics
+        ),
+        time_of_day_statistics=tuple(
+            DashboardAnalyticsRowView((item.group_key, formatters.integer(item.summary.record_count), formatters.price(item.summary.net_profit), formatters.ratio(item.summary.win_rate)))
+            for item in snapshot.time_of_day_statistics
+        ),
+    )
+
+
 def _enum_text(value) -> str:
     if value is None:
         return MISSING
@@ -819,3 +920,20 @@ def _stable_runtime_snapshots(runtime_snapshots) -> tuple[RuntimeSnapshot, ...]:
             key=lambda snapshot: (order.get(_enum_text(snapshot.symbol), len(order)), _enum_text(snapshot.symbol)),
         )
     )
+
+
+def _current_streak(summary) -> str:
+    if summary.consecutive_wins:
+        return f"{summary.consecutive_wins} Wins"
+    if summary.consecutive_losses:
+        return f"{summary.consecutive_losses} Losses"
+    return "-"
+
+
+def _setup_extremes(items) -> tuple[str, str]:
+    populated = tuple(item for item in items if item.summary.record_count)
+    if not populated:
+        return "-", "-"
+    best = max(populated, key=lambda item: item.summary.net_profit)
+    weakest = min(populated, key=lambda item: item.summary.net_profit)
+    return best.group_key, weakest.group_key

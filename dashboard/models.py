@@ -530,6 +530,65 @@ class DashboardJournalView:
 
 
 @dataclass(frozen=True, slots=True)
+class DashboardAnalyticsMetricView:
+    label: str
+    value: str
+    kind: str = "neutral"
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardAnalyticsRowView:
+    columns: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "columns", tuple(str(item) for item in self.columns))
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardAnalyticsView:
+    symbol: str
+    status: str
+    selected_instrument: str
+    total_trades: int
+    net_pnl: float
+    daily_pnl: float
+    weekly_pnl: float
+    monthly_pnl: float
+    win_rate: float | None
+    loss_rate: float | None
+    profit_factor: float | None
+    expectancy: float | None
+    average_r: float | None
+    maximum_drawdown: float
+    current_streak: str
+    maximum_consecutive_wins: int
+    maximum_consecutive_losses: int
+    average_holding_seconds: float | None
+    best_setup: str
+    weakest_setup: str
+    last_error: str | None
+    metric_cards: tuple[DashboardAnalyticsMetricView, ...] = ()
+    recent_trades: tuple[DashboardAnalyticsRowView, ...] = ()
+    equity_curve: tuple[DashboardAnalyticsRowView, ...] = ()
+    period_performance: tuple[DashboardAnalyticsRowView, ...] = ()
+    setup_statistics: tuple[DashboardAnalyticsRowView, ...] = ()
+    time_of_day_statistics: tuple[DashboardAnalyticsRowView, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_non_negative(self.total_trades, "total_trades")
+        _require_non_negative(self.maximum_consecutive_wins, "maximum_consecutive_wins")
+        _require_non_negative(self.maximum_consecutive_losses, "maximum_consecutive_losses")
+        for name in ("metric_cards",):
+            for item in getattr(self, name):
+                if not isinstance(item, DashboardAnalyticsMetricView):
+                    raise TypeError(f"{name} must contain DashboardAnalyticsMetricView")
+        for name in ("recent_trades", "equity_curve", "period_performance", "setup_statistics", "time_of_day_statistics"):
+            for item in getattr(self, name):
+                if not isinstance(item, DashboardAnalyticsRowView):
+                    raise TypeError(f"{name} must contain DashboardAnalyticsRowView")
+
+
+@dataclass(frozen=True, slots=True)
 class DashboardView:
     runtime: DashboardRuntimeView
     markets: tuple[DashboardMarketView, ...]
@@ -540,3 +599,4 @@ class DashboardView:
     price_actions: tuple[DashboardPriceActionView, ...] = field(default_factory=tuple)
     option_chains: tuple[DashboardOptionChainView, ...] = field(default_factory=tuple)
     live_market_data: DashboardLiveMarketDataView = field(default_factory=unavailable_live_market_data_view)
+    analytics: tuple[DashboardAnalyticsView, ...] = field(default_factory=tuple)

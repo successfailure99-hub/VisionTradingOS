@@ -64,6 +64,16 @@ python desktop_main.py
 
 Option contracts are discovered dynamically from Zerodha's instrument master after the first valid spot tick for NIFTY, BANKNIFTY, or SENSEX. Do not configure or store option tokens manually. If option-chain discovery or subscription fails, the spot feed continues and the Option Chain panel shows a sanitized runtime error. Zerodha access tokens are valid only for the current session/day and must not be committed.
 
+## Performance Analytics
+
+Performance Analytics V1 consumes completed `PaperTradeRecord` values only. It is read-only: `ANALYSIS_ONLY` and `DRY_RUN` remain preserved, no broker execution API is called, and `broker_order_calls` remains `0`.
+
+The persistent journal defaults to `logs/performance_journal.jsonl` and can be configured with `PERFORMANCE_JOURNAL_PATH`. JSON Lines records include a schema version, preserve timezone-aware datetimes, and tolerate corrupt lines without deleting valid records. Exports are available as UTF-8 CSV and deterministic `.xlsx` workbooks under `PERFORMANCE_EXPORT_DIRECTORY`.
+
+Definitions: wins are `net_pnl > 0`, losses are `net_pnl < 0`, and breakeven trades are `net_pnl == 0`. Profit factor is gross profit divided by absolute gross loss and is `None` when undefined, never infinity. Expectancy is average completed-trade net P&L. R metrics use stored `reward_risk_realized`. Equity curve orders trades by `exit_time, trade_id`; percentage drawdown uses configured `PERFORMANCE_STARTING_EQUITY`. Daily periods use `PaperTradeRecord.trading_date`, weekly periods use ISO weeks, and monthly periods use calendar months.
+
+The deterministic post-trade review is generated from stored trade facts only. It does not call external AI services and does not infer unsupported psychological or market claims.
+
 ## Testing
 
 Full regression suite:

@@ -154,6 +154,21 @@ class PaperTradeRecord:
     strategy_confidence: str
     strategy_reasoning: tuple[str, ...]
     trading_date: date
+    entry_type: str = "-"
+    timeframe: str = "-"
+    ai_confidence: float | None = None
+    ai_decision: str = "-"
+    ai_reasoning_summary: str = "-"
+    price_action_setup: str = "-"
+    market_phase: str = "-"
+    day_bias: str = "-"
+    option_chain_bias: str = "-"
+    cpr_relationship: str = "-"
+    cpr_width_classification: str = "-"
+    camarilla_relationship: str = "-"
+    vwap_relationship: str = "-"
+    source_strategy_id: str = "-"
+    source_plan_identity: str = "-"
 
     def __post_init__(self) -> None:
         for name in ("trade_id", "position_id", "paper_order_id", "plan_id"):
@@ -180,6 +195,28 @@ class PaperTradeRecord:
         if not isinstance(self.trading_date, date) or isinstance(self.trading_date, datetime):
             raise TypeError("trading_date must be date")
         object.__setattr__(self, "strategy_reasoning", tuple(str(item).strip() for item in self.strategy_reasoning if str(item).strip()))
+        for name in (
+            "entry_type",
+            "timeframe",
+            "strategy_setup",
+            "strategy_confidence",
+            "ai_decision",
+            "ai_reasoning_summary",
+            "price_action_setup",
+            "market_phase",
+            "day_bias",
+            "option_chain_bias",
+            "cpr_relationship",
+            "cpr_width_classification",
+            "camarilla_relationship",
+            "vwap_relationship",
+            "source_strategy_id",
+            "source_plan_identity",
+        ):
+            value = getattr(self, name)
+            object.__setattr__(self, name, value.strip() if isinstance(value, str) and value.strip() else "-")
+        if self.ai_confidence is not None:
+            object.__setattr__(self, "ai_confidence", _finite_real(self.ai_confidence, "ai_confidence"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,4 +307,3 @@ def _validate_geometry(direction: TradeDirection, entry: float, stop: float, tar
         raise ValueError("bullish geometry requires stop < entry < target")
     if direction is TradeDirection.BEARISH and not (target < entry < stop):
         raise ValueError("bearish geometry requires target < entry < stop")
-

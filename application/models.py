@@ -18,6 +18,8 @@ from engines.option_chain.models import OptionChainState
 from engines.order_management.models import OrderState
 from engines.paper_trading.configuration import PaperTradingConfiguration
 from engines.paper_trading.models import PaperTradingSnapshot
+from engines.performance_analytics.configuration import PerformanceAnalyticsConfiguration
+from engines.performance_analytics.models import AnalyticsSnapshot
 from engines.position.models import PositionState
 from engines.price_action.models import PriceActionState
 from engines.risk.models import RiskConfiguration, RiskDecisionState
@@ -119,6 +121,7 @@ class RuntimeConfiguration:
     safety_mode: ExecutionSafetyMode = ExecutionSafetyMode.ANALYSIS_ONLY
     risk_configuration: RiskConfiguration | None = None
     paper_trading_configuration: PaperTradingConfiguration | None = None
+    performance_analytics_configuration: PerformanceAnalyticsConfiguration | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.instruments, tuple) or not self.instruments:
@@ -145,6 +148,8 @@ class RuntimeConfiguration:
             raise TypeError("RuntimeConfiguration risk_configuration must be RiskConfiguration or None.")
         if self.paper_trading_configuration is not None and not isinstance(self.paper_trading_configuration, PaperTradingConfiguration):
             raise TypeError("RuntimeConfiguration paper_trading_configuration must be PaperTradingConfiguration or None.")
+        if self.performance_analytics_configuration is not None and not isinstance(self.performance_analytics_configuration, PerformanceAnalyticsConfiguration):
+            raise TypeError("RuntimeConfiguration performance_analytics_configuration must be PerformanceAnalyticsConfiguration or None.")
         object.__setattr__(self, "instruments", tuple(normalized))
         object.__setattr__(self, "exchange", self.exchange.strip().upper())
         object.__setattr__(self, "timeframe", timeframe)
@@ -172,6 +177,7 @@ class RuntimeSnapshot:
     updated_at: datetime | None
     vwap_source: RuntimeVWAPSource | None = None
     paper_trading: PaperTradingSnapshot | None = None
+    performance_analytics: AnalyticsSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,3 +189,4 @@ class OrchestratorSnapshot:
     shared_market_data_ready: bool
     shared_trade_journal_ready: bool
     runtime_snapshots: tuple[RuntimeSnapshot, ...]
+    performance_analytics: AnalyticsSnapshot | None = None

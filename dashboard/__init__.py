@@ -18,7 +18,9 @@ __all__ = [
     "DashboardStrategyView",
     "DashboardPositionView",
     "DashboardJournalView",
+    "DashboardAnalyticsView",
     "OptionChainPanel",
+    "AnalyticsPanel",
     "build_dashboard_view",
     "build_live_market_data_view",
     "build_option_chain_view",
@@ -38,6 +40,10 @@ def __getattr__(name):
         from dashboard.panels.option_chain_panel import OptionChainPanel
 
         return OptionChainPanel
+    if name == "AnalyticsPanel":
+        from dashboard.panels.analytics_panel import AnalyticsPanel
+
+        return AnalyticsPanel
     if name == "build_dashboard_view":
         from dashboard.presenters import build_dashboard_view
 
@@ -62,6 +68,7 @@ def __getattr__(name):
         "DashboardStrategyView",
         "DashboardPositionView",
         "DashboardJournalView",
+        "DashboardAnalyticsView",
     }:
         models = import_module("dashboard.models")
         return getattr(models, name)
