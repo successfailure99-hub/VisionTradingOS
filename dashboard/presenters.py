@@ -157,6 +157,7 @@ def build_market_session_view(
 def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntimeView:
     orchestrator = lifecycle_snapshot.orchestrator_snapshot
     validation = getattr(orchestrator, "live_validation", None)
+    replay = getattr(orchestrator, "historical_replay", None)
     latency = tuple(getattr(validation, "latency_summaries", ()) or ())
     p95 = max((item.p95_ms for item in latency), default=None)
     return DashboardRuntimeView(
@@ -179,6 +180,21 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
         validation_reconnects=getattr(getattr(validation, "reconnect_summary", None), "reconnect_count", 0),
         validation_p95_latency_ms=p95,
         validation_broker_order_calls=getattr(getattr(validation, "counters", None), "broker_order_calls", 0),
+        replay_state=_enum_text(getattr(replay, "lifecycle_state", None)),
+        replay_mode=_enum_text(getattr(replay, "mode", None)),
+        replay_session_id=_enum_text(getattr(replay, "session_id", None)),
+        replay_source=_source_name(getattr(replay, "source_path", None)),
+        replay_instruments=tuple(_enum_text(instrument) for instrument in tuple(getattr(replay, "instruments", ()) or ())),
+        replay_trading_date=getattr(replay, "trading_date", None),
+        replay_sequence=getattr(replay, "current_sequence", None),
+        replay_published_records=getattr(replay, "published_records", 0),
+        replay_total_records=getattr(replay, "total_records", 0),
+        replay_progress_percentage=getattr(replay, "progress_percentage", 0.0),
+        replay_speed_multiplier=getattr(replay, "speed_multiplier", 0.0),
+        replay_current_timestamp=getattr(replay, "current_event_timestamp", None),
+        replay_outcome=_enum_text(getattr(replay, "final_outcome", None)),
+        replay_findings=len(tuple(getattr(replay, "active_findings", ()) or ())),
+        replay_failure_summary=getattr(replay, "failure_reason", None),
     )
 
 
@@ -616,6 +632,13 @@ def _short_id(value) -> str | None:
         return None
     normalized = value.strip()
     return normalized if len(normalized) <= 18 else f"{normalized[:8]}...{normalized[-6:]}"
+
+
+def _source_name(value) -> str:
+    if value is None:
+        return MISSING
+    name = getattr(value, "name", value)
+    return _enum_text(name)
 
 
 def _build_option_chain_strike_view(strike, atm_strike: float | None) -> DashboardOptionChainStrikeView:

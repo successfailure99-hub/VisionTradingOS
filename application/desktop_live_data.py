@@ -7,18 +7,23 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import math
+from pathlib import Path
 from typing import Protocol
 
 from application.bootstrap import ApplicationBootstrap
 from application.enums import RuntimeInstrument
 from application.lifecycle_manager import ApplicationLifecycleManager
 from application.live_market_data import LiveMarketDataConfiguration, LiveMarketDataRuntime, LiveMarketDataRuntimeFactory
+from application.live_market_data.enums import LiveMarketDataRuntimeStatus
 from application.models import RuntimeConfiguration
+from application.historical_replay_driver import HistoricalReplayDriver
 from application.reference_data_bootstrap import run_reference_data_bootstrap
 from application.futures_vwap import DesktopFuturesVWAPRuntimeManager
 from engines.risk.models import InstrumentLotSize, RiskConfiguration
 from engines.paper_trading import PaperIntrabarPolicy, PaperTradingConfiguration
 from engines.performance_analytics import PerformanceAnalyticsConfiguration
+from engines.historical_market_replay import ReplayConfiguration, ReplayLifecycleState, ReplayMode
 from application.desktop_option_chain import (
     DesktopOptionChainConfigurationError,
     DesktopOptionChainRuntimeManager,
@@ -29,6 +34,7 @@ from application.desktop_option_chain import (
 from brokers.zerodha.auth import KiteConnectAuthClient, ZerodhaCredentials, ZerodhaSessionManager
 from brokers.zerodha.historical import KiteHistoricalClient
 from brokers.zerodha.market_data import KiteTickerClient, ZerodhaInstrumentSubscription, ZerodhaSubscriptionMode
+from brokers.zerodha.market_data import ZerodhaWebSocketStatus
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
 from dashboard.application import DashboardApplication
@@ -92,6 +98,16 @@ ENV_PERFORMANCE_JOURNAL_PATH = "PERFORMANCE_JOURNAL_PATH"
 ENV_PERFORMANCE_STARTING_EQUITY = "PERFORMANCE_STARTING_EQUITY"
 ENV_PERFORMANCE_RECENT_TRADE_LIMIT = "PERFORMANCE_RECENT_TRADE_LIMIT"
 ENV_PERFORMANCE_EXPORT_DIRECTORY = "PERFORMANCE_EXPORT_DIRECTORY"
+ENV_HISTORICAL_REPLAY_ENABLED = "HISTORICAL_REPLAY_ENABLED"
+ENV_HISTORICAL_REPLAY_MODE = "HISTORICAL_REPLAY_MODE"
+ENV_HISTORICAL_REPLAY_SOURCE_PATH = "HISTORICAL_REPLAY_SOURCE_PATH"
+ENV_HISTORICAL_REPLAY_SPEED_MULTIPLIER = "HISTORICAL_REPLAY_SPEED_MULTIPLIER"
+ENV_HISTORICAL_REPLAY_AUTO_LOAD = "HISTORICAL_REPLAY_AUTO_LOAD"
+ENV_HISTORICAL_REPLAY_AUTO_START = "HISTORICAL_REPLAY_AUTO_START"
+ENV_HISTORICAL_REPLAY_OUTPUT_DIRECTORY = "HISTORICAL_REPLAY_OUTPUT_DIRECTORY"
+ENV_HISTORICAL_REPLAY_MAX_FINDINGS = "HISTORICAL_REPLAY_MAX_FINDINGS"
+ENV_HISTORICAL_REPLAY_MAX_RECENT_IDENTITIES = "HISTORICAL_REPLAY_MAX_RECENT_IDENTITIES"
+ENV_HISTORICAL_REPLAY_MAX_LATENCY_SAMPLES = "HISTORICAL_REPLAY_MAX_LATENCY_SAMPLES"
 
 INSTRUMENT_TOKEN_ENV = (
     (Instrument.NIFTY, "NIFTY_INSTRUMENT_TOKEN", Exchange.NSE),
@@ -114,6 +130,7 @@ class DesktopLiveDataSettings:
     risk_configuration: RiskConfiguration | None
     paper_trading_configuration: PaperTradingConfiguration
     performance_analytics_configuration: PerformanceAnalyticsConfiguration
+    historical_replay_configuration: ReplayConfiguration
 
     def __repr__(self) -> str:
         return (
@@ -125,7 +142,8 @@ class DesktopLiveDataSettings:
             f"reference_data_bootstrap_enabled={self.reference_data_bootstrap_enabled}, "
             f"futures_vwap_enabled={self.futures_vwap_enabled}, "
             f"risk_enabled={self.risk_configuration is not None}, "
-            f"paper_trading_enabled={self.paper_trading_configuration.enabled})"
+            f"paper_trading_enabled={self.paper_trading_configuration.enabled}, "
+            f"historical_replay_enabled={self.historical_replay_configuration.enabled})"
         )
 
     __str__ = __repr__
@@ -140,6 +158,7 @@ def load_desktop_live_configuration(
     risk_configuration = _load_risk_configuration(environ)
     paper_trading_configuration = _load_paper_trading_configuration(environ)
     performance_analytics_configuration = _load_performance_analytics_configuration(environ)
+    historical_replay_configuration = _load_historical_replay_configuration(environ)
     futures_vwap_enabled = _parse_bool(
         environ.get(ENV_LIVE_FUTURES_VWAP_ENABLED, "true"),
         ENV_LIVE_FUTURES_VWAP_ENABLED,
@@ -148,6 +167,8 @@ def load_desktop_live_configuration(
         environ.get(ENV_REFERENCE_DATA_BOOTSTRAP_ENABLED, "true"),
         ENV_REFERENCE_DATA_BOOTSTRAP_ENABLED,
     )
+    if enabled and auto_connect and historical_replay_configuration.auto_start:
+        raise DesktopLiveDataConfigurationError("HISTORICAL_REPLAY_AUTO_START cannot be combined with LIVE_MARKET_DATA_AUTO_CONNECT")
     if not enabled:
         if option_chain.enabled:
             raise DesktopLiveDataConfigurationError("LIVE_OPTION_CHAIN_ENABLED requires LIVE_MARKET_DATA_ENABLED")
@@ -164,6 +185,7 @@ def load_desktop_live_configuration(
             risk_configuration=None,
             paper_trading_configuration=paper_trading_configuration,
             performance_analytics_configuration=performance_analytics_configuration,
+            historical_replay_configuration=historical_replay_configuration,
         )
 
     missing = [
@@ -203,6 +225,7 @@ def load_desktop_live_configuration(
         risk_configuration=risk_configuration,
         paper_trading_configuration=paper_trading_configuration,
         performance_analytics_configuration=performance_analytics_configuration,
+        historical_replay_configuration=historical_replay_configuration,
     )
 
 
@@ -256,6 +279,8 @@ def create_desktop_live_runtime(
         raise DesktopLiveDataConfigurationError("authenticated Zerodha session is required")
     if not lifecycle.is_running():
         lifecycle.start()
+    if settings.auto_connect and _replay_is_active(lifecycle):
+        raise DesktopLiveDataConfigurationError("LIVE_MARKET_DATA_AUTO_CONNECT is blocked while historical replay is active")
     configuration = LiveMarketDataConfiguration(
         api_key=settings.api_key,
         subscriptions=settings.subscriptions,
@@ -300,6 +325,7 @@ def create_dashboard_application(
             risk_configuration=settings.risk_configuration,
             paper_trading_configuration=settings.paper_trading_configuration,
             performance_analytics_configuration=settings.performance_analytics_configuration,
+            historical_replay_configuration=settings.historical_replay_configuration,
         )
     ).create_application()
     session_manager = create_zerodha_session_manager(
@@ -325,6 +351,17 @@ def create_dashboard_application(
         session_manager=session_manager,
         runtime_factory=runtime_factory,
         ticker_client=ticker_router,
+    )
+    _configure_historical_replay(
+        lifecycle=lifecycle,
+        settings=settings,
+        live_market_data_runtime=runtime,
+    )
+    historical_replay_driver = (
+        HistoricalReplayDriver(lifecycle.orchestrator.historical_replay_engine)
+        if settings.historical_replay_configuration.enabled
+        and settings.historical_replay_configuration.mode is not ReplayMode.STEP
+        else None
     )
     if settings.reference_data_bootstrap_enabled and settings.enabled and session_manager is not None:
         _try_reference_data_bootstrap(
@@ -368,6 +405,7 @@ def create_dashboard_application(
         live_market_data_runtime=runtime,
         live_option_chain_runtime=option_chain_manager,
         live_futures_vwap_runtime=futures_vwap_manager,
+        historical_replay_driver=historical_replay_driver,
         clock=clock,
     )
 
@@ -556,6 +594,104 @@ def _load_performance_analytics_configuration(environ: Mapping[str, str]) -> Per
         recent_trade_limit=_parse_bounded_int(environ.get(ENV_PERFORMANCE_RECENT_TRADE_LIMIT, "50"), ENV_PERFORMANCE_RECENT_TRADE_LIMIT, minimum=1, maximum=1000),
         export_directory=_text(environ.get(ENV_PERFORMANCE_EXPORT_DIRECTORY, "")) or "logs/exports",
     )
+
+
+def _load_historical_replay_configuration(environ: Mapping[str, str]) -> ReplayConfiguration:
+    enabled = _parse_bool(environ.get(ENV_HISTORICAL_REPLAY_ENABLED, "false"), ENV_HISTORICAL_REPLAY_ENABLED)
+    mode_text = _text(environ.get(ENV_HISTORICAL_REPLAY_MODE, "OFF")).lower()
+    try:
+        mode = ReplayMode(mode_text)
+    except Exception as exc:
+        raise DesktopLiveDataConfigurationError("HISTORICAL_REPLAY_MODE must be OFF, STEP, REALTIME, or ACCELERATED") from exc
+    source_text = _text(environ.get(ENV_HISTORICAL_REPLAY_SOURCE_PATH, ""))
+    auto_load = _parse_bool(environ.get(ENV_HISTORICAL_REPLAY_AUTO_LOAD, "false"), ENV_HISTORICAL_REPLAY_AUTO_LOAD)
+    auto_start = _parse_bool(environ.get(ENV_HISTORICAL_REPLAY_AUTO_START, "false"), ENV_HISTORICAL_REPLAY_AUTO_START)
+    try:
+        return ReplayConfiguration(
+            enabled=enabled,
+            mode=mode,
+            source_path=Path(source_text) if source_text else None,
+            speed_multiplier=_parse_positive_float(
+                environ.get(ENV_HISTORICAL_REPLAY_SPEED_MULTIPLIER, "10.0"),
+                ENV_HISTORICAL_REPLAY_SPEED_MULTIPLIER,
+            ),
+            auto_load=auto_load,
+            auto_start=auto_start,
+            output_dir=_text(environ.get(ENV_HISTORICAL_REPLAY_OUTPUT_DIRECTORY, "")) or "logs/historical_replay",
+            max_findings=_parse_bounded_int(environ.get(ENV_HISTORICAL_REPLAY_MAX_FINDINGS, "500"), ENV_HISTORICAL_REPLAY_MAX_FINDINGS, minimum=1, maximum=100000),
+            max_recent_identities=_parse_bounded_int(
+                environ.get(ENV_HISTORICAL_REPLAY_MAX_RECENT_IDENTITIES, "2000"),
+                ENV_HISTORICAL_REPLAY_MAX_RECENT_IDENTITIES,
+                minimum=1,
+                maximum=1000000,
+            ),
+            max_latency_samples=_parse_bounded_int(
+                environ.get(ENV_HISTORICAL_REPLAY_MAX_LATENCY_SAMPLES, "1000"),
+                ENV_HISTORICAL_REPLAY_MAX_LATENCY_SAMPLES,
+                minimum=1,
+                maximum=1000000,
+            ),
+        )
+    except DesktopLiveDataConfigurationError:
+        raise
+    except Exception as exc:
+        raise DesktopLiveDataConfigurationError(_safe_configuration_message(exc)) from exc
+
+
+def _configure_historical_replay(
+    *,
+    lifecycle: ApplicationLifecycleManager,
+    settings: DesktopLiveDataSettings,
+    live_market_data_runtime: LiveMarketDataRuntime | None,
+) -> None:
+    replay = lifecycle.orchestrator.historical_replay_engine
+    replay.set_live_market_data_active(lambda: _live_market_data_active(live_market_data_runtime))
+    configuration = settings.historical_replay_configuration
+    if not configuration.auto_load:
+        return
+    try:
+        replay.load_session(configuration.source_path)
+        if configuration.auto_start:
+            replay.start()
+    except Exception as exc:
+        raise DesktopLiveDataConfigurationError(f"Historical replay startup failed: {_safe_configuration_message(exc)}") from exc
+
+
+def _live_market_data_active(runtime: LiveMarketDataRuntime | None) -> bool:
+    if runtime is None:
+        return False
+    snapshot = runtime.snapshot()
+    websocket = snapshot.websocket
+    websocket_active = False
+    if websocket is not None:
+        websocket_active = bool(
+            websocket.connected
+            or websocket.status in {
+                ZerodhaWebSocketStatus.CONNECTED,
+                ZerodhaWebSocketStatus.CONNECTING,
+                ZerodhaWebSocketStatus.RECONNECTING,
+                ZerodhaWebSocketStatus.DISCONNECTING,
+            }
+        )
+    return snapshot.status in {
+        LiveMarketDataRuntimeStatus.STARTING,
+        LiveMarketDataRuntimeStatus.RUNNING,
+        LiveMarketDataRuntimeStatus.STOPPING,
+    } or websocket_active
+
+
+def _replay_is_active(lifecycle: ApplicationLifecycleManager) -> bool:
+    state = lifecycle.orchestrator.historical_replay_engine.snapshot().lifecycle_state
+    return state in {ReplayLifecycleState.RUNNING, ReplayLifecycleState.PAUSED}
+
+
+def _safe_configuration_message(exc: Exception) -> str:
+    message = str(exc).strip() or exc.__class__.__name__
+    for token in ("api_key", "api_secret", "access_token", "request_token"):
+        message = message.replace(token, "[REDACTED]")
+    return message
+
+
 def _parse_bounded_int(value: str | None, variable_name: str, *, minimum: int, maximum: int) -> int:
     try:
         parsed = int(_text(value))
@@ -573,6 +709,8 @@ def _parse_positive_float(value: str | None, variable_name: str) -> float:
         raise DesktopLiveDataConfigurationError(f"{variable_name} must be positive") from exc
     if parsed <= 0:
         raise DesktopLiveDataConfigurationError(f"{variable_name} must be positive")
+    if not math.isfinite(parsed):
+        raise DesktopLiveDataConfigurationError(f"{variable_name} must be finite and positive")
     return parsed
 
 
@@ -589,6 +727,8 @@ def _parse_non_negative_float(value: str | None, variable_name: str) -> float:
         raise DesktopLiveDataConfigurationError(f"{variable_name} must be non-negative") from exc
     if parsed < 0:
         raise DesktopLiveDataConfigurationError(f"{variable_name} must be non-negative")
+    if not math.isfinite(parsed):
+        raise DesktopLiveDataConfigurationError(f"{variable_name} must be finite and non-negative")
     return parsed
 
 

@@ -101,6 +101,29 @@ Focused validation tests:
 python -m pytest tests/test_live_market_validation_v1.py -v
 ```
 
+## Historical Market Replay
+
+Historical Market Replay V1 is an optional offline source for deterministic market-session playback. It publishes recorded tick and option-chain evidence through the existing `EventBus` so current engines and validation observers can be tested without a live broker feed.
+
+Default state:
+
+```text
+HISTORICAL_REPLAY_ENABLED=false
+HISTORICAL_REPLAY_MODE=OFF
+```
+
+Supported modes are `STEP`, `REALTIME`, and `ACCELERATED`. Replay sessions are JSON Lines files with a schema-versioned manifest followed by ordered tick or option-chain records for NIFTY, BANKNIFTY, and SENSEX. Replay refuses to start while live market data is active, never writes per replayed record, and stores only terminal reports under `logs/historical_replay`.
+
+Replay startup is explicit. `HISTORICAL_REPLAY_AUTO_LOAD=true` requires an enabled replay mode and a source path. `HISTORICAL_REPLAY_AUTO_START=true` also requires auto-load and cannot be combined with live market-data auto-connect. Desktop startup wires replay safety to the actual live market-data runtime, so replay and live publication cannot run at the same time.
+
+Safety remains protected: `ANALYSIS_ONLY` and `DRY_RUN` are required, live order execution remains disabled, and `broker_order_calls` must remain `0`.
+
+Focused replay tests:
+
+```powershell
+python -m pytest tests/test_historical_market_replay_v1.py -v
+```
+
 ## Testing
 
 Full regression suite:
