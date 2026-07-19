@@ -82,6 +82,11 @@ class HistoricalMarketReplayEngine(BaseEngine):
     def configuration(self) -> ReplayConfiguration:
         return self._configuration
 
+    def set_live_market_data_active(self, callback) -> None:
+        if not callable(callback):
+            raise TypeError("live_market_data_active callback must be callable")
+        self._live_market_data_active = callback
+
     def load_session(self, source_path=None) -> ReplaySessionSnapshot:
         self._require_state(ReplayLifecycleState.IDLE, ReplayLifecycleState.COMPLETED, ReplayLifecycleState.STOPPED, ReplayLifecycleState.FAILED)
         path = source_path or self._configuration.source_path
@@ -117,10 +122,6 @@ class HistoricalMarketReplayEngine(BaseEngine):
         if self._configuration.mode is ReplayMode.STEP:
             self._data = self.snapshot()
             return self._data
-        while self._state is ReplayLifecycleState.RUNNING and self._cursor < len(self._records):
-            self._publish_next(apply_delay=True)
-        if self._state is ReplayLifecycleState.RUNNING:
-            self._complete()
         return self.snapshot()
 
     def pause(self) -> ReplaySessionSnapshot:
@@ -136,12 +137,6 @@ class HistoricalMarketReplayEngine(BaseEngine):
         self._state = ReplayLifecycleState.RUNNING
         self._paused_at = None
         self._publish(HISTORICAL_REPLAY_RESUMED, self.snapshot())
-        if self._configuration.mode is not ReplayMode.STEP:
-            while self._state is ReplayLifecycleState.RUNNING and self._cursor < len(self._records):
-                self._publish_next(apply_delay=True)
-            if self._state is ReplayLifecycleState.RUNNING:
-                self._complete()
-            return self.snapshot()
         self._data = self.snapshot()
         return self._data
 
@@ -161,6 +156,41 @@ class HistoricalMarketReplayEngine(BaseEngine):
             self._paused_at = self._now()
         self._data = self.snapshot()
         return self._data
+
+    def process_next(self) -> ReplaySessionSnapshot:
+        if self._configuration.mode is ReplayMode.STEP:
+            return self.step()
+        self._require_state(ReplayLifecycleState.RUNNING)
+        self._publish_next(apply_delay=True)
+        if self._state is ReplayLifecycleState.RUNNING and self._cursor >= len(self._records):
+            self._complete()
+        self._data = self.snapshot()
+        return self._data
+
+    def process_batch(self, max_records: int | None = None) -> ReplaySessionSnapshot:
+        if self._configuration.mode is ReplayMode.STEP:
+            limit = 1
+        else:
+            limit = self._configuration.max_batch_records if max_records is None else max_records
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("max_records must be a positive integer")
+        snapshot = self.snapshot()
+        for _ in range(limit):
+            if self._state is not ReplayLifecycleState.RUNNING:
+                break
+            snapshot = self.process_next()
+            if snapshot.lifecycle_state is not ReplayLifecycleState.RUNNING:
+                break
+        return snapshot
+
+    def drain(self) -> ReplaySessionSnapshot:
+        if self._state is ReplayLifecycleState.READY:
+            self.start()
+        self._require_state(ReplayLifecycleState.RUNNING)
+        snapshot = self.snapshot()
+        while self._state is ReplayLifecycleState.RUNNING and self._cursor < len(self._records):
+            snapshot = self.process_next()
+        return snapshot
 
     def stop(self, reason: str = "Historical replay stopped.") -> ReplaySessionSnapshot:
         self._require_state(ReplayLifecycleState.RUNNING, ReplayLifecycleState.PAUSED)

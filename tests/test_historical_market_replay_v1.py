@@ -1,16 +1,27 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import FrozenInstanceError
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 from application import ApplicationOrchestrator
+from application.desktop_live_data import (
+    DesktopLiveDataConfigurationError,
+    create_dashboard_application,
+    create_desktop_live_runtime,
+    create_zerodha_session_manager,
+    load_desktop_live_configuration,
+)
 from application.enums import RuntimeInstrument, RuntimeStatus
-from application.lifecycle_manager import LifecycleSnapshot
+from application.lifecycle_manager import ApplicationLifecycleManager, LifecycleSnapshot
 from application.models import RuntimeConfiguration
+from application.live_market_data import LiveMarketDataRuntimeFactory
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.enums.instrument import Instrument
 from core.event_bus import EventBus
@@ -58,6 +69,45 @@ class Sleeper:
 
     def __call__(self, seconds):
         self.calls.append(seconds)
+
+
+class FakeAuthClient:
+    def __init__(self, api_key):
+        self.api_key = api_key
+        self.access_token = None
+
+    def set_access_token(self, access_token):
+        self.access_token = access_token
+
+    def profile(self):
+        return {"user_id": "AB1234"}
+
+
+class FakeTickerClient:
+    def __init__(self):
+        self.callbacks = {}
+        self.connect_calls = 0
+        self.close_calls = 0
+        self.subscriptions = []
+        self.modes = []
+
+    def set_callbacks(self, **callbacks):
+        self.callbacks = callbacks
+
+    def connect(self, *, threaded=True):
+        self.connect_calls += 1
+
+    def close(self):
+        self.close_calls += 1
+
+    def subscribe(self, instrument_tokens):
+        self.subscriptions.append(tuple(instrument_tokens))
+
+    def unsubscribe(self, instrument_tokens):
+        pass
+
+    def set_mode(self, mode, instrument_tokens):
+        self.modes.append((mode, tuple(instrument_tokens)))
 
 
 def manifest(record_count=3, instruments=("NIFTY",)):
@@ -134,6 +184,45 @@ def engine(tmp_path, *, mode=ReplayMode.STEP, source=None, live_active=False, sl
     )
 
 
+def auth_factory(api_key):
+    return FakeAuthClient(api_key)
+
+
+def live_env(**overrides):
+    env = {
+        "LIVE_MARKET_DATA_ENABLED": "true",
+        "LIVE_MARKET_DATA_AUTO_CONNECT": "true",
+        "ZERODHA_API_KEY": "desktop_api_key",
+        "ZERODHA_API_SECRET": "desktop_api_secret",
+        "ZERODHA_ACCESS_TOKEN": "desktop_access_token",
+        "NIFTY_INSTRUMENT_TOKEN": "101",
+        "BANKNIFTY_INSTRUMENT_TOKEN": "102",
+        "SENSEX_INSTRUMENT_TOKEN": "103",
+        "LIVE_FUTURES_VWAP_ENABLED": "false",
+        "REFERENCE_DATA_BOOTSTRAP_ENABLED": "false",
+    }
+    env.update(overrides)
+    return env
+
+
+def replay_env(path, **overrides):
+    env = {
+        "LIVE_MARKET_DATA_ENABLED": "false",
+        "HISTORICAL_REPLAY_ENABLED": "true",
+        "HISTORICAL_REPLAY_MODE": "REALTIME",
+        "HISTORICAL_REPLAY_SOURCE_PATH": str(path),
+        "HISTORICAL_REPLAY_SPEED_MULTIPLIER": "5",
+        "HISTORICAL_REPLAY_AUTO_LOAD": "true",
+        "HISTORICAL_REPLAY_AUTO_START": "true",
+        "HISTORICAL_REPLAY_OUTPUT_DIRECTORY": str(path.parent / "reports"),
+        "HISTORICAL_REPLAY_MAX_FINDINGS": "7",
+        "HISTORICAL_REPLAY_MAX_RECENT_IDENTITIES": "8",
+        "HISTORICAL_REPLAY_MAX_LATENCY_SAMPLES": "9",
+    }
+    env.update(overrides)
+    return env
+
+
 def test_configuration_defaults_and_validation(tmp_path):
     default = ReplayConfiguration(output_dir=tmp_path)
     assert default.enabled is False
@@ -147,9 +236,13 @@ def test_configuration_defaults_and_validation(tmp_path):
     with pytest.raises(ValueError):
         ReplayConfiguration(max_findings=0, output_dir=tmp_path)
     with pytest.raises(ValueError):
+        ReplayConfiguration(enabled=True, mode=ReplayMode.OFF, output_dir=tmp_path)
+    with pytest.raises(ValueError):
+        ReplayConfiguration(enabled=True, mode=ReplayMode.STEP, auto_load=True, output_dir=tmp_path)
+    with pytest.raises(ValueError):
         ReplayConfiguration(enabled=True, mode=ReplayMode.STEP, auto_start=True, output_dir=tmp_path)
     with pytest.raises(ValueError):
-        ReplayConfiguration(enabled=True, mode=ReplayMode.OFF, auto_start=True, source_path=tmp_path / "s", output_dir=tmp_path)
+        ReplayConfiguration(enabled=True, mode=ReplayMode.STEP, auto_start=True, source_path=tmp_path / "s", output_dir=tmp_path)
 
 
 def test_repository_loads_valid_session_and_production_payloads(tmp_path):
@@ -239,12 +332,14 @@ def test_realtime_and_accelerated_timing_use_injected_sleeper(tmp_path):
     sleeper = Sleeper()
     realtime = engine(tmp_path, mode=ReplayMode.REALTIME, source=path, sleeper=sleeper)
     realtime.load_session()
-    realtime.start()
+    assert realtime.start().counters.published_records == 0
+    realtime.drain()
     assert sleeper.calls == [1.0, 2.0]
     sleeper_fast = Sleeper()
     accelerated = engine(tmp_path, mode=ReplayMode.ACCELERATED, source=path, sleeper=sleeper_fast, speed_multiplier=10.0)
     accelerated.load_session()
     accelerated.start()
+    accelerated.drain()
     assert sleeper_fast.calls == [0.1, 0.2]
 
 
@@ -276,12 +371,51 @@ def test_pause_resume_stop_reset_and_reports(tmp_path):
     assert item.reset().lifecycle_state is ReplayLifecycleState.IDLE
 
 
+def test_cooperative_realtime_start_batches_pause_resume_stop_and_completion_once(tmp_path):
+    rows = tuple(tick_record(index + 1, index * 1000, price=100 + index) for index in range(5))
+    path = write_session(tmp_path, rows=rows, header=manifest(len(rows)))
+    item = engine(tmp_path, mode=ReplayMode.REALTIME, source=path, max_batch_records=2)
+    events = []
+    completed = []
+    item._event_bus.subscribe(NEW_TICK, lambda payload: events.append(payload.last_price))
+    item._event_bus.subscribe("historical_replay_completed", lambda payload: completed.append(payload.outcome))
+    item.load_session()
+    started = item.start()
+    assert started.lifecycle_state is ReplayLifecycleState.RUNNING
+    assert started.counters.published_records == 0
+    assert events == []
+    first_batch = item.process_batch()
+    assert first_batch.counters.published_records == 2
+    assert events == [100.0, 101.0]
+    assert item.pause().lifecycle_state is ReplayLifecycleState.PAUSED
+    assert item.process_batch().counters.published_records == 2
+    assert item.resume().lifecycle_state is ReplayLifecycleState.RUNNING
+    assert item.process_batch(max_records=1).counters.published_records == 3
+    stopped = item.stop()
+    assert stopped.lifecycle_state is ReplayLifecycleState.STOPPED
+    assert item.process_batch().counters.published_records == 3
+    assert events == [100.0, 101.0, 102.0]
+    assert completed == []
+
+    complete = engine(tmp_path, mode=ReplayMode.REALTIME, source=path, max_batch_records=3)
+    complete._event_bus.subscribe("historical_replay_completed", lambda payload: completed.append(payload.outcome))
+    complete.load_session()
+    complete.start()
+    assert complete.process_batch().counters.published_records == 3
+    final = complete.process_batch()
+    assert final.lifecycle_state is ReplayLifecycleState.COMPLETED
+    assert completed == [ReplayOutcome.PASS]
+    assert complete.process_batch().counters.published_records == 5
+    assert completed == [ReplayOutcome.PASS]
+
+
 def test_failure_on_publish_stops_and_persists_report(tmp_path):
     path = write_session(tmp_path, rows=(tick_record(1),), header=manifest(1))
     item = engine(tmp_path, mode=ReplayMode.REALTIME, source=path)
     item._event_bus.subscribe(NEW_TICK, lambda payload: (_ for _ in ()).throw(RuntimeError("boom access_token secret")))
     item.load_session()
-    snap = item.start()
+    item.start()
+    snap = item.process_next()
     assert snap.lifecycle_state is ReplayLifecycleState.FAILED
     assert snap.counters.published_records == 0
     assert "access_token" not in snap.failure_reason
@@ -296,6 +430,7 @@ def test_replay_models_are_immutable_and_memory_is_bounded(tmp_path):
     with pytest.raises(FrozenInstanceError):
         snap.session_id = "changed"
     item.start()
+    item.drain()
     assert len(item._recent_identities) == 5
     assert len(item._latencies) == 4
     for index in range(10):
@@ -341,6 +476,7 @@ def test_replay_drives_existing_candle_engine_and_validation_without_calculating
     item = HistoricalMarketReplayEngine(bus, ReplayConfiguration(enabled=True, mode=ReplayMode.REALTIME, source_path=path, output_dir=tmp_path / "reports"), clock=Clock(), monotonic_clock=Mono(), sleeper=Sleeper())
     item.load_session()
     item.start()
+    item.drain()
     assert len(closed) == 1
     assert validation.snapshot().instrument_summaries[0].tick_metrics.received_ticks == 2
     assert item.snapshot().counters.broker_order_calls == 0
@@ -355,7 +491,8 @@ def test_replay_works_when_validation_is_disabled_and_is_deterministic(tmp_path)
         item._event_bus.subscribe(NEW_TICK, lambda payload: events.append(("tick", payload.timestamp, payload.last_price)))
         item._event_bus.subscribe(OPTION_CHAIN_UPDATED, lambda payload: events.append(("option", payload.timestamp, len(payload.strikes))))
         item.load_session()
-        final = item.start()
+        item.start()
+        final = item.drain()
         return events, final.counters, final.progress_percentage, final.final_outcome
 
     assert run_once() == run_once()
@@ -377,6 +514,113 @@ def test_application_snapshot_dashboard_and_shutdown_integration(tmp_path):
     stopped = orchestrator.stop()
     assert stopped.historical_replay.lifecycle_state is ReplayLifecycleState.STOPPED
 
+
+def test_desktop_replay_environment_reaches_real_application_composition(tmp_path):
+    path = write_session(tmp_path)
+    settings = load_desktop_live_configuration(replay_env(path, HISTORICAL_REPLAY_AUTO_START="false"))
+    assert settings.historical_replay_configuration.enabled is True
+    assert settings.historical_replay_configuration.mode is ReplayMode.REALTIME
+    assert settings.historical_replay_configuration.source_path == path
+    assert settings.historical_replay_configuration.speed_multiplier == 5.0
+    assert settings.historical_replay_configuration.max_findings == 7
+    assert settings.historical_replay_configuration.max_recent_identities == 8
+    assert settings.historical_replay_configuration.max_latency_samples == 9
+
+    dashboard = create_dashboard_application(environ=replay_env(path, HISTORICAL_REPLAY_AUTO_START="false"))
+    replay = dashboard.lifecycle.orchestrator.historical_replay_engine
+    snapshot = replay.snapshot()
+    assert snapshot.lifecycle_state is ReplayLifecycleState.READY
+    assert snapshot.total_records == 3
+    assert snapshot.counters.published_records == 0
+    assert dashboard.live_market_data_runtime is None
+    dashboard.shutdown()
+
+
+def test_desktop_replay_autostart_uses_cooperative_execution_and_no_live_file_disabled_startup(tmp_path):
+    path = write_session(tmp_path)
+    missing = tmp_path / "missing.jsonl"
+    disabled = create_dashboard_application(
+        environ={"LIVE_MARKET_DATA_ENABLED": "false", "HISTORICAL_REPLAY_SOURCE_PATH": str(missing)}
+    )
+    assert disabled.lifecycle.orchestrator.historical_replay_engine.snapshot().lifecycle_state is ReplayLifecycleState.IDLE
+    disabled.shutdown()
+
+    dashboard = create_dashboard_application(environ=replay_env(path))
+    replay = dashboard.lifecycle.orchestrator.historical_replay_engine
+    snapshot = replay.snapshot()
+    assert snapshot.lifecycle_state is ReplayLifecycleState.RUNNING
+    assert snapshot.counters.published_records == 0
+    assert replay.process_batch().counters.published_records == 1
+    dashboard.shutdown()
+
+
+def test_desktop_live_runtime_active_blocks_replay_without_disconnect_or_config_mutation(tmp_path):
+    path = write_session(tmp_path)
+    ticker = FakeTickerClient()
+    dashboard = create_dashboard_application(
+        environ={
+            **live_env(HISTORICAL_REPLAY_ENABLED="true", HISTORICAL_REPLAY_MODE="REALTIME", HISTORICAL_REPLAY_SOURCE_PATH=str(path), HISTORICAL_REPLAY_AUTO_LOAD="true", HISTORICAL_REPLAY_AUTO_START="false"),
+        },
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: TS),
+        ticker_client=ticker,
+        clock=lambda: TS,
+    )
+    runtime = dashboard.live_market_data_runtime
+    replay = dashboard.lifecycle.orchestrator.historical_replay_engine
+    replay._event_bus.subscribe(NEW_TICK, lambda payload: pytest.fail("replay published while live runtime was active"))
+    assert runtime.configuration.auto_connect is True
+    assert ticker.connect_calls == 1
+    assert ticker.close_calls == 0
+    with pytest.raises(ReplayLifecycleError, match="live market data"):
+        replay.start()
+    assert replay.snapshot().counters.published_records == 0
+    assert replay.snapshot().lifecycle_state is ReplayLifecycleState.READY
+    assert runtime.configuration.auto_connect is True
+    assert ticker.close_calls == 0
+    assert dashboard.lifecycle.orchestrator.snapshot().historical_replay.counters.broker_order_calls == 0
+    dashboard.shutdown()
+
+
+def test_desktop_live_auto_connect_conflict_and_replay_active_live_start_rejection(tmp_path):
+    path = write_session(tmp_path)
+    with pytest.raises(DesktopLiveDataConfigurationError, match="cannot be combined"):
+        load_desktop_live_configuration(
+            live_env(
+                HISTORICAL_REPLAY_ENABLED="true",
+                HISTORICAL_REPLAY_MODE="REALTIME",
+                HISTORICAL_REPLAY_SOURCE_PATH=str(path),
+                HISTORICAL_REPLAY_AUTO_LOAD="true",
+                HISTORICAL_REPLAY_AUTO_START="true",
+            )
+        )
+
+    orchestrator = ApplicationOrchestrator(
+        EventBus(),
+        RuntimeConfiguration(
+            instruments=(RuntimeInstrument.NIFTY, RuntimeInstrument.BANKNIFTY, RuntimeInstrument.SENSEX),
+            historical_replay_configuration=ReplayConfiguration(enabled=True, mode=ReplayMode.STEP, source_path=path, output_dir=tmp_path / "reports"),
+        ),
+    )
+    lifecycle = ApplicationLifecycleManager(orchestrator)
+    lifecycle.start()
+    orchestrator.historical_replay_engine.load_session()
+    orchestrator.historical_replay_engine.start()
+    settings = load_desktop_live_configuration(live_env())
+    session_manager = create_zerodha_session_manager(settings, auth_client_factory=auth_factory, clock=lambda: TS)
+    ticker = FakeTickerClient()
+    with pytest.raises(DesktopLiveDataConfigurationError, match="historical replay is active"):
+        create_desktop_live_runtime(
+            lifecycle=lifecycle,
+            settings=settings,
+            session_manager=session_manager,
+            runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: TS),
+            ticker_client=ticker,
+        )
+    assert ticker.connect_calls == 0
+    assert ticker.close_calls == 0
+    assert settings.auto_connect is True
+    assert orchestrator.snapshot().historical_replay.counters.broker_order_calls == 0
 
 def test_broker_safety_and_package_search():
     package = Path("engines/historical_market_replay")

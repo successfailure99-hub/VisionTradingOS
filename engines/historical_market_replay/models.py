@@ -58,6 +58,7 @@ class ReplayConfiguration:
     max_findings: int = 500
     max_recent_identities: int = 2000
     max_latency_samples: int = 1000
+    max_batch_records: int = 1
     safety_mode: ExecutionSafetyMode = ExecutionSafetyMode.ANALYSIS_ONLY
     broker_mode: BrokerExecutionMode = BrokerExecutionMode.DRY_RUN
 
@@ -73,12 +74,19 @@ class ReplayConfiguration:
         _positive_int(self.max_findings, "max_findings")
         _positive_int(self.max_recent_identities, "max_recent_identities")
         _positive_int(self.max_latency_samples, "max_latency_samples")
+        _positive_int(self.max_batch_records, "max_batch_records")
         if self.broker_mode is not BrokerExecutionMode.DRY_RUN:
             raise ValueError("historical replay requires DRY_RUN broker mode")
         if self.safety_mode is not ExecutionSafetyMode.ANALYSIS_ONLY:
             raise ValueError("historical replay requires ANALYSIS_ONLY safety mode")
+        if self.enabled and mode is ReplayMode.OFF:
+            raise ValueError("enabled historical replay cannot use OFF mode")
+        if self.auto_load and (not self.enabled or source is None):
+            raise ValueError("historical replay AUTO_LOAD requires enabled replay and source path")
         if self.auto_start and (not self.enabled or mode is ReplayMode.OFF or source is None):
             raise ValueError("historical replay AUTO_START requires enabled replay, non-OFF mode and source path")
+        if self.auto_start and not self.auto_load:
+            raise ValueError("historical replay AUTO_START requires AUTO_LOAD")
 
 
 @dataclass(frozen=True, slots=True)
