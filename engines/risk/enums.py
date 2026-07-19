@@ -34,3 +34,61 @@ class RiskReductionReason(str, Enum):
     DAILY_DRAWDOWN = "daily_drawdown"
     RECENT_LOSSES = "recent_losses"
     BOTH = "both"
+
+
+class RiskDecisionStatus(str, Enum):
+    APPROVED = "approved"
+    APPROVED_WITH_REDUCED_SIZE = "approved_with_reduced_size"
+    REJECTED = "rejected"
+    LOCKED = "locked"
+    INVALID = "invalid"
+
+
+class RiskSeverity(str, Enum):
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    CRITICAL = "critical"
+
+
+class RiskLifecycleState(str, Enum):
+    CREATED = "created"
+    READY = "ready"
+    ACTIVE = "active"
+    LOCKED = "locked"
+    STOPPED = "stopped"
+    FAILED = "failed"
+
+
+class RiskReasonCode(str, Enum):
+    APPROVED = "approved"
+    SIZE_REDUCED = "size_reduced"
+    INVALID_PLAN = "invalid_plan"
+    INVALID_STOP = "invalid_stop"
+    STOP_TOO_WIDE = "stop_too_wide"
+    STOP_TOO_TIGHT = "stop_too_tight"
+    INSUFFICIENT_REWARD_RISK = "insufficient_reward_risk"
+    RISK_PER_TRADE_EXCEEDED = "risk_per_trade_exceeded"
+    DAILY_LOSS_LIMIT_REACHED = "daily_loss_limit_reached"
+    DAILY_PROFIT_LOCK_ACTIVE = "daily_profit_lock_active"
+    MAX_TRADES_REACHED = "max_trades_reached"
+    CONSECUTIVE_LOSS_COOLDOWN = "consecutive_loss_cooldown"
+    REVENGE_TRADING_LOCKOUT = "revenge_trading_lockout"
+    MANUAL_LOCK_ACTIVE = "manual_lock_active"
+    MANUAL_APPROVAL_REQUIRED = "manual_approval_required"
+    EMERGENCY_LOCK_ACTIVE = "emergency_lock_active"
+    OUTSIDE_TRADING_WINDOW = "outside_trading_window"
+    LATE_ENTRY = "late_entry"
+    FOMO_ENTRY = "fomo_entry"
+    AVERAGING_DOWN_BLOCKED = "averaging_down_blocked"
+    DUPLICATE_POSITION = "duplicate_position"
+    INSTRUMENT_EXPOSURE_EXCEEDED = "instrument_exposure_exceeded"
+    TOTAL_OPEN_RISK_EXCEEDED = "total_open_risk_exceeded"
+    MAX_QUANTITY_EXCEEDED = "max_quantity_exceeded"
+    MAX_LOTS_EXCEEDED = "max_lots_exceeded"
+    INSUFFICIENT_CAPITAL = "insufficient_capital"
+    MISSING_STOP_LOSS = "missing_stop_loss"
+    MISSING_TARGET = "missing_target"
+    INVALID_ENTRY_PRICE = "invalid_entry_price"
+    INVALID_QUANTITY = "invalid_quantity"
+    UNSUPPORTED_INSTRUMENT = "unsupported_instrument"
