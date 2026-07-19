@@ -123,6 +123,11 @@ class PerformanceAnalyticsEngine:
 
     def reset(self, *, clear_persistent_data: bool = False) -> None:
         self._repository.reset(clear_persistent_data=clear_persistent_data)
+        if not clear_persistent_data and self._configuration.enabled and self._configuration.persistence_enabled:
+            self._repository.load()
+            self._loaded = len(self._repository.records())
+        elif clear_persistent_data:
+            self._loaded = 0
         self._accepted = self._duplicates = self._conflicts = 0
         self._last_event = "-"
         self._last_error = None

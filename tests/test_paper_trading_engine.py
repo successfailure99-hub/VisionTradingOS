@@ -156,6 +156,10 @@ def test_bullish_retest_entry_target_lifecycle_and_journal_summary():
     record = item.on_tick(tick(110, NOW + timedelta(seconds=4)))
     assert record.exit_type is PaperExitType.TARGET
     assert record.net_pnl == 750.0
+    assert record.strategy_setup == "high"
+    assert record.strategy_reasoning == ("risk_approved",)
+    assert record.entry_type == "structure_break_retest"
+    assert record.source_strategy_id == "strategy-1"
     assert item.snapshot().position is None
     assert item.snapshot().journal_summary.record_count == 1
     assert item.snapshot().diagnostics.broker_order_calls == 0

@@ -5,6 +5,7 @@ Deterministic completed paper-trade journal repository with JSON Lines storage.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
@@ -111,10 +112,17 @@ class PaperTradeJournalRepository:
         if self._path is None:
             return
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        with self._path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"schema_version": SCHEMA_VERSION, "record": _record_to_payload(record)}, sort_keys=True, separators=(",", ":")))
-            handle.write("\n")
-            handle.flush()
+        line = (
+            json.dumps({"schema_version": SCHEMA_VERSION, "record": _record_to_payload(record)}, sort_keys=True, separators=(",", ":"))
+            + "\n"
+        ).encode("utf-8")
+        flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
+        fd = os.open(self._path, flags, 0o644)
+        try:
+            os.write(fd, line)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
         self._writes += 1
 
 
@@ -142,4 +150,3 @@ def _record_from_payload(payload: dict[str, object]) -> PaperTradeRecord:
     data["trading_date"] = date.fromisoformat(data["trading_date"])
     data["strategy_reasoning"] = tuple(data.get("strategy_reasoning") or ())
     return PaperTradeRecord(**data)
-

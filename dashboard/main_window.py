@@ -119,6 +119,7 @@ class VisionMainWindow(QMainWindow):
         strategies = {item.symbol: item for item in view.strategies}
         positions = {item.symbol: item for item in view.positions}
         journals = {item.symbol: item for item in view.journals}
+        analytics = {item.symbol: item for item in view.analytics}
         for market in view.markets:
             panels = self._instrument_panels[market.symbol]
             panels["market"].render(market)
@@ -128,6 +129,7 @@ class VisionMainWindow(QMainWindow):
             panels["strategy"].render(strategies[market.symbol])
             panels["position"].render(positions[market.symbol])
             panels["journal"].render(journals[market.symbol])
+            panels["journal"].render_analytics(analytics[market.symbol])
         self.statusBar().showMessage(f"Application {view.runtime.application_status}")
 
     def current_view(self) -> DashboardView | None:

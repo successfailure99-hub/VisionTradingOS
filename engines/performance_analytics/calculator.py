@@ -333,4 +333,3 @@ def _value(value):
 def _present(value):
     text = str(value).strip() if value is not None else ""
     return text or "-"
-

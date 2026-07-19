@@ -1,3 +1,5 @@
+import csv
+import json
 from dataclasses import FrozenInstanceError, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -153,9 +155,10 @@ def test_repository_persistence_duplicates_conflicts_and_corrupt_lines(tmp_path)
     assert repo.add(first).status is AnalyticsRecordStatus.DUPLICATE
     assert repo.add(replace(first, net_pnl=101, gross_pnl=101)).status is AnalyticsRecordStatus.CONFLICT
     path.write_text(path.read_text(encoding="utf-8") + "{bad json}\n", encoding="utf-8")
+    path.write_text(path.read_text(encoding="utf-8") + json.dumps({"schema_version": 999, "record": {}}) + "\n", encoding="utf-8")
     restarted = PaperTradeJournalRepository(path=path)
     assert restarted.load() == (first,)
-    assert restarted.diagnostics.load_failures == 1
+    assert restarted.diagnostics.load_failures == 2
     assert restarted.records(instrument="NIFTY") == (first,)
     assert restarted.latest(1) == (first,)
 
@@ -182,6 +185,37 @@ def test_engine_event_ingestion_idempotent_reviews_replay_and_exports(tmp_path):
     assert csv_result.record_count == 1
     assert xlsx_result.record_count == 1
     assert "xl/workbook.xml" in ZipFile(xlsx_result.path).namelist()
+
+
+def test_reset_preserves_persisted_history_unless_explicitly_cleared(tmp_path):
+    path = tmp_path / "journal.jsonl"
+    engine = PerformanceAnalyticsEngine(
+        configuration=PerformanceAnalyticsConfiguration(journal_path=path),
+        clock=lambda: BASE,
+    )
+    engine.record_trade(record("persisted", 100))
+    engine.reset(clear_persistent_data=False)
+    assert engine.snapshot().overall.record_count == 1
+    engine.reset(clear_persistent_data=True)
+    assert engine.snapshot().overall.record_count == 0
+    assert not path.exists()
+
+
+def test_exports_escape_spreadsheet_formula_text_without_changing_numeric_losses(tmp_path):
+    engine = PerformanceAnalyticsEngine(
+        configuration=PerformanceAnalyticsConfiguration(journal_path=tmp_path / "journal.jsonl", export_directory=tmp_path),
+        clock=lambda: BASE,
+    )
+    dangerous = record("formula", -25, setup="-SUM(1,1)")
+    engine.record_trade(dangerous)
+    csv_result = engine.export_csv(tmp_path / "formula.csv", overwrite=True)
+    with csv_result.path.open("r", encoding="utf-8", newline="") as handle:
+        rows = tuple(csv.DictReader(handle))
+    assert rows[0]["strategy_setup"] == "'-SUM(1,1)"
+    assert rows[0]["net_pnl"] == "-25.0"
+    xlsx_result = engine.export_excel(tmp_path / "formula.xlsx", overwrite=True)
+    sheet_xml = ZipFile(xlsx_result.path).read("xl/worksheets/sheet2.xml").decode("utf-8")
+    assert "'-SUM(1,1)" in sheet_xml
 
 
 def test_runtime_snapshot_exposes_portfolio_analytics(tmp_path):
@@ -217,4 +251,3 @@ def test_dashboard_presenter_maps_analytics_view(tmp_path):
     assert view.total_trades == 1
     assert view.metric_cards
     assert view.recent_trades[0].columns[0] == "dash"
-

@@ -75,6 +75,7 @@ def test_render_updates_all_panels():
     assert window._instrument_panels[symbol]["price_action"]._labels["Symbol"].text() == view.price_actions[0].symbol
     assert window._instrument_panels[symbol]["option_chain"]._labels["Symbol"].text() == view.option_chains[0].symbol
     assert window._instrument_panels[symbol]["ai"]._labels["Summary"].text() == view.ai[0].market_summary
+    assert window._instrument_panels[symbol]["journal"]._analytics_panel._status.text() == view.analytics[0].status
 
 
 def test_selected_tab_is_preserved_across_refreshes():

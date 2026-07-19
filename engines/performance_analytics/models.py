@@ -355,4 +355,3 @@ def _tuple_of(values, item_type, name: str):
     if any(not isinstance(item, item_type) for item in items):
         raise TypeError(f"{name} must contain {item_type.__name__}")
     return items
-

@@ -68,4 +68,3 @@ def _fill(table: QTableWidget, rows) -> None:
             item = QTableWidgetItem(value)
             item.setFlags(item.flags() & ~Qt.ItemIsEditable)
             table.setItem(row_index, column_index, item)
-
