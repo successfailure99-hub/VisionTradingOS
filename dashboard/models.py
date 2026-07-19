@@ -59,6 +59,30 @@ class DashboardRuntimeView:
 
 
 @dataclass(frozen=True, slots=True)
+class DashboardBacktestView:
+    enabled: bool
+    lifecycle_state: str
+    mode: str
+    current_session: str
+    completed_sessions: int
+    total_sessions: int
+    current_replay_progress: float
+    closed_trades: int
+    net_pnl: float | None
+    win_rate: float | None
+    drawdown: float | None
+    reproducibility_status: str
+    last_finding: str
+    final_outcome: str
+    report_path: str
+
+    def __post_init__(self) -> None:
+        _require_non_negative(self.completed_sessions, "completed_sessions")
+        _require_non_negative(self.total_sessions, "total_sessions")
+        _require_non_negative(self.closed_trades, "closed_trades")
+
+
+@dataclass(frozen=True, slots=True)
 class DashboardLiveSubscriptionView:
     instrument: str
     exchange: str
@@ -622,3 +646,22 @@ class DashboardView:
     option_chains: tuple[DashboardOptionChainView, ...] = field(default_factory=tuple)
     live_market_data: DashboardLiveMarketDataView = field(default_factory=unavailable_live_market_data_view)
     analytics: tuple[DashboardAnalyticsView, ...] = field(default_factory=tuple)
+    backtest: DashboardBacktestView = field(
+        default_factory=lambda: DashboardBacktestView(
+            enabled=False,
+            lifecycle_state="Idle",
+            mode="Single Session",
+            current_session="-",
+            completed_sessions=0,
+            total_sessions=0,
+            current_replay_progress=0.0,
+            closed_trades=0,
+            net_pnl=None,
+            win_rate=None,
+            drawdown=None,
+            reproducibility_status="Not Checked",
+            last_finding="-",
+            final_outcome="Not Run",
+            report_path="-",
+        )
+    )

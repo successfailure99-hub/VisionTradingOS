@@ -61,7 +61,7 @@ def test_main_window_contains_trading_and_system_areas():
     app()
     window = three_instrument_window()
     assert [window._main_tabs.tabText(index) for index in range(window._main_tabs.count())] == ["Trading", "System"]
-    assert [window._system_tabs.tabText(index) for index in range(window._system_tabs.count())] == ["Runtime", "Live Feed"]
+    assert [window._system_tabs.tabText(index) for index in range(window._system_tabs.count())] == ["Runtime", "Live Feed", "Backtest"]
     assert window._tabs.count() == 3
     assert [window._tabs.tabText(index) for index in range(window._tabs.count())] == ["NIFTY", "BANKNIFTY", "SENSEX"]
 
@@ -104,9 +104,10 @@ def test_common_windows_sizes_keep_required_widgets_accessible(size):
     assert window.size().width() >= min(size[0], window.minimumWidth())
     assert window._main_tabs.height() > 300
     assert window._tabs.height() > 260
-    assert window._system_tabs.count() == 2
+    assert window._system_tabs.count() == 3
     assert window._runtime_panel.height() > 0
     assert window._live_market_data_panel.height() > 0
+    assert window._backtest_panel.height() > 0
     assert window._timer.interval() == 500
     for symbol, panels in window._instrument_panels.items():
         sections = panels["sections"]

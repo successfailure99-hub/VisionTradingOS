@@ -14,6 +14,7 @@ from dashboard.models import (
     DashboardAnalyticsMetricView,
     DashboardAnalyticsRowView,
     DashboardAnalyticsView,
+    DashboardBacktestView,
     DashboardJournalView,
     DashboardLiveMarketDataView,
     DashboardLiveSubscriptionView,
@@ -72,6 +73,31 @@ def build_dashboard_view(
             for snapshot in runtime_snapshots
         ),
         live_market_data=build_live_market_data_view(live_market_data_snapshot, clock=clock),
+        backtest=build_backtest_view(lifecycle_snapshot),
+    )
+
+
+def build_backtest_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardBacktestView:
+    backtest = getattr(lifecycle_snapshot.orchestrator_snapshot, "deterministic_backtest", None)
+    analytics = getattr(backtest, "aggregate_analytics", None)
+    progress = getattr(backtest, "current_progress", None)
+    findings = tuple(getattr(backtest, "findings", ()) or ())
+    return DashboardBacktestView(
+        enabled=bool(getattr(backtest, "enabled", False)),
+        lifecycle_state=_enum_text(getattr(backtest, "lifecycle_state", None)),
+        mode=_enum_text(getattr(backtest, "mode", None)),
+        current_session=_enum_text(getattr(progress, "session_id", None)),
+        completed_sessions=getattr(backtest, "completed_sessions", 0),
+        total_sessions=getattr(backtest, "total_sessions", 0),
+        current_replay_progress=getattr(progress, "progress_percentage", 0.0),
+        closed_trades=getattr(analytics, "trade_count", 0),
+        net_pnl=getattr(analytics, "net_pnl", None),
+        win_rate=getattr(analytics, "win_rate", None),
+        drawdown=getattr(analytics, "maximum_observed_session_drawdown", None),
+        reproducibility_status=_enum_text(getattr(backtest, "reproducibility_status", None)),
+        last_finding=_enum_text(getattr(findings[-1], "code", None)) if findings else "-",
+        final_outcome=_enum_text(getattr(backtest, "outcome", None)),
+        report_path=_source_name(getattr(backtest, "report_path", None)),
     )
 
 

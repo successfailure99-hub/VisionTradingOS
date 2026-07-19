@@ -124,6 +124,37 @@ Focused replay tests:
 python -m pytest tests/test_historical_market_replay_v1.py -v
 ```
 
+## Deterministic Backtest
+
+Historical Replay reproduces market events. Deterministic Backtest coordinates those events through the existing trading-analysis and paper-execution pipeline and evaluates the resulting performance.
+
+Default state:
+
+```text
+BACKTEST_ENABLED=false
+BACKTEST_MODE=SINGLE_SESSION
+```
+
+Supported V1 modes are `SINGLE_SESSION` and `BATCH`. Batch sessions run sequentially and never concurrently. The backtest orchestrator uses the approved Historical Market Replay Engine, the shared `EventBus`, existing application runtime engines, Paper Trading, and Performance Analytics. It does not implement another trading engine, candle calculator, strategy engine, risk engine, fill engine, analytics engine, ticker router, or EventBus.
+
+Backtest configuration is disabled by default and does not inspect session files unless enabled and prepared. Session paths are ordered with `BACKTEST_SESSION_PATHS`, separated by semicolons on Windows. Reports are written under `BACKTEST_OUTPUT_DIRECTORY` and are terminal JSON reports only; no durable data is written per replay record, candle, signal, dashboard refresh, or cooperative poll.
+
+Lifecycle states are `IDLE`, `READY`, `RUNNING`, `PAUSED`, `COMPLETED`, `STOPPED`, and `FAILED`. Desktop rendering remains cooperative: each refresh advances at most a bounded unit of running backtest work. `Prepare`, `Start`, `Pause`, `Resume`, `Stop`, and `Reset` commands call public backtest APIs only.
+
+Deterministic run fingerprints are built from stable inputs: schema version, ordered replay session identities, replay manifest details, execution mode, and safe configuration. Runtime timestamps, process IDs, output paths, random values, and object memory addresses are excluded. When reproducibility checking is enabled, result digests compare stable terminal outcomes and bounded finding codes while excluding report paths and wall-clock metadata.
+
+Backtesting is mutually exclusive with live market-data and live option-chain publication. A current live runtime in `STARTING`, `RUNNING`, or `STOPPING`, or a connecting/connected/reconnecting/disconnecting WebSocket, blocks backtest startup. Backtest activity also blocks live auto-connect. The system never forces a live disconnect, mutates live configuration, or switches from live to replay automatically.
+
+Safety remains protected: `ANALYSIS_ONLY` and `DRY_RUN` are mandatory, live order execution remains disabled, and `broker_order_calls` must remain `0`. Open paper positions at terminal completion are reported explicitly. If no closed paper trades are produced, the result remains valid and records a clear `NO_TRADES` finding instead of inventing fills or placeholder performance.
+
+Known V1 limitations: no live trading, no broker order placement, no strategy optimization, no parameter-grid search, no walk-forward testing, no Monte Carlo simulation, no multiprocessing, no threads, no asyncio, no distributed workers, and no portfolio allocation.
+
+Focused backtest tests:
+
+```powershell
+python -m pytest tests/test_deterministic_backtest_v1.py -v
+```
+
 ## Testing
 
 Full regression suite:
