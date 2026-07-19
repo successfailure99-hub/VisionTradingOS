@@ -16,6 +16,7 @@ from engines.order_management.models import OrderCommand, OrderRequest, OrderSta
 from engines.position.models import PositionFill, PositionMark
 from engines.risk.models import AccountRiskState, RiskPolicy, TradeRiskPlan
 from engines.performance_analytics.engine import PerformanceAnalyticsEngine
+from engines.historical_market_replay.engine import HistoricalMarketReplayEngine
 from engines.live_market_validation.engine import LiveMarketValidationEngine
 from engines.trade_journal.models import TradeJournalSnapshot
 from engines.trade_journal.trade_journal_engine import TradeJournalEngine
@@ -54,6 +55,10 @@ class ApplicationOrchestrator:
             event_bus,
             configuration=self._configuration.live_validation_configuration,
         )
+        self.historical_replay_engine = HistoricalMarketReplayEngine(
+            event_bus,
+            configuration=self._configuration.historical_replay_configuration,
+        )
         self.broker_adapter = broker_adapter or ZerodhaBrokerAdapter(mode=BrokerExecutionMode.DRY_RUN)
         if self.broker_adapter.mode is not BrokerExecutionMode.DRY_RUN:
             raise ValueError("Application Orchestrator V1 requires a DRY_RUN Zerodha adapter by default.")
@@ -86,6 +91,9 @@ class ApplicationOrchestrator:
         return self.snapshot()
 
     def stop(self) -> OrchestratorSnapshot:
+        replay_state = self.historical_replay_engine.snapshot().lifecycle_state.value
+        if replay_state in {"running", "paused"}:
+            self.historical_replay_engine.stop("Application shutdown stopped historical replay.")
         for runtime in self._runtimes.values():
             runtime.stop()
         self._status = RuntimeStatus.STOPPED
@@ -212,6 +220,7 @@ class ApplicationOrchestrator:
         self.trade_journal_engine.reset()
         self.performance_analytics_engine.reset(clear_persistent_data=False)
         self.live_validation_engine.reset(clear_persistent_data=False)
+        self.historical_replay_engine.reset(clear_persistent_data=False)
         for runtime in self._runtimes.values():
             runtime.reset()
             if previous_status is RuntimeStatus.RUNNING:
@@ -238,6 +247,7 @@ class ApplicationOrchestrator:
             ),
             performance_analytics=self.performance_analytics_engine.snapshot(),
             live_validation=self.live_validation_engine.snapshot(),
+            historical_replay=self.historical_replay_engine.snapshot(),
         )
 
     def _runtime_for_core_instrument(self, instrument: Instrument) -> SymbolRuntime:

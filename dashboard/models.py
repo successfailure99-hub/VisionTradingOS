@@ -41,6 +41,21 @@ class DashboardRuntimeView:
     validation_reconnects: int = 0
     validation_p95_latency_ms: float | None = None
     validation_broker_order_calls: int = 0
+    replay_state: str = "Idle"
+    replay_mode: str = "Off"
+    replay_session_id: str = "-"
+    replay_source: str = "-"
+    replay_instruments: tuple[str, ...] = ()
+    replay_trading_date: date | None = None
+    replay_sequence: int | None = None
+    replay_published_records: int = 0
+    replay_total_records: int = 0
+    replay_progress_percentage: float = 0.0
+    replay_speed_multiplier: float = 0.0
+    replay_current_timestamp: datetime | None = None
+    replay_outcome: str = "-"
+    replay_findings: int = 0
+    replay_failure_summary: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

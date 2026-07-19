@@ -20,6 +20,7 @@ from engines.paper_trading.configuration import PaperTradingConfiguration
 from engines.paper_trading.models import PaperTradingSnapshot
 from engines.performance_analytics.configuration import PerformanceAnalyticsConfiguration
 from engines.performance_analytics.models import AnalyticsSnapshot
+from engines.historical_market_replay.models import ReplayConfiguration, ReplaySessionSnapshot
 from engines.live_market_validation.models import LiveMarketValidationConfiguration, ValidationSessionSnapshot
 from engines.position.models import PositionState
 from engines.price_action.models import PriceActionState
@@ -124,6 +125,7 @@ class RuntimeConfiguration:
     paper_trading_configuration: PaperTradingConfiguration | None = None
     performance_analytics_configuration: PerformanceAnalyticsConfiguration | None = None
     live_validation_configuration: LiveMarketValidationConfiguration | None = None
+    historical_replay_configuration: ReplayConfiguration | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.instruments, tuple) or not self.instruments:
@@ -154,6 +156,8 @@ class RuntimeConfiguration:
             raise TypeError("RuntimeConfiguration performance_analytics_configuration must be PerformanceAnalyticsConfiguration or None.")
         if self.live_validation_configuration is not None and not isinstance(self.live_validation_configuration, LiveMarketValidationConfiguration):
             raise TypeError("RuntimeConfiguration live_validation_configuration must be LiveMarketValidationConfiguration or None.")
+        if self.historical_replay_configuration is not None and not isinstance(self.historical_replay_configuration, ReplayConfiguration):
+            raise TypeError("RuntimeConfiguration historical_replay_configuration must be ReplayConfiguration or None.")
         object.__setattr__(self, "instruments", tuple(normalized))
         object.__setattr__(self, "exchange", self.exchange.strip().upper())
         object.__setattr__(self, "timeframe", timeframe)
@@ -195,3 +199,4 @@ class OrchestratorSnapshot:
     runtime_snapshots: tuple[RuntimeSnapshot, ...]
     performance_analytics: AnalyticsSnapshot | None = None
     live_validation: ValidationSessionSnapshot | None = None
+    historical_replay: ReplaySessionSnapshot | None = None

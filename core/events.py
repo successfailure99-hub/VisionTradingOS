@@ -212,3 +212,16 @@ LIVE_VALIDATION_UPDATED = "live_validation_updated"
 LIVE_VALIDATION_FINDING = "live_validation_finding"
 LIVE_VALIDATION_SESSION_COMPLETED = "live_validation_session_completed"
 LIVE_VALIDATION_SESSION_FAILED = "live_validation_session_failed"
+
+# ==================================================
+# Historical Market Replay Events
+# ==================================================
+
+HISTORICAL_REPLAY_LOADED = "historical_replay_loaded"
+HISTORICAL_REPLAY_STARTED = "historical_replay_started"
+HISTORICAL_REPLAY_PAUSED = "historical_replay_paused"
+HISTORICAL_REPLAY_RESUMED = "historical_replay_resumed"
+HISTORICAL_REPLAY_PROGRESS_UPDATED = "historical_replay_progress_updated"
+HISTORICAL_REPLAY_COMPLETED = "historical_replay_completed"
+HISTORICAL_REPLAY_STOPPED = "historical_replay_stopped"
+HISTORICAL_REPLAY_FAILED = "historical_replay_failed"
