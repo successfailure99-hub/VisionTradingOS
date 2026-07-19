@@ -75,6 +75,7 @@ class RiskReasonCode(str, Enum):
     CONSECUTIVE_LOSS_COOLDOWN = "consecutive_loss_cooldown"
     REVENGE_TRADING_LOCKOUT = "revenge_trading_lockout"
     MANUAL_LOCK_ACTIVE = "manual_lock_active"
+    MANUAL_APPROVAL_REQUIRED = "manual_approval_required"
     EMERGENCY_LOCK_ACTIVE = "emergency_lock_active"
     OUTSIDE_TRADING_WINDOW = "outside_trading_window"
     LATE_ENTRY = "late_entry"

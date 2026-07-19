@@ -197,23 +197,23 @@ def test_policy_validation_and_disabled_reduction_thresholds():
     feed(risk)
     later = TS + timedelta(minutes=1)
     invalids = [
-        policy(max_risk_percent=0),
-        policy(max_risk_percent=-1),
-        policy(max_risk_percent=101),
-        policy(reduced_risk_percent=3),
-        policy(max_daily_loss_percent=0),
-        policy(max_daily_loss_percent=101),
-        policy(max_consecutive_losses=0),
-        policy(reduced_after_consecutive_losses=3),
-        policy(max_trades_per_day=0),
-        policy(reduced_after_trades=5),
-        policy(max_lots=0),
-        policy(minimum_reward_risk=0),
-        policy(max_risk_percent=True),
-        policy(max_consecutive_losses=True),
+        lambda: policy(max_risk_percent=0),
+        lambda: policy(max_risk_percent=-1),
+        lambda: policy(max_risk_percent=101),
+        lambda: policy(reduced_risk_percent=3),
+        lambda: policy(max_daily_loss_percent=0),
+        lambda: policy(max_daily_loss_percent=101),
+        lambda: policy(max_consecutive_losses=0),
+        lambda: policy(reduced_after_consecutive_losses=3),
+        lambda: policy(max_trades_per_day=0),
+        lambda: policy(reduced_after_trades=5),
+        lambda: policy(max_lots=0),
+        lambda: policy(minimum_reward_risk=0),
+        lambda: policy(max_risk_percent=True),
+        lambda: policy(max_consecutive_losses=True),
     ]
     for bad in invalids:
-        assert_rejected_preserves_state(risk, snapshot(timestamp=later, strategy=strategy(timestamp=later), policy=bad))
+        assert_raises((TypeError, ValueError), bad)
 
     disabled = policy(reduced_after_consecutive_losses=0, reduced_after_trades=0)
     reduced_state = result(policy=disabled, account=account(consecutive_losses=2, trades_today=3))
@@ -226,15 +226,15 @@ def test_account_and_trade_plan_validation():
     risk = engine()
     feed(risk)
     later = TS + timedelta(minutes=1)
+    assert_rejected_preserves_state(risk, snapshot(timestamp=later, strategy=strategy(timestamp=later), account=account(account_equity=0)))
     for bad_account in (
-        account(account_equity=0),
-        account(account_equity=-1),
-        account(trades_today=-1),
-        account(consecutive_losses=-1),
-        account(trades_today=True),
-        account(consecutive_losses=True),
+        lambda: account(account_equity=-1),
+        lambda: account(trades_today=-1),
+        lambda: account(consecutive_losses=-1),
+        lambda: account(trades_today=True),
+        lambda: account(consecutive_losses=True),
     ):
-        assert_rejected_preserves_state(risk, snapshot(timestamp=later, strategy=strategy(timestamp=later), account=bad_account))
+        assert_raises((TypeError, ValueError), bad_account)
 
     plus = result(account=account(realized_pnl_today=500)).remaining_daily_loss_capacity
     minus = result(account=account(realized_pnl_today=-500)).remaining_daily_loss_capacity
@@ -242,15 +242,15 @@ def test_account_and_trade_plan_validation():
     assert minus == 4500.0
 
     for bad_plan in (
-        trade_plan(entry_price=0),
-        trade_plan(stop_price=float("nan")),
-        trade_plan(target_price=float("inf")),
-        trade_plan(lot_size=0),
-        trade_plan(requested_lots=0),
-        trade_plan(entry_price=True),
-        trade_plan(lot_size=True),
+        lambda: trade_plan(entry_price=0),
+        lambda: trade_plan(stop_price=float("nan")),
+        lambda: trade_plan(target_price=float("inf")),
+        lambda: trade_plan(lot_size=0),
+        lambda: trade_plan(requested_lots=0),
+        lambda: trade_plan(entry_price=True),
+        lambda: trade_plan(lot_size=True),
     ):
-        assert_rejected_preserves_state(risk, snapshot(timestamp=later, strategy=strategy(timestamp=later), trade_plan=bad_plan))
+        assert_raises((TypeError, ValueError), bad_plan)
 
 
 def test_directional_structure_and_reward_risk():

@@ -2,6 +2,8 @@
 Immutable Risk Engine V1 models.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -52,8 +54,12 @@ class RiskPolicy:
     maximum_instrument_open_risk: float | None = None
     maximum_quantity: int | None = None
     maximum_lots: int = 2
-    lot_sizes_by_instrument: dict[str, int] = field(
-        default_factory=lambda: {"NIFTY": 75, "BANKNIFTY": 35, "SENSEX": 20}
+    lot_sizes_by_instrument: tuple[InstrumentLotSize, ...] | dict[str, int] = field(
+        default_factory=lambda: (
+            InstrumentLotSize("NIFTY", 75),
+            InstrumentLotSize("BANKNIFTY", 35),
+            InstrumentLotSize("SENSEX", 20),
+        )
     )
     allow_averaging_down: bool = False
     allow_duplicate_direction: bool = False
@@ -64,6 +70,85 @@ class RiskPolicy:
     require_stop_loss: bool = True
     require_target: bool = True
     manual_approval_required: bool = True
+
+    def __post_init__(self) -> None:
+        for name in (
+            "enabled",
+            "allow_averaging_down",
+            "allow_duplicate_direction",
+            "allow_fomo_entry",
+            "require_stop_loss",
+            "require_target",
+            "manual_approval_required",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"{name} must be bool")
+        for name in ("max_risk_percent", "reduced_risk_percent", "max_daily_loss_percent"):
+            _percentage(getattr(self, name), name)
+        if self.reduced_risk_percent > self.max_risk_percent:
+            raise ValueError("reduced_risk_percent must be less than or equal to max_risk_percent")
+        for name in ("risk_per_trade_percentage",):
+            _percentage(getattr(self, name), name)
+        for name in ("maximum_risk_per_trade_amount", "maximum_daily_loss_amount", "daily_profit_lock_trigger"):
+            value = getattr(self, name)
+            if value is not None:
+                _positive_real(value, name)
+        if self.maximum_daily_loss_percentage is not None:
+            _percentage(self.maximum_daily_loss_percentage, "maximum_daily_loss_percentage")
+        if self.daily_profit_giveback_limit is not None:
+            _non_negative_real(self.daily_profit_giveback_limit, "daily_profit_giveback_limit")
+        for name in (
+            "max_consecutive_losses",
+            "max_trades_per_day",
+            "max_lots",
+            "maximum_trades_per_session",
+            "maximum_consecutive_losses",
+            "maximum_lots",
+        ):
+            _positive_int(getattr(self, name), name)
+        for name in (
+            "reduced_after_consecutive_losses",
+            "reduced_after_trades",
+            "cooldown_minutes_after_loss",
+            "revenge_trade_window_minutes",
+        ):
+            _non_negative_int(getattr(self, name), name)
+        if self.reduced_after_consecutive_losses >= self.max_consecutive_losses:
+            raise ValueError("reduced_after_consecutive_losses must be less than max_consecutive_losses")
+        if self.reduced_after_trades >= self.max_trades_per_day:
+            raise ValueError("reduced_after_trades must be less than max_trades_per_day")
+        for name in ("minimum_reward_risk", "minimum_reward_to_risk"):
+            _positive_real(getattr(self, name), name)
+        for name in ("maximum_stop_distance_percentage", "minimum_stop_distance_percentage"):
+            value = getattr(self, name)
+            if value is not None:
+                _positive_real(value, name)
+        if (
+            self.maximum_stop_distance_percentage is not None
+            and self.minimum_stop_distance_percentage is not None
+            and self.minimum_stop_distance_percentage > self.maximum_stop_distance_percentage
+        ):
+            raise ValueError("minimum_stop_distance_percentage must be <= maximum_stop_distance_percentage")
+        for name in ("maximum_total_open_risk", "maximum_instrument_open_risk"):
+            value = getattr(self, name)
+            if value is not None:
+                _positive_real(value, name)
+        if self.maximum_quantity is not None:
+            _positive_int(self.maximum_quantity, "maximum_quantity")
+        for name in ("trading_start_time", "last_entry_time", "force_exit_time"):
+            if not isinstance(getattr(self, name), time):
+                raise TypeError(f"{name} must be a time")
+        if not (self.trading_start_time < self.last_entry_time < self.force_exit_time):
+            raise ValueError("trading_start_time < last_entry_time < force_exit_time is required")
+        lot_sizes = _canonical_lot_sizes(self.lot_sizes_by_instrument)
+        object.__setattr__(self, "lot_sizes_by_instrument", lot_sizes)
+
+    def lot_size_for(self, symbol: str) -> int | None:
+        normalized = symbol.strip().upper() if isinstance(symbol, str) else ""
+        for item in self.lot_sizes_by_instrument:
+            if item.symbol == normalized:
+                return item.lot_size
+        return None
 
     def fingerprint(self) -> str:
         return _fingerprint(_model_payload(self))
@@ -79,6 +164,19 @@ class InstrumentLotSize:
             raise ValueError("symbol must be non-empty text")
         object.__setattr__(self, "symbol", self.symbol.strip().upper())
         _positive_int(self.lot_size, "lot_size")
+
+
+@dataclass(frozen=True, slots=True)
+class InstrumentRiskExposure:
+    symbol: str
+    open_risk: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.symbol, str) or not self.symbol.strip():
+            raise ValueError("symbol must be non-empty text")
+        object.__setattr__(self, "symbol", self.symbol.strip().upper())
+        amount = _non_negative_real(self.open_risk, "open_risk")
+        object.__setattr__(self, "open_risk", amount)
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,6 +377,26 @@ class AccountRiskState:
     margin_used: float = 0.0
     session_date: date | None = None
 
+    def __post_init__(self) -> None:
+        for name in ("account_equity", "starting_capital", "available_capital"):
+            value = getattr(self, name)
+            if value is not None:
+                number = _non_negative_real(value, name)
+                object.__setattr__(self, name, number)
+        for name in ("realized_pnl_today", "realized_pnl", "unrealized_pnl", "daily_pnl"):
+            value = getattr(self, name)
+            if value is not None:
+                number = _finite_real(value, name)
+                object.__setattr__(self, name, number)
+        for name in ("open_risk", "margin_used"):
+            number = _non_negative_real(getattr(self, name), name)
+            object.__setattr__(self, name, number)
+        for name in ("trades_today", "consecutive_losses"):
+            _non_negative_int(getattr(self, name), name)
+        if self.session_date is not None:
+            if isinstance(self.session_date, datetime) or not isinstance(self.session_date, date):
+                raise TypeError("session_date must be a date")
+
 
 @dataclass(frozen=True, slots=True)
 class TradeRiskPlan:
@@ -303,6 +421,34 @@ class TradeRiskPlan:
     existing_position_direction: TradeDirection | str | None = None
     existing_position_quantity: int = 0
     manual_approval: bool = False
+
+    def __post_init__(self) -> None:
+        entry = _positive_real(self.entry_price, "entry_price")
+        object.__setattr__(self, "entry_price", entry)
+        for name in ("stop_price", "target_price", "stop_loss_price"):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, _positive_real(value, name))
+        _positive_int(self.lot_size, "lot_size")
+        _positive_int(self.requested_lots, "requested_lots")
+        if self.requested_quantity is not None:
+            _positive_int(self.requested_quantity, "requested_quantity")
+        object.__setattr__(self, "instrument", _safe_text(self.instrument, "instrument").upper())
+        object.__setattr__(self, "direction", _canonical_direction(self.direction))
+        if self.existing_position_direction is not None:
+            object.__setattr__(self, "existing_position_direction", _canonical_direction(self.existing_position_direction))
+        _non_negative_int(self.existing_position_quantity, "existing_position_quantity")
+        if self.timestamp is not None:
+            _aware_datetime(self.timestamp, "timestamp")
+        for name in (
+            "is_retest_entry",
+            "is_fomo_entry",
+            "is_averaging_entry",
+            "is_revenge_entry",
+            "manual_approval",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"{name} must be bool")
 
     @property
     def effective_stop_loss_price(self) -> float | None:
@@ -416,7 +562,7 @@ class SessionRiskState:
     realized_pnl: float = 0.0
     unrealized_pnl: float = 0.0
     current_open_risk: float = 0.0
-    instrument_open_risk: dict[str, float] = field(default_factory=dict)
+    instrument_open_risk: tuple[InstrumentRiskExposure, ...] | dict[str, float] = field(default_factory=tuple)
     manual_lock_active: bool = False
     emergency_lock_active: bool = False
     daily_profit_lock_active: bool = False
@@ -434,15 +580,15 @@ class SessionRiskState:
             _finite_real(getattr(self, name), name)
         if self.current_open_risk < 0:
             raise ValueError("current_open_risk must be non-negative")
-        instrument_risk = {}
-        for key, value in dict(self.instrument_open_risk).items():
-            symbol = _safe_text(key, "instrument").upper()
-            amount = _finite_real(value, "instrument_open_risk")
-            if amount < 0:
-                raise ValueError("instrument open risk must be non-negative")
-            instrument_risk[symbol] = amount
-        object.__setattr__(self, "instrument_open_risk", instrument_risk)
+        object.__setattr__(self, "instrument_open_risk", _canonical_exposures(self.instrument_open_risk))
         object.__setattr__(self, "findings", tuple(self.findings[-50:]))
+
+    def open_risk_for(self, symbol: str) -> float:
+        normalized = symbol.strip().upper() if isinstance(symbol, str) else ""
+        for item in self.instrument_open_risk:
+            if item.symbol == normalized:
+                return item.open_risk
+        return 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -523,7 +669,7 @@ class RiskEngineSnapshot:
     unrealized_pnl: float
     daily_pnl: float
     current_open_risk: float
-    instrument_open_risk: dict[str, float]
+    instrument_open_risk: tuple[InstrumentRiskExposure, ...] | dict[str, float]
     cooldown_until: datetime | None
     revenge_lock_until: datetime | None
     last_decision: RiskDecisionRecord | None
@@ -534,6 +680,11 @@ class RiskEngineSnapshot:
     rejected_count: int
     locked_count: int
     broker_order_calls: int = 0
+
+    def __post_init__(self) -> None:
+        if self.broker_order_calls != 0:
+            raise ValueError("broker_order_calls must remain zero")
+        object.__setattr__(self, "instrument_open_risk", _canonical_exposures(self.instrument_open_risk))
 
 
 def _finite_real(value: Real, name: str) -> float:
@@ -624,3 +775,44 @@ def _model_payload(value):
 def _fingerprint(payload) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_lot_sizes(value) -> tuple[InstrumentLotSize, ...]:
+    if isinstance(value, dict):
+        items = tuple(InstrumentLotSize(str(symbol), lot_size) for symbol, lot_size in value.items())
+    else:
+        items = tuple(value)
+        if any(not isinstance(item, InstrumentLotSize) for item in items):
+            raise TypeError("lot_sizes_by_instrument must contain InstrumentLotSize values")
+    symbols = [item.symbol for item in items]
+    if len(set(symbols)) != len(symbols):
+        raise ValueError("lot_sizes_by_instrument must be unique by symbol")
+    return tuple(sorted(items, key=lambda item: item.symbol))
+
+
+def _canonical_exposures(value) -> tuple[InstrumentRiskExposure, ...]:
+    if isinstance(value, dict):
+        items = tuple(InstrumentRiskExposure(str(symbol), amount) for symbol, amount in value.items())
+    else:
+        items = tuple(value)
+        if any(not isinstance(item, InstrumentRiskExposure) for item in items):
+            raise TypeError("instrument_open_risk must contain InstrumentRiskExposure values")
+    exposures: dict[str, float] = {}
+    for item in items:
+        exposures[item.symbol] = round(exposures.get(item.symbol, 0.0) + item.open_risk, 2)
+    return tuple(InstrumentRiskExposure(symbol, exposures[symbol]) for symbol in sorted(exposures))
+
+
+def _canonical_direction(value) -> TradeDirection:
+    if isinstance(value, TradeDirection):
+        if value is TradeDirection.NONE:
+            raise ValueError("direction must be bullish or bearish")
+        return value
+    if not isinstance(value, str):
+        raise TypeError("direction must be TradeDirection or text")
+    normalized = value.strip().lower()
+    if normalized in {"bullish", "long", "buy"}:
+        return TradeDirection.BULLISH
+    if normalized in {"bearish", "short", "sell"}:
+        return TradeDirection.BEARISH
+    raise ValueError("direction must be bullish or bearish")

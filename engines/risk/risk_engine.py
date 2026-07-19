@@ -35,6 +35,7 @@ from engines.risk.enums import (
 )
 from engines.risk.models import (
     AccountRiskState,
+    InstrumentRiskExposure,
     RiskDecisionRecord,
     RiskDecisionState,
     RiskEngineSnapshot,
@@ -147,8 +148,7 @@ class RiskEngine(BaseEngine):
         self._roll_session_if_needed(when.date())
         symbol = self._normalize_symbol(instrument)
         amount = self._non_negative_real("risk_amount", risk_amount)
-        risk_by_instrument = dict(self._session_state.instrument_open_risk)
-        risk_by_instrument[symbol] = round(risk_by_instrument.get(symbol, 0.0) + amount, 2)
+        risk_by_instrument = self._exposure_with_delta(symbol, amount)
         self._session_state = replace(
             self._session_state,
             trades_taken=self._session_state.trades_taken + 1,
@@ -173,17 +173,18 @@ class RiskEngine(BaseEngine):
         symbol = self._normalize_symbol(instrument)
         amount = self._non_negative_real("risk_amount", risk_amount)
         pnl = self._finite_real("realized_pnl", realized_pnl)
-        risk_by_instrument = dict(self._session_state.instrument_open_risk)
-        risk_by_instrument[symbol] = round(max(0.0, risk_by_instrument.get(symbol, 0.0) - amount), 2)
-        if risk_by_instrument[symbol] == 0:
-            risk_by_instrument.pop(symbol)
+        risk_by_instrument = self._exposure_with_delta(symbol, -amount)
         wins = self._session_state.winning_trades + (1 if pnl > 0 else 0)
         losses = self._session_state.losing_trades + (1 if pnl < 0 else 0)
         consecutive = 0 if pnl > 0 else self._session_state.consecutive_losses + (1 if pnl < 0 else 0)
         cooldown_until = self._session_state.cooldown_until
         revenge_until = self._session_state.revenge_lock_until
-        if pnl < 0:
+        if pnl < 0 and consecutive >= self._policy.maximum_consecutive_losses:
             cooldown_until = when + timedelta(minutes=max(self._policy.cooldown_minutes_after_loss, 0))
+        elif pnl > 0:
+            cooldown_until = None
+            revenge_until = None
+        if pnl < 0:
             revenge_until = when + timedelta(minutes=max(self._policy.revenge_trade_window_minutes, 0))
         self._session_state = replace(
             self._session_state,
@@ -230,7 +231,7 @@ class RiskEngine(BaseEngine):
         if isinstance(trading_date, datetime) or not isinstance(trading_date, date):
             raise TypeError("trading_date must be a date")
         emergency = self._session_state.emergency_lock_active
-        self._session_state = SessionRiskState(trading_date, emergency_lock_active=emergency)
+        self._session_state = SessionRiskState(trading_date, manual_lock_active=False, emergency_lock_active=emergency)
         self._last_decision = None
         self._state = None
         self._data = None
@@ -255,7 +256,7 @@ class RiskEngine(BaseEngine):
             unrealized_pnl=self._session_state.unrealized_pnl,
             daily_pnl=daily_pnl,
             current_open_risk=self._session_state.current_open_risk,
-            instrument_open_risk=dict(self._session_state.instrument_open_risk),
+            instrument_open_risk=self._session_state.instrument_open_risk,
             cooldown_until=self._session_state.cooldown_until,
             revenge_lock_until=self._session_state.revenge_lock_until,
             last_decision=self._last_decision,
@@ -302,7 +303,7 @@ class RiskEngine(BaseEngine):
         lot_size = plan_values["lot_size"]
         requested_lots = plan_values["requested_lots"]
         requested_quantity = plan_values["requested_quantity"]
-        configured_lot_size = policy.lot_sizes_by_instrument.get(instrument)
+        configured_lot_size = policy.lot_size_for(instrument)
         if configured_lot_size is not None:
             lot_size = configured_lot_size
             if trade_plan.requested_quantity is None:
@@ -379,18 +380,22 @@ class RiskEngine(BaseEngine):
         if reward_to_risk < policy.minimum_reward_to_risk:
             add(RiskSeverity.ERROR, RiskReasonCode.INSUFFICIENT_REWARD_RISK, "Reward-to-risk is below policy minimum.", "reward_to_risk", f"{reward_to_risk:.4f}", str(policy.minimum_reward_to_risk))
             return self._rejected_decision(timestamp, policy, trade_plan, instrument, direction, requested_quantity, requested_lots, entry, stop, target, RiskReasonCode.INSUFFICIENT_REWARD_RISK, findings)
+        if policy.manual_approval_required and not trade_plan.manual_approval:
+            add(RiskSeverity.ERROR, RiskReasonCode.MANUAL_APPROVAL_REQUIRED, "Manual approval is required before risk approval.", "manual_approval", "False", "True")
+            return self._locked_decision(timestamp, policy, trade_plan, instrument, direction, requested_quantity, requested_lots, entry, stop, target, RiskReasonCode.MANUAL_APPROVAL_REQUIRED, findings)
 
+        effective_total_open_risk = max(account_values["open_risk"], self._session_state.current_open_risk)
         minimum_lot_risk = lot_size * risk_per_unit
         if policy.maximum_instrument_open_risk is not None:
-            used = self._session_state.instrument_open_risk.get(instrument, 0.0)
+            used = self._instrument_open_risk(instrument)
             if used + minimum_lot_risk > policy.maximum_instrument_open_risk:
                 add(RiskSeverity.ERROR, RiskReasonCode.INSTRUMENT_EXPOSURE_EXCEEDED, "Instrument open risk limit exceeded.", "instrument_open_risk_after_trade", str(round(used + minimum_lot_risk, 2)), str(policy.maximum_instrument_open_risk))
                 return self._rejected_decision(timestamp, policy, trade_plan, instrument, direction, requested_quantity, requested_lots, entry, stop, target, RiskReasonCode.INSTRUMENT_EXPOSURE_EXCEEDED, findings)
-        if policy.maximum_total_open_risk is not None and self._session_state.current_open_risk + minimum_lot_risk > policy.maximum_total_open_risk:
-            add(RiskSeverity.ERROR, RiskReasonCode.TOTAL_OPEN_RISK_EXCEEDED, "Total open risk limit exceeded.", "total_open_risk_after_trade", str(round(self._session_state.current_open_risk + minimum_lot_risk, 2)), str(policy.maximum_total_open_risk))
+        if policy.maximum_total_open_risk is not None and effective_total_open_risk + minimum_lot_risk > policy.maximum_total_open_risk:
+            add(RiskSeverity.ERROR, RiskReasonCode.TOTAL_OPEN_RISK_EXCEEDED, "Total open risk limit exceeded.", "total_open_risk_after_trade", str(round(effective_total_open_risk + minimum_lot_risk, 2)), str(policy.maximum_total_open_risk))
             return self._rejected_decision(timestamp, policy, trade_plan, instrument, direction, requested_quantity, requested_lots, entry, stop, target, RiskReasonCode.TOTAL_OPEN_RISK_EXCEEDED, findings)
 
-        maximum_allowed_trade_risk = self._maximum_allowed_trade_risk(policy, account_values, instrument)
+        maximum_allowed_trade_risk = self._maximum_allowed_trade_risk(policy, account_values, instrument, effective_total_open_risk)
         if maximum_allowed_trade_risk <= 0 or account_values["available_capital"] <= 0:
             add(RiskSeverity.ERROR, RiskReasonCode.INSUFFICIENT_CAPITAL, "No risk capacity is available.")
             return self._rejected_decision(timestamp, policy, trade_plan, instrument, direction, requested_quantity, requested_lots, entry, stop, target, RiskReasonCode.INSUFFICIENT_CAPITAL, findings)
@@ -414,8 +419,8 @@ class RiskEngine(BaseEngine):
         approved_risk = round(approved_quantity * risk_per_unit, 2)
         requested_risk = round(requested_quantity * risk_per_unit, 2)
         estimated_reward = round(approved_quantity * reward_per_unit, 2)
-        total_after = round(self._session_state.current_open_risk + approved_risk, 2)
-        instrument_after = round(self._session_state.instrument_open_risk.get(instrument, 0.0) + approved_risk, 2)
+        total_after = round(effective_total_open_risk + approved_risk, 2)
+        instrument_after = round(self._instrument_open_risk(instrument) + approved_risk, 2)
         if policy.maximum_total_open_risk is not None and total_after > policy.maximum_total_open_risk:
             add(RiskSeverity.ERROR, RiskReasonCode.TOTAL_OPEN_RISK_EXCEEDED, "Total open risk limit exceeded.", "total_open_risk_after_trade", str(total_after), str(policy.maximum_total_open_risk))
             return self._rejected_decision(timestamp, policy, trade_plan, instrument, direction, requested_quantity, requested_lots, entry, stop, target, RiskReasonCode.TOTAL_OPEN_RISK_EXCEEDED, findings)
@@ -655,11 +660,11 @@ class RiskEngine(BaseEngine):
                 self._positive_real(name, value)
         if policy.maximum_quantity is not None:
             self._positive_int("maximum_quantity", policy.maximum_quantity)
-        if not isinstance(policy.lot_sizes_by_instrument, dict) or not policy.lot_sizes_by_instrument:
-            raise ValueError("lot_sizes_by_instrument must be a non-empty mapping.")
-        for symbol, lot_size in policy.lot_sizes_by_instrument.items():
-            self._normalize_symbol(symbol)
-            self._positive_int("lot_size", lot_size)
+        if not policy.lot_sizes_by_instrument:
+            raise ValueError("lot_sizes_by_instrument must be non-empty.")
+        for item in policy.lot_sizes_by_instrument:
+            self._normalize_symbol(item.symbol)
+            self._positive_int("lot_size", item.lot_size)
         for name in ("allow_averaging_down", "allow_duplicate_direction", "allow_fomo_entry", "require_stop_loss", "require_target", "manual_approval_required"):
             if type(getattr(policy, name)) is not bool:
                 raise TypeError(f"{name} must be bool")
@@ -735,12 +740,20 @@ class RiskEngine(BaseEngine):
         return self._require_aware(value, "timestamp")
 
     def _roll_session_if_needed(self, trading_date: date) -> None:
+        if self._session_state.trading_date == date(2026, 1, 1) and not (
+            self._session_state.manual_lock_active
+            or self._session_state.emergency_lock_active
+            or self._session_state.trades_taken
+            or self._session_state.current_open_risk
+            or self._evaluation_count
+        ):
+            self._session_state = SessionRiskState(trading_date)
+            return
         if self._session_state.trading_date != trading_date:
             emergency = self._session_state.emergency_lock_active
-            manual = self._session_state.manual_lock_active
             self._session_state = SessionRiskState(
                 trading_date,
-                manual_lock_active=manual,
+                manual_lock_active=False,
                 emergency_lock_active=emergency,
             )
 
@@ -761,7 +774,7 @@ class RiskEngine(BaseEngine):
             limits.append(available_capital * policy.maximum_daily_loss_percentage / 100)
         return min(limits) if limits else None
 
-    def _maximum_allowed_trade_risk(self, policy: RiskPolicy, account: dict, instrument: str) -> float:
+    def _maximum_allowed_trade_risk(self, policy: RiskPolicy, account: dict, instrument: str, effective_total_open_risk: float) -> float:
         limits = [account["available_capital"] * policy.risk_per_trade_percentage / 100]
         if policy.maximum_risk_per_trade_amount is not None:
             limits.append(policy.maximum_risk_per_trade_amount)
@@ -769,9 +782,9 @@ class RiskEngine(BaseEngine):
         if daily_limit is not None:
             limits.append(max(0.0, daily_limit + min(account["daily_pnl"], 0.0)))
         if policy.maximum_total_open_risk is not None:
-            limits.append(max(0.0, policy.maximum_total_open_risk - self._session_state.current_open_risk))
+            limits.append(max(0.0, policy.maximum_total_open_risk - effective_total_open_risk))
         if policy.maximum_instrument_open_risk is not None:
-            used = self._session_state.instrument_open_risk.get(instrument, 0.0)
+            used = self._instrument_open_risk(instrument)
             limits.append(max(0.0, policy.maximum_instrument_open_risk - used))
         positive = [float(limit) for limit in limits if limit is not None]
         return round(max(0.0, min(positive)), 2) if positive else 0.0
@@ -883,8 +896,22 @@ class RiskEngine(BaseEngine):
             "manual_lock_active": self._session_state.manual_lock_active,
             "emergency_lock_active": self._session_state.emergency_lock_active,
             "current_open_risk": self._session_state.current_open_risk,
-            "instrument_open_risk": dict(sorted(self._session_state.instrument_open_risk.items())),
+            "instrument_open_risk": {
+                item.symbol: item.open_risk for item in self._session_state.instrument_open_risk
+            },
         }
+
+    def _instrument_open_risk(self, symbol: str) -> float:
+        return self._session_state.open_risk_for(symbol)
+
+    def _exposure_with_delta(self, symbol: str, delta: float) -> tuple[InstrumentRiskExposure, ...]:
+        exposures = {item.symbol: item.open_risk for item in self._session_state.instrument_open_risk}
+        next_value = round(max(0.0, exposures.get(symbol, 0.0) + delta), 2)
+        if next_value == 0:
+            exposures.pop(symbol, None)
+        else:
+            exposures[symbol] = next_value
+        return tuple(InstrumentRiskExposure(key, exposures[key]) for key in sorted(exposures))
 
     def _canonicalize_snapshot(self, snapshot: RiskSnapshot) -> RiskSnapshot:
         if not isinstance(snapshot, RiskSnapshot):

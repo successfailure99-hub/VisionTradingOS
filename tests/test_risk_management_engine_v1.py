@@ -10,7 +10,7 @@ from core.event_bus import EventBus
 from core.events import RISK_APPROVED, RISK_EVALUATED, RISK_LOCKED, RISK_REJECTED, RISK_STATE_UPDATED
 from engines.order_management.models import OrderRequest, OrderSide, OrderType, ProductType
 from engines.risk.enums import RiskDecisionStatus, RiskLifecycleState, RiskReasonCode, RiskSeverity
-from engines.risk.models import AccountRiskState, RiskDecisionRecord, RiskEngineSnapshot, RiskFinding, RiskPolicy, TradeRiskPlan
+from engines.risk.models import AccountRiskState, InstrumentRiskExposure, RiskDecisionRecord, RiskEngineSnapshot, RiskFinding, RiskPolicy, TradeRiskPlan
 from engines.risk.risk_engine import RiskEngine
 from engines.strategy.enums import TradeDirection
 
@@ -105,30 +105,48 @@ def test_policy_models_are_immutable_and_validation_rejects_bad_numeric_inputs()
     assert pol.maximum_lots == 2
     with pytest.raises(FrozenInstanceError):
         pol.maximum_lots = 3
+    assert isinstance(pol.lot_sizes_by_instrument, tuple)
+    original = {"NIFTY": 75}
+    immutable_policy = policy(lot_sizes_by_instrument=original)
+    original["NIFTY"] = 1
+    assert immutable_policy.lot_size_for("NIFTY") == 75
+    with pytest.raises(TypeError):
+        immutable_policy.lot_sizes_by_instrument["NIFTY"] = 1
 
-    risk = engine()
     for bad_policy in (
-        policy(risk_per_trade_percentage=0),
-        policy(risk_per_trade_percentage=float("nan")),
-        policy(maximum_lots=0),
-        policy(lot_sizes_by_instrument={"NIFTY": 0}),
+        lambda: policy(risk_per_trade_percentage=0),
+        lambda: policy(risk_per_trade_percentage=float("nan")),
+        lambda: policy(maximum_lots=0),
+        lambda: policy(lot_sizes_by_instrument={"NIFTY": 0}),
+        lambda: policy(minimum_stop_distance_percentage=5.0, maximum_stop_distance_percentage=1.0),
+        lambda: policy(trading_start_time=time(14, 30), last_entry_time=time(9, 15)),
     ):
         with pytest.raises((TypeError, ValueError)):
-            risk.evaluate(policy=bad_policy, account=account(), trade_plan=plan(), timestamp=TS)
+            bad_policy()
 
     for bad_account in (
-        account(available_capital=-1),
-        account(open_risk=-1),
-        account(margin_used=float("inf")),
-        account(session_date="2026-07-13"),
+        lambda: account(available_capital=-1),
+        lambda: account(open_risk=-1),
+        lambda: account(margin_used=float("inf")),
+        lambda: account(session_date="2026-07-13"),
     ):
         with pytest.raises((TypeError, ValueError)):
-            risk.evaluate(policy=policy(), account=bad_account, trade_plan=plan(), timestamp=TS)
+            bad_account()
 
+    risk = engine()
     with pytest.raises(ValueError):
         risk.evaluate(policy=policy(), account=account(), trade_plan=plan(timestamp=TS.replace(tzinfo=None)), timestamp=TS.replace(tzinfo=None))
     with pytest.raises(ValueError):
         risk.evaluate(policy=policy(), account=account(), trade_plan=plan(direction="sideways"), timestamp=TS)
+    for bad_plan in (
+        lambda: plan(entry_price=float("nan")),
+        lambda: plan(stop_loss_price=float("inf")),
+        lambda: plan(lot_size=0),
+        lambda: plan(existing_position_quantity=-1),
+        lambda: plan(is_fomo_entry="yes"),
+    ):
+        with pytest.raises((TypeError, ValueError)):
+            bad_plan()
 
 
 def test_long_short_sizing_strictest_limit_lot_rounding_and_reduced_size():
@@ -186,15 +204,35 @@ def test_session_limits_locks_cooldown_and_profit_protection_are_deterministic()
     assert_reason(giveback, RiskDecisionStatus.LOCKED, RiskReasonCode.DAILY_PROFIT_LOCK_ACTIVE)
 
     cooldown = engine()
+    cooldown.evaluate(policy=policy(maximum_consecutive_losses=2), account=account(), trade_plan=plan(), timestamp=TS)
     cooldown.record_trade_closed(instrument="NIFTY", realized_pnl=-100.0, timestamp=TS)
-    locked = evaluate(risk_engine=cooldown, timestamp=TS + timedelta(minutes=5), trade_plan=plan(timestamp=TS + timedelta(minutes=5)))
+    below_threshold = evaluate(risk_engine=cooldown, policy=policy(maximum_consecutive_losses=2), timestamp=TS + timedelta(minutes=1), trade_plan=plan(timestamp=TS + timedelta(minutes=1)))
+    assert below_threshold.status is RiskDecisionStatus.APPROVED
+    cooldown.record_trade_closed(instrument="NIFTY", realized_pnl=-100.0, timestamp=TS + timedelta(minutes=2))
+    locked = evaluate(risk_engine=cooldown, policy=policy(maximum_consecutive_losses=2), timestamp=TS + timedelta(minutes=5), trade_plan=plan(timestamp=TS + timedelta(minutes=5)))
     assert_reason(locked, RiskDecisionStatus.LOCKED, RiskReasonCode.CONSECUTIVE_LOSS_COOLDOWN)
-    later = TS + timedelta(minutes=20)
-    approved = evaluate(risk_engine=cooldown, timestamp=later, trade_plan=plan(timestamp=later))
+    boundary = TS + timedelta(minutes=17)
+    approved = evaluate(risk_engine=cooldown, policy=policy(maximum_consecutive_losses=2), timestamp=boundary, trade_plan=plan(timestamp=boundary))
     assert approved.status is RiskDecisionStatus.APPROVED
+    cooldown.record_trade_closed(instrument="NIFTY", realized_pnl=100.0, timestamp=boundary)
+    assert cooldown.engine_snapshot().consecutive_losses == 0
+    cooldown.record_trade_closed(instrument="NIFTY", realized_pnl=-100.0, timestamp=boundary + timedelta(minutes=1))
+    assert cooldown.engine_snapshot().consecutive_losses == 1
+
+    revenge = engine()
+    revenge.evaluate(policy=policy(maximum_consecutive_losses=2), account=account(), trade_plan=plan(), timestamp=TS)
+    revenge.record_trade_closed(instrument="NIFTY", realized_pnl=-100.0, timestamp=TS)
+    revenge_plan = plan(timestamp=TS + timedelta(minutes=1), is_revenge_entry=True)
+    revenge_locked = evaluate(risk_engine=revenge, policy=policy(maximum_consecutive_losses=2), timestamp=revenge_plan.timestamp, trade_plan=revenge_plan)
+    assert_reason(revenge_locked, RiskDecisionStatus.LOCKED, RiskReasonCode.REVENGE_TRADING_LOCKOUT)
 
 
 def test_discipline_rules_manual_emergency_priority_and_trading_windows():
+    missing_manual = evaluate(trade_plan=plan(manual_approval=False))
+    assert_reason(missing_manual, RiskDecisionStatus.LOCKED, RiskReasonCode.MANUAL_APPROVAL_REQUIRED)
+    assert missing_manual.approved_quantity == 0
+    assert evaluate(trade_plan=plan(manual_approval=True)).status is RiskDecisionStatus.APPROVED
+    assert evaluate(policy=policy(manual_approval_required=False), trade_plan=plan(manual_approval=False)).status is RiskDecisionStatus.APPROVED
     assert_reason(evaluate(trade_plan=plan(is_fomo_entry=True)), RiskDecisionStatus.REJECTED, RiskReasonCode.FOMO_ENTRY)
     assert_reason(evaluate(trade_plan=plan(is_averaging_entry=True)), RiskDecisionStatus.REJECTED, RiskReasonCode.AVERAGING_DOWN_BLOCKED)
     duplicate = evaluate(trade_plan=plan(existing_position_direction=TradeDirection.BULLISH, existing_position_quantity=75))
@@ -208,6 +246,7 @@ def test_discipline_rules_manual_emergency_priority_and_trading_windows():
     assert_reason(mismatch, RiskDecisionStatus.INVALID, RiskReasonCode.OUTSIDE_TRADING_WINDOW)
 
     locked = engine()
+    locked.evaluate(policy=policy(), account=account(), trade_plan=plan(), timestamp=TS)
     locked.activate_manual_lock()
     assert_reason(evaluate(risk_engine=locked), RiskDecisionStatus.LOCKED, RiskReasonCode.MANUAL_LOCK_ACTIVE)
     locked.activate_emergency_lock()
@@ -225,6 +264,19 @@ def test_exposure_limits_and_open_risk_are_calculated():
     total_limit = evaluate(risk_engine=total, policy=policy(maximum_instrument_open_risk=5000.0))
     assert_reason(total_limit, RiskDecisionStatus.REJECTED, RiskReasonCode.TOTAL_OPEN_RISK_EXCEEDED)
 
+    account_risk = evaluate(account=account(open_risk=4600.0), policy=policy(maximum_total_open_risk=5000.0, maximum_instrument_open_risk=5000.0))
+    assert_reason(account_risk, RiskDecisionStatus.APPROVED_WITH_REDUCED_SIZE, RiskReasonCode.SIZE_REDUCED)
+    assert account_risk.total_open_risk_after_trade == 4975.0
+    at_limit = evaluate(account=account(open_risk=5000.0), policy=policy(maximum_total_open_risk=5000.0, maximum_instrument_open_risk=5000.0))
+    assert_reason(at_limit, RiskDecisionStatus.REJECTED, RiskReasonCode.TOTAL_OPEN_RISK_EXCEEDED)
+    session_wins = engine()
+    session_wins.record_trade_opened(instrument="BANKNIFTY", risk_amount=3000.0, timestamp=TS)
+    session_decision = evaluate(risk_engine=session_wins, account=account(open_risk=1000.0), policy=policy(maximum_total_open_risk=5000.0, maximum_instrument_open_risk=5000.0))
+    assert session_decision.total_open_risk_after_trade == 3750.0
+    reconstructed = engine()
+    bypass = evaluate(risk_engine=reconstructed, account=account(open_risk=4800.0), policy=policy(maximum_total_open_risk=5000.0, maximum_instrument_open_risk=5000.0))
+    assert_reason(bypass, RiskDecisionStatus.REJECTED, RiskReasonCode.TOTAL_OPEN_RISK_EXCEEDED)
+
     assert_reason(evaluate(account=account(available_capital=0.0)), RiskDecisionStatus.REJECTED, RiskReasonCode.INSUFFICIENT_CAPITAL)
 
 
@@ -239,11 +291,38 @@ def test_reset_snapshot_bounded_findings_and_deduplication():
     assert fomo.occurrence_count == 3
     assert len(snap.findings) <= 50
     risk.activate_emergency_lock()
+    risk.activate_manual_lock()
     reset = risk.reset_session(date(2026, 7, 14))
     assert reset.trading_date == date(2026, 7, 14)
+    assert reset.manual_lock_active is False
     assert reset.emergency_lock_active is True
     assert reset.last_decision is None
     assert reset.broker_order_calls == 0
+
+
+def test_immutable_exposure_models_snapshot_and_auto_rollover_clear_manual_lock_only():
+    exposure_source = {"NIFTY": 100.0}
+    session = engine()
+    session.record_trade_opened(instrument="NIFTY", risk_amount=100.0, timestamp=TS)
+    snap = session.engine_snapshot()
+    assert isinstance(snap.instrument_open_risk, tuple)
+    exposure_source["NIFTY"] = 1.0
+    immutable_exposure = InstrumentRiskExposure("NIFTY", 100.0)
+    with pytest.raises(FrozenInstanceError):
+        immutable_exposure.open_risk = 1.0
+    copied = tuple(snap.instrument_open_risk)
+    copied += (InstrumentRiskExposure("BANKNIFTY", 1.0),)
+    assert session.engine_snapshot().instrument_open_risk == snap.instrument_open_risk
+
+    rollover = engine()
+    rollover.activate_manual_lock()
+    rollover.activate_emergency_lock()
+    later = TS + timedelta(days=1)
+    locked = evaluate(risk_engine=rollover, timestamp=later, trade_plan=plan(timestamp=later), account=account(session_date=later.date()))
+    assert_reason(locked, RiskDecisionStatus.LOCKED, RiskReasonCode.EMERGENCY_LOCK_ACTIVE)
+    rolled = rollover.engine_snapshot()
+    assert rolled.manual_lock_active is False
+    assert rolled.emergency_lock_active is True
 
 
 def test_fingerprints_and_ordered_findings_are_deterministic():
@@ -284,10 +363,10 @@ def test_application_runtime_owns_authoritative_risk_and_rejected_risk_blocks_or
     rejected = runtime.risk_engine.evaluate(
         policy=policy(),
         account=account(),
-        trade_plan=plan(is_fomo_entry=True),
+        trade_plan=plan(manual_approval=False),
         timestamp=TS,
     )
-    assert rejected.status is RiskDecisionStatus.REJECTED
+    assert rejected.status is RiskDecisionStatus.LOCKED
     request = OrderRequest(
         client_order_id="risk-blocked",
         symbol="NIFTY",
