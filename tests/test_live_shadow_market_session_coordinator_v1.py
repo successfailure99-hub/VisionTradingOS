@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from adapters.zerodha import ZerodhaConnectionState, ZerodhaCredentials, ZerodhaReadOnlyAdapter
-from application import ApplicationOrchestrator, RuntimeConfiguration, RuntimeInstrument
+from application import ApplicationOrchestrator, RuntimeConfiguration, RuntimeInstrument, RuntimeSnapshot
 from application.live_shadow_session import (
     LiveShadowMarketSessionCoordinator,
     LiveShadowSessionReport,
@@ -332,6 +332,79 @@ def test_live_zerodha_tick_routing_counts_once_dedupes_and_excludes_manual_ticks
     completed = app.get_live_shadow_snapshot()
     app.zerodha_adapter.on_ticks(None, (raw_tick(201, 51000.0, NOW.replace(minute=33)),))
     assert app.get_live_shadow_snapshot() == completed
+
+
+def test_live_zerodha_acceptance_boundary_preserves_market_data_result_and_public_paths():
+    app, _ = configured_app()
+    app.start_live_shadow_session(request(instruments=("NIFTY",)))
+    runtime = app.get_runtime(RuntimeInstrument.NIFTY)
+    runtime_calls = []
+    shadow_calls = []
+    accepted_flags = []
+    original_runtime_process = runtime.process_tick
+    original_shadow_observe = app.observe_shadow_event
+    original_coordinator_observe = app.live_shadow_session_coordinator.observe_tick
+
+    def spy_runtime_process(incoming_tick, *, observe_shadow=True):
+        runtime_calls.append((incoming_tick, observe_shadow))
+        return original_runtime_process(incoming_tick, observe_shadow=observe_shadow)
+
+    def spy_shadow_observe(instrument, event_name, payload, *, timestamp):
+        shadow_calls.append((instrument, event_name, payload, timestamp))
+        return original_shadow_observe(instrument, event_name, payload, timestamp=timestamp)
+
+    def spy_coordinator_observe(incoming_tick, *, accepted):
+        accepted_flags.append(accepted)
+        return original_coordinator_observe(incoming_tick, accepted=accepted)
+
+    runtime.process_tick = spy_runtime_process
+    app.observe_shadow_event = spy_shadow_observe
+    app.live_shadow_session_coordinator.observe_tick = spy_coordinator_observe
+
+    first_snapshot = app.process_live_zerodha_tick(tick())
+    assert isinstance(first_snapshot, RuntimeSnapshot)
+    assert runtime_calls == [(tick(), False)]
+    assert accepted_flags == [True]
+    assert len(shadow_calls) == 1
+    live_snapshot = app.get_live_shadow_snapshot()
+    assert live_snapshot.market_tick_count == 1
+    assert live_snapshot.accepted_tick_count == 1
+    assert live_snapshot.rejected_tick_count == 0
+    assert live_snapshot.shadow_observation_count == 1
+
+    original_market_on_tick = app.market_data_engine.on_tick
+    rejected_tick = tick(Instrument.NIFTY, 22001.0, NOW.replace(minute=31))
+    app.market_data_engine.on_tick = lambda incoming_tick: None
+    rejected_process_snapshot = app.process_live_zerodha_tick(rejected_tick)
+    assert isinstance(rejected_process_snapshot, RuntimeSnapshot)
+    assert len(runtime_calls) == 1
+    assert accepted_flags == [True, False]
+    assert len(shadow_calls) == 1
+    rejected_snapshot = app.get_live_shadow_snapshot()
+    assert rejected_snapshot.market_tick_count == 2
+    assert rejected_snapshot.accepted_tick_count == 1
+    assert rejected_snapshot.rejected_tick_count == 1
+    assert rejected_snapshot.shadow_observation_count == 1
+
+    app.market_data_engine.on_tick = original_market_on_tick
+    duplicate_snapshot = app.process_live_zerodha_tick(tick())
+    assert isinstance(duplicate_snapshot, RuntimeSnapshot)
+    assert len(runtime_calls) == 1
+    assert accepted_flags == [True, False, False]
+    assert len(shadow_calls) == 1
+    assert app.get_live_shadow_snapshot() == rejected_snapshot
+
+    app.live_shadow_session_coordinator.observe_tick = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("manual and replay paths must not invoke the live-shadow coordinator")
+    )
+    manual_snapshot = app.process_tick(tick(Instrument.NIFTY, 22002.0, NOW.replace(minute=32)))
+    assert isinstance(manual_snapshot, RuntimeSnapshot)
+    replay_snapshot = app.process_tick(
+        tick(Instrument.NIFTY, 22003.0, NOW.replace(minute=33)),
+        observe_shadow=False,
+    )
+    assert isinstance(replay_snapshot, RuntimeSnapshot)
+    assert app.get_live_shadow_snapshot() == rejected_snapshot
 
 
 def test_tick_routes_only_matching_active_instrument_shadow_session():

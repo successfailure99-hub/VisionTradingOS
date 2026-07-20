@@ -133,18 +133,22 @@ class ApplicationOrchestrator:
         return self.snapshot()
 
     def process_tick(self, tick: Tick, *, observe_shadow: bool = True) -> RuntimeSnapshot:
-        self._require_running()
-        runtime = self._runtime_for_core_instrument(tick.symbol)
-        accepted = self.market_data_engine.on_tick(tick)
-        if accepted is None:
-            return runtime.snapshot(self._latest_journal_record_for(runtime.instrument))
-        runtime.process_tick(tick, observe_shadow=observe_shadow)
-        return runtime.snapshot(self._latest_journal_record_for(runtime.instrument))
+        snapshot, _, _ = self._process_tick_with_acceptance(tick, observe_shadow=observe_shadow)
+        return snapshot
 
     def process_live_zerodha_tick(self, tick: Tick) -> RuntimeSnapshot:
-        snapshot = self.process_tick(tick, observe_shadow=False)
-        self.live_shadow_session_coordinator.observe_tick(tick, accepted=True)
+        snapshot, accepted, authoritative_tick = self._process_tick_with_acceptance(tick, observe_shadow=False)
+        self.live_shadow_session_coordinator.observe_tick(authoritative_tick, accepted=accepted)
         return snapshot
+
+    def _process_tick_with_acceptance(self, tick: Tick, *, observe_shadow: bool) -> tuple[RuntimeSnapshot, bool, Tick]:
+        self._require_running()
+        runtime = self._runtime_for_core_instrument(tick.symbol)
+        accepted_tick = self.market_data_engine.on_tick(tick)
+        if accepted_tick is None:
+            return runtime.snapshot(self._latest_journal_record_for(runtime.instrument)), False, tick
+        runtime.process_tick(accepted_tick, observe_shadow=observe_shadow)
+        return runtime.snapshot(self._latest_journal_record_for(runtime.instrument)), True, accepted_tick
 
     def process_daily_ohlc(self, instrument: str | RuntimeInstrument, daily_ohlc: DailyOHLC):
         self._require_running()
