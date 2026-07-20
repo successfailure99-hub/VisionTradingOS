@@ -26,6 +26,8 @@ from engines.paper_execution_coordinator.models import PaperExecutionReceipt, Pa
 from engines.paper_trading.engine import PaperTradingEngine
 from engines.position.models import PositionFill, PositionMark, PositionState
 from engines.position.position_engine import PositionEngine
+from engines.execution_reconciliation.engine import ExecutionReconciliationEngine
+from engines.execution_reconciliation.models import ExecutionReconciliationRequest, ExecutionReconciliationReport
 from engines.price_action.price_action_engine import PriceActionEngine
 from engines.risk.models import AccountRiskState, RiskDecisionState, RiskPolicy, RiskSnapshot, TradeRiskPlan
 from engines.risk.risk_engine import RiskEngine
@@ -109,6 +111,16 @@ class SymbolRuntime:
             exchange=configuration.exchange,
         )
         self.position_engine = PositionEngine(event_bus, instrument.value, configuration.exchange, configuration.timeframe)
+        self.execution_reconciliation_engine = ExecutionReconciliationEngine(
+            event_bus,
+            instrument=instrument.value,
+            timeframe=configuration.timeframe,
+            order_management_engine=self.order_engine,
+            paper_trading_engine=self.paper_trading_engine,
+            position_engine=self.position_engine,
+            paper_execution_coordinator=self.paper_execution_coordinator,
+            execution_policy_engine=self.execution_policy_engine,
+        )
         self.candle_engine = CandleEngine(event_bus, TimeFrame.from_value(configuration.timeframe))
         self.vwap_engine = VWAPEngine(event_bus)
         self.cpr_engine = CPREngine(event_bus)
@@ -141,9 +153,11 @@ class SymbolRuntime:
         self._status = RuntimeStatus.RUNNING
         self.execution_policy_engine.start()
         self.paper_execution_coordinator.start()
+        self.execution_reconciliation_engine.start()
 
     def stop(self) -> None:
         self._shutdown_paper_trading()
+        self.execution_reconciliation_engine.stop()
         self.paper_execution_coordinator.stop()
         self.execution_policy_engine.stop()
         self._status = RuntimeStatus.STOPPED
@@ -496,6 +510,22 @@ class SymbolRuntime:
         self._updated_at = receipt.updated_at
         return receipt
 
+    def reconcile_paper_execution(self, request: ExecutionReconciliationRequest) -> ExecutionReconciliationReport:
+        self._require_running()
+        if not isinstance(request, ExecutionReconciliationRequest):
+            raise TypeError("request must be ExecutionReconciliationRequest")
+        if request.instrument != self._instrument.value:
+            raise ValueError("ExecutionReconciliationRequest instrument does not match SymbolRuntime.")
+        report = self.execution_reconciliation_engine.reconcile(request)
+        self._updated_at = report.created_at
+        return report
+
+    def reconcile_paper_execution_receipt(self, receipt_id: str, *, timestamp) -> ExecutionReconciliationReport:
+        self._require_running()
+        report = self.execution_reconciliation_engine.reconcile_receipt(receipt_id, timestamp=timestamp)
+        self._updated_at = report.created_at
+        return report
+
     def apply_order_command(self, command: OrderCommand) -> OrderState:
         self._require_running()
         state = self.order_engine.apply(command)
@@ -527,6 +557,7 @@ class SymbolRuntime:
         self.risk_engine.reset()
         self.execution_policy_engine.reset_session()
         self.paper_execution_coordinator.reset_session()
+        self.execution_reconciliation_engine.reset_session()
         self.trade_plan_engine.reset()
         self.paper_trading_engine.reset()
         self.order_engine.reset()
@@ -585,6 +616,7 @@ class SymbolRuntime:
             performance_analytics=performance_analytics,
             execution_policy=self.execution_policy_engine.snapshot(),
             paper_execution=self.paper_execution_coordinator.snapshot(),
+            execution_reconciliation=self.execution_reconciliation_engine.snapshot(),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
