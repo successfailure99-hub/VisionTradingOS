@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 from application.enums import ExecutionSafetyMode, RuntimeInstrument, RuntimeStatus
+from adapters.zerodha.models import ZerodhaConnectionSnapshot
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.models.building_candle import BuildingCandle
 from core.models.candle import Candle
@@ -213,3 +214,4 @@ class OrchestratorSnapshot:
     live_validation: ValidationSessionSnapshot | None = None
     historical_replay: ReplaySessionSnapshot | None = None
     deterministic_backtest: BacktestSnapshot | None = None
+    zerodha_connection: ZerodhaConnectionSnapshot | None = None

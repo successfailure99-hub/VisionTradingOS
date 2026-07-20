@@ -5,6 +5,7 @@ Application Orchestrator V1.
 from application.enums import ExecutionSafetyMode, RuntimeInstrument, RuntimeStatus
 from application.models import OrchestratorSnapshot, RuntimeConfiguration, RuntimeSnapshot
 from application.symbol_runtime import SymbolRuntime
+from adapters.zerodha import ZerodhaCredentials, ZerodhaReadOnlyAdapter
 from brokers.zerodha.adapter import ZerodhaBrokerAdapter
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.enums.instrument import Instrument
@@ -45,6 +46,7 @@ class ApplicationOrchestrator:
         configuration: RuntimeConfiguration | None = None,
         *,
         broker_adapter: ZerodhaBrokerAdapter | None = None,
+        zerodha_adapter: ZerodhaReadOnlyAdapter | None = None,
     ):
         self._event_bus = event_bus
         self._configuration = configuration or RuntimeConfiguration()
@@ -89,6 +91,7 @@ class ApplicationOrchestrator:
             instrument: SymbolRuntime(event_bus, self._configuration, instrument)
             for instrument in self._configuration.instruments
         }
+        self.zerodha_adapter = zerodha_adapter or ZerodhaReadOnlyAdapter(event_bus, tick_consumer=self.process_tick)
         self.deterministic_backtest_engine = DeterministicBacktestEngine(
             event_bus,
             configuration=self._configuration.deterministic_backtest_configuration,
@@ -253,6 +256,27 @@ class ApplicationOrchestrator:
     def get_shadow_summary(self, instrument: str | RuntimeInstrument, session_id: str):
         return self.get_runtime(instrument).get_shadow_summary(session_id)
 
+    def configure_zerodha_credentials(self, credentials: ZerodhaCredentials):
+        return self.zerodha_adapter.configure_credentials(credentials)
+
+    def load_zerodha_instrument_tokens(self):
+        return self.zerodha_adapter.load_instrument_tokens()
+
+    def connect_zerodha_market_data(self):
+        return self.zerodha_adapter.connect()
+
+    def subscribe_zerodha_instruments(self, instruments: tuple[str, ...]):
+        return self.zerodha_adapter.subscribe(instruments)
+
+    def disconnect_zerodha_market_data(self):
+        return self.zerodha_adapter.disconnect()
+
+    def get_zerodha_connection_snapshot(self):
+        return self.zerodha_adapter.snapshot()
+
+    def reset_zerodha_adapter(self):
+        return self.zerodha_adapter.reset()
+
     def submit_order(self, order: OrderState):
         self._require_running()
         if self._configuration.safety_mode is not ExecutionSafetyMode.DRY_RUN:
@@ -296,6 +320,7 @@ class ApplicationOrchestrator:
         self.live_validation_engine.reset(clear_persistent_data=False)
         self.historical_replay_engine.reset(clear_persistent_data=False)
         self.deterministic_backtest_engine.reset()
+        self.zerodha_adapter.reset()
         for runtime in self._runtimes.values():
             runtime.reset()
             if previous_status is RuntimeStatus.RUNNING:
@@ -365,6 +390,7 @@ class ApplicationOrchestrator:
             live_validation=self.live_validation_engine.snapshot(),
             historical_replay=self.historical_replay_engine.snapshot(),
             deterministic_backtest=self.deterministic_backtest_engine.snapshot(),
+            zerodha_connection=self.zerodha_adapter.snapshot(),
         )
 
     def _runtime_for_core_instrument(self, instrument: Instrument) -> SymbolRuntime:
