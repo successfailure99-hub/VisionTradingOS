@@ -31,6 +31,7 @@ from engines.strategy.models import StrategyDecisionState
 from engines.trade_journal.models import TradeJournalRecord
 from engines.trade_execution_policy.models import ExecutionEngineSnapshot
 from engines.execution_reconciliation.models import ExecutionReconciliationSnapshot
+from engines.shadow_trading_session.models import ShadowTradingSessionSnapshot
 from engines.vwap.levels import VWAPLevels
 
 
@@ -196,6 +197,7 @@ class RuntimeSnapshot:
     execution_policy: ExecutionEngineSnapshot | None = None
     paper_execution: PaperExecutionCoordinatorSnapshot | None = None
     execution_reconciliation: ExecutionReconciliationSnapshot | None = None
+    shadow_trading_session: ShadowTradingSessionSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)

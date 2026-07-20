@@ -17,6 +17,7 @@ from engines.position.models import PositionFill, PositionMark
 from engines.risk.models import AccountRiskState, RiskPolicy, TradeRiskPlan
 from engines.paper_execution_coordinator.models import PaperExecutionReceipt, PaperExecutionRequest
 from engines.execution_reconciliation.models import ExecutionReconciliationRequest, ExecutionReconciliationReport
+from engines.shadow_trading_session.models import ShadowTradingSessionRequest
 from engines.trade_execution_policy.models import ExecutionRequest, TradeExecutionPlan
 from engines.performance_analytics.engine import PerformanceAnalyticsEngine
 from engines.deterministic_backtest.engine import DeterministicBacktestEngine
@@ -230,6 +231,27 @@ class ApplicationOrchestrator:
     def reconcile_paper_execution_receipt(self, instrument: str | RuntimeInstrument, receipt_id: str, *, timestamp) -> ExecutionReconciliationReport:
         self._require_running()
         return self.get_runtime(instrument).reconcile_paper_execution_receipt(receipt_id, timestamp=timestamp)
+
+    def start_shadow_session(self, instrument: str | RuntimeInstrument, request: ShadowTradingSessionRequest):
+        self._require_running()
+        runtime = self.get_runtime(instrument)
+        if request.instrument != runtime.instrument.value:
+            raise ValueError("Shadow session request instrument does not match runtime.")
+        return runtime.start_shadow_session(request)
+
+    def observe_shadow_event(self, instrument: str | RuntimeInstrument, event_name: str, payload, *, timestamp):
+        self._require_running()
+        return self.get_runtime(instrument).observe_shadow_event(event_name, payload, timestamp=timestamp)
+
+    def stop_shadow_session(self, instrument: str | RuntimeInstrument, *, timestamp, reason: str = "session_completed"):
+        self._require_running()
+        return self.get_runtime(instrument).stop_shadow_session(timestamp=timestamp, reason=reason)
+
+    def get_shadow_snapshot(self, instrument: str | RuntimeInstrument):
+        return self.get_runtime(instrument).get_shadow_snapshot()
+
+    def get_shadow_summary(self, instrument: str | RuntimeInstrument, session_id: str):
+        return self.get_runtime(instrument).get_shadow_summary(session_id)
 
     def submit_order(self, order: OrderState):
         self._require_running()

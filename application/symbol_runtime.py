@@ -28,6 +28,8 @@ from engines.position.models import PositionFill, PositionMark, PositionState
 from engines.position.position_engine import PositionEngine
 from engines.execution_reconciliation.engine import ExecutionReconciliationEngine
 from engines.execution_reconciliation.models import ExecutionReconciliationRequest, ExecutionReconciliationReport
+from engines.shadow_trading_session.engine import ShadowTradingSessionEngine
+from engines.shadow_trading_session.models import ShadowTradingSessionRequest, ShadowTradingSessionSummary
 from engines.price_action.price_action_engine import PriceActionEngine
 from engines.risk.models import AccountRiskState, RiskDecisionState, RiskPolicy, RiskSnapshot, TradeRiskPlan
 from engines.risk.risk_engine import RiskEngine
@@ -121,6 +123,15 @@ class SymbolRuntime:
             paper_execution_coordinator=self.paper_execution_coordinator,
             execution_policy_engine=self.execution_policy_engine,
         )
+        self.shadow_trading_session_engine = ShadowTradingSessionEngine(
+            event_bus,
+            instrument=instrument.value,
+            timeframe=configuration.timeframe,
+            execution_policy_engine=self.execution_policy_engine,
+            paper_execution_coordinator=self.paper_execution_coordinator,
+            execution_reconciliation_engine=self.execution_reconciliation_engine,
+            position_engine=self.position_engine,
+        )
         self.candle_engine = CandleEngine(event_bus, TimeFrame.from_value(configuration.timeframe))
         self.vwap_engine = VWAPEngine(event_bus)
         self.cpr_engine = CPREngine(event_bus)
@@ -154,9 +165,11 @@ class SymbolRuntime:
         self.execution_policy_engine.start()
         self.paper_execution_coordinator.start()
         self.execution_reconciliation_engine.start()
+        self.shadow_trading_session_engine.start()
 
     def stop(self) -> None:
         self._shutdown_paper_trading()
+        self.shadow_trading_session_engine.stop()
         self.execution_reconciliation_engine.stop()
         self.paper_execution_coordinator.stop()
         self.execution_policy_engine.stop()
@@ -198,6 +211,7 @@ class SymbolRuntime:
         self._updated_at = tick.timestamp
         self._refresh_dashboard_analysis(tick.timestamp, tick.last_price)
         self._process_paper_tick(tick)
+        self.shadow_trading_session_engine.observe_market_event("tick_processed", tick, timestamp=tick.timestamp)
         return self.snapshot()
 
     def process_vwap_tick(
@@ -526,6 +540,26 @@ class SymbolRuntime:
         self._updated_at = report.created_at
         return report
 
+    def start_shadow_session(self, request: ShadowTradingSessionRequest):
+        self._require_running()
+        if not isinstance(request, ShadowTradingSessionRequest):
+            raise TypeError("request must be ShadowTradingSessionRequest")
+        if request.instrument != self._instrument.value:
+            raise ValueError("Shadow session instrument does not match SymbolRuntime.")
+        return self.shadow_trading_session_engine.start_session(request)
+
+    def observe_shadow_event(self, event_name: str, payload, *, timestamp):
+        return self.shadow_trading_session_engine.observe_market_event(event_name, payload, timestamp=timestamp)
+
+    def stop_shadow_session(self, *, timestamp, reason: str = "session_completed") -> ShadowTradingSessionSummary:
+        return self.shadow_trading_session_engine.stop_session(timestamp=timestamp, reason=reason)
+
+    def get_shadow_snapshot(self):
+        return self.shadow_trading_session_engine.snapshot()
+
+    def get_shadow_summary(self, session_id: str):
+        return self.shadow_trading_session_engine.get_summary(session_id)
+
     def apply_order_command(self, command: OrderCommand) -> OrderState:
         self._require_running()
         state = self.order_engine.apply(command)
@@ -558,6 +592,7 @@ class SymbolRuntime:
         self.execution_policy_engine.reset_session()
         self.paper_execution_coordinator.reset_session()
         self.execution_reconciliation_engine.reset_session()
+        self.shadow_trading_session_engine.reset_session()
         self.trade_plan_engine.reset()
         self.paper_trading_engine.reset()
         self.order_engine.reset()
@@ -617,6 +652,7 @@ class SymbolRuntime:
             execution_policy=self.execution_policy_engine.snapshot(),
             paper_execution=self.paper_execution_coordinator.snapshot(),
             execution_reconciliation=self.execution_reconciliation_engine.snapshot(),
+            shadow_trading_session=self.shadow_trading_session_engine.snapshot(),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
