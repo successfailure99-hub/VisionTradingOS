@@ -156,7 +156,7 @@ class ZerodhaReadOnlyAdapter(BaseEngine):
         )
         self._publish_state()
         try:
-            self._ticker_client.connect(threaded=True)
+            self._ticker_client.connect(threaded=False)
         except Exception as exc:
             self._fail(self._safe_error_code(exc))
         return self.snapshot()
@@ -245,7 +245,7 @@ class ZerodhaReadOnlyAdapter(BaseEngine):
         )
 
     def on_connect(self, ws=None, response=None) -> None:
-        if self._state is ZerodhaConnectionState.STOPPED:
+        if self._is_terminal():
             return
         self._state = ZerodhaConnectionState.CONNECTED
         self._last_connected_at = self._now()
@@ -254,7 +254,7 @@ class ZerodhaReadOnlyAdapter(BaseEngine):
         self._publish_state()
 
     def on_ticks(self, ws=None, ticks=None) -> None:
-        if self._state is ZerodhaConnectionState.STOPPED:
+        if self._is_terminal():
             return
         if self._state is not ZerodhaConnectionState.CONNECTED:
             return
@@ -276,7 +276,7 @@ class ZerodhaReadOnlyAdapter(BaseEngine):
         self._publish_state()
 
     def on_close(self, ws=None, code=None, reason=None) -> None:
-        if self._state is ZerodhaConnectionState.STOPPED:
+        if self._is_terminal():
             return
         self._state = ZerodhaConnectionState.DISCONNECTED
         self._last_disconnected_at = self._now()
@@ -284,17 +284,17 @@ class ZerodhaReadOnlyAdapter(BaseEngine):
         self._publish_state()
 
     def on_error(self, ws=None, code=None, reason=None) -> None:
-        if self._state is ZerodhaConnectionState.STOPPED:
+        if self._is_terminal():
             return
         self._fail("websocket_error")
 
     def on_reconnect(self, ws=None, attempts_count=None) -> None:
-        if self._state is ZerodhaConnectionState.STOPPED:
+        if self._is_terminal():
             return
         self._publish_state()
 
     def on_noreconnect(self, ws=None) -> None:
-        if self._state is ZerodhaConnectionState.STOPPED:
+        if self._is_terminal():
             return
         self._fail("websocket_reconnect_exhausted")
 
@@ -355,6 +355,12 @@ class ZerodhaReadOnlyAdapter(BaseEngine):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("clock result must be timezone-aware")
         return value
+
+    def _is_terminal(self) -> bool:
+        return self._state in {
+            ZerodhaConnectionState.STOPPED,
+            ZerodhaConnectionState.FAILED,
+        }
 
     def _safe_error_code(self, exc: Exception | str) -> str:
         message = str(exc).strip() or exc.__class__.__name__

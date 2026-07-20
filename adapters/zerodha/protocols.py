@@ -34,7 +34,7 @@ class ZerodhaReadOnlyTickerClientProtocol(Protocol):
     ) -> None:
         ...
 
-    def connect(self, *, threaded: bool = True) -> None:
+    def connect(self, *, threaded: bool = False) -> None:
         ...
 
     def close(self) -> None:

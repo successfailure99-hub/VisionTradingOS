@@ -1,5 +1,6 @@
 from dataclasses import FrozenInstanceError
 from datetime import datetime
+from inspect import signature
 from math import inf, nan
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -241,6 +242,20 @@ def test_subscribe_requires_connection_is_idempotent_and_uses_one_ticker():
     assert ticker.modes == [("full", [101, 201, 301])]
 
 
+def test_connect_uses_non_threaded_ticker_execution_and_protocol_default_is_safe():
+    from adapters.zerodha.protocols import ZerodhaReadOnlyTickerClientProtocol
+
+    ticker = TickerClient()
+    subject = adapter(ticker_client=ticker)
+    subject.start()
+    subject.configure_credentials(ZerodhaCredentials("api", "token"))
+    snapshot = subject.connect()
+    assert snapshot.state is ZerodhaConnectionState.CONNECTING
+    assert ticker.connect_calls == 1
+    assert ticker.threaded is False
+    assert signature(ZerodhaReadOnlyTickerClientProtocol.connect).parameters["threaded"].default is False
+
+
 def test_valid_ticks_normalize_to_existing_tick_model_and_enter_market_boundary():
     bus = EventBus()
     market_engine = MarketDataEngine(bus)
@@ -331,6 +346,59 @@ def test_transport_failure_and_tick_rejection_events_are_sanitized():
     assert "access_secret" not in snapshot.last_error_code
 
 
+def test_failed_terminal_state_ignores_all_late_ticker_callbacks_and_reset_recovers():
+    delivered = []
+    ticker = TickerClient()
+    subject, ticker = ready_connected(adapter(ticker_client=ticker, tick_consumer=delivered.append), ticker)
+    subject.subscribe(("NIFTY",))
+    subject.on_error(None, "access_secret", "bad")
+    failed = subject.snapshot()
+    assert failed.state is ZerodhaConnectionState.FAILED
+    subject.on_connect(None, None)
+    subject.on_ticks(None, (raw_tick(101, 22000.5),))
+    subject.on_close(None, 1000, "closed")
+    subject.on_error(None, "again", "bad")
+    subject.on_reconnect(None, 1)
+    subject.on_noreconnect(None)
+    after_callbacks = subject.snapshot()
+    assert after_callbacks.state is ZerodhaConnectionState.FAILED
+    assert after_callbacks.received_tick_count == failed.received_tick_count
+    assert after_callbacks.published_tick_count == failed.published_tick_count
+    assert after_callbacks.rejected_tick_count == failed.rejected_tick_count
+    assert delivered == []
+    assert after_callbacks.broker_order_calls == 0
+    assert after_callbacks.mutation_calls == 0
+    assert after_callbacks.live_order_submission_enabled is False
+    assert subject.reset().state is ZerodhaConnectionState.READY
+    subject.configure_credentials(ZerodhaCredentials("api", "token"))
+    subject.connect()
+    assert ticker.connect_calls == 2
+    assert ticker.threaded is False
+    subject.on_connect(None, None)
+    assert subject.snapshot().state is ZerodhaConnectionState.CONNECTED
+
+
+def test_stopped_terminal_state_ignores_all_late_ticker_callbacks_and_reset_recovers():
+    subject, ticker = ready_connected()
+    subject.stop()
+    stopped = subject.snapshot()
+    assert stopped.state is ZerodhaConnectionState.STOPPED
+    subject.on_connect(None, None)
+    subject.on_ticks(None, (raw_tick(101, 22000.5),))
+    subject.on_close(None, 1000, "closed")
+    subject.on_error(None, "again", "bad")
+    subject.on_reconnect(None, 1)
+    subject.on_noreconnect(None)
+    assert subject.snapshot() == stopped
+    assert subject.reset().state is ZerodhaConnectionState.READY
+    subject.configure_credentials(ZerodhaCredentials("api", "token"))
+    subject.connect()
+    assert ticker.connect_calls == 2
+    assert ticker.threaded is False
+    subject.on_connect(None, None)
+    assert subject.snapshot().state is ZerodhaConnectionState.CONNECTED
+
+
 def test_safety_no_forbidden_protocol_or_adapter_capabilities():
     from adapters.zerodha.protocols import (
         ZerodhaReadOnlyAuthClientProtocol,
@@ -357,7 +425,7 @@ def test_safety_no_forbidden_protocol_or_adapter_capabilities():
         for name in forbidden:
             assert not hasattr(protocol, name)
     text = "\n".join(path.read_text(encoding="utf-8") for path in Path("adapters/zerodha").glob("*.py"))
-    for forbidden_text in forbidden + ("webbrowser", "selenium", "playwright", "time.sleep"):
+    for forbidden_text in forbidden + ("webbrowser", "selenium", "playwright", "threading", "asyncio", "time.sleep"):
         assert forbidden_text not in text
     snapshot = adapter().snapshot()
     assert snapshot.broker_order_calls == 0
