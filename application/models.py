@@ -18,6 +18,7 @@ from engines.option_chain.models import OptionChainState
 from engines.order_management.models import OrderState
 from engines.paper_trading.configuration import PaperTradingConfiguration
 from engines.paper_trading.models import PaperTradingSnapshot
+from engines.paper_execution_coordinator.models import PaperExecutionCoordinatorSnapshot
 from engines.performance_analytics.configuration import PerformanceAnalyticsConfiguration
 from engines.performance_analytics.models import AnalyticsSnapshot
 from engines.historical_market_replay.models import ReplayConfiguration, ReplaySessionSnapshot
@@ -192,6 +193,7 @@ class RuntimeSnapshot:
     paper_trading: PaperTradingSnapshot | None = None
     performance_analytics: AnalyticsSnapshot | None = None
     execution_policy: ExecutionEngineSnapshot | None = None
+    paper_execution: PaperExecutionCoordinatorSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)

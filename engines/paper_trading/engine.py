@@ -30,6 +30,7 @@ from engines.paper_trading.models import (
     PaperTradingDiagnostics,
     PaperTradingSnapshot,
 )
+from engines.order_management.models import OrderState
 from engines.risk.enums import RiskDecision
 from engines.risk.models import RiskDecisionState, TradePlan
 from engines.strategy.enums import StrategyDecision, TradeDirection
@@ -128,6 +129,28 @@ class PaperTradingEngine:
         self._last_event = PAPER_ORDER_CREATED
         self._safe_publish(PAPER_ORDER_CREATED, order)
         return self.snapshot()
+
+    def submit_managed_order(self, order: OrderState, *, execution_plan, purpose: str) -> str:
+        if not self._enabled_safe():
+            self._last_error = "Paper trading disabled by unsafe runtime mode"
+            raise RuntimeError(self._last_error)
+        if not isinstance(order, OrderState):
+            raise TypeError("order must be OrderState")
+        if order.symbol != self._instrument:
+            raise ValueError("Managed order instrument does not match paper runtime.")
+        self._orders_created += 1
+        self._last_event = PAPER_ORDER_CREATED
+        return f"paper-submission:{purpose}:{order.client_order_id}"
+
+    def cancel_managed_order(self, order_id: str, *, timestamp, reason: str) -> str:
+        if not self._enabled_safe():
+            self._last_error = "Paper trading disabled by unsafe runtime mode"
+            raise RuntimeError(self._last_error)
+        _text(order_id, "order_id")
+        _text(reason, "reason")
+        self._orders_cancelled += 1
+        self._last_event = PAPER_ORDER_CANCELLED
+        return f"paper-cancel:{order_id}"
 
     def on_tick(self, tick: Tick, *, strategy=None, risk: RiskDecisionState | None = None) -> PaperTradeRecord | None:
         if not self._enabled_safe():

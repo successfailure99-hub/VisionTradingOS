@@ -118,6 +118,24 @@ EXECUTION_PLAN_EXPIRED = "execution_plan_expired"
 EXECUTION_POLICY_STATE_UPDATED = "execution_policy_state_updated"
 
 # ==================================================
+# Paper Execution Coordinator Events
+# ==================================================
+
+PAPER_EXECUTION_COORDINATOR_STATE_UPDATED = "paper_execution_coordinator_state_updated"
+PAPER_EXECUTION_EVALUATED = "paper_execution_evaluated"
+PAPER_EXECUTION_ACCEPTED = "paper_execution_accepted"
+PAPER_EXECUTION_REJECTED = "paper_execution_rejected"
+PAPER_EXECUTION_DUPLICATE = "paper_execution_duplicate"
+PAPER_ENTRY_ORDER_CREATED = "paper_entry_order_created"
+PAPER_ENTRY_SUBMITTED = "paper_entry_submitted"
+PAPER_ENTRY_PARTIALLY_FILLED = "paper_entry_partially_filled"
+PAPER_ENTRY_FILLED = "paper_entry_filled"
+PAPER_PROTECTIVE_ORDERS_CREATED = "paper_protective_orders_created"
+PAPER_EXECUTION_CANCELLED = "paper_execution_cancelled"
+PAPER_EXECUTION_COMPLETED = "paper_execution_completed"
+PAPER_EXECUTION_FAILED = "paper_execution_failed"
+
+# ==================================================
 # Order Management Events
 # ==================================================
 
