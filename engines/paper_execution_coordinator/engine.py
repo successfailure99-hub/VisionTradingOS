@@ -209,6 +209,9 @@ class PaperExecutionCoordinator(BaseEngine):
         purpose = self._purpose_for_order(receipt, order_update.client_order_id)
         if purpose is None:
             return None
+        sync_failure = self._sync_managed_update(receipt, purpose, order_update, timestamp)
+        if sync_failure is not None:
+            return sync_failure
         if purpose is not CoordinatedOrderPurpose.ENTRY:
             return self._on_protective_update(receipt, purpose, order_update, timestamp)
         if order_update.filled_quantity < receipt.entry_filled_quantity:
@@ -597,8 +600,21 @@ class PaperExecutionCoordinator(BaseEngine):
         if not hasattr(self._paper_engine, "managed_submission") or not hasattr(self._paper_engine, "cancel_managed_order"):
             return
         submission = self._paper_engine.managed_submission(order_id)
-        if submission is not None and submission.status != "CANCELLED":
+        if submission is not None and _managed_cancellable(submission):
             self._paper_engine.cancel_managed_order(order_id, timestamp=timestamp, reason=reason)
+
+    def _sync_managed_update(self, receipt: PaperExecutionReceipt, purpose: CoordinatedOrderPurpose, order_update: OrderState, timestamp: datetime) -> PaperExecutionReceipt | None:
+        if not hasattr(self._paper_engine, "update_managed_order"):
+            return None
+        try:
+            self._paper_engine.update_managed_order(order_update, timestamp=timestamp)
+            return None
+        except Exception as exc:
+            updated = self._swap_order_reference(receipt, purpose, _order_reference(order_update, purpose, reduce_only=purpose is not CoordinatedOrderPurpose.ENTRY))
+            failed = self._protective_failure_receipt(updated, timestamp, PaperExecutionReasonCode.PAPER_SUBMISSION_FAILED, f"{purpose.value} managed update failed: {_safe_message(exc)}")
+            self._store_terminal(failed)
+            self._publish(events.PAPER_EXECUTION_FAILED, failed)
+            return failed
 
     def _swap_order_reference(self, receipt: PaperExecutionReceipt, purpose: CoordinatedOrderPurpose, reference: CoordinatedOrderReference) -> PaperExecutionReceipt:
         if purpose is CoordinatedOrderPurpose.ENTRY:
@@ -809,3 +825,8 @@ def _aware(value: datetime, name: str) -> None:
 
 def _safe_message(exc: Exception) -> str:
     return (str(exc).strip() or exc.__class__.__name__)[:500]
+
+
+def _managed_cancellable(submission) -> bool:
+    status = getattr(getattr(submission, "status", None), "value", getattr(submission, "status", None))
+    return status not in {"filled", "cancelled", "rejected"}

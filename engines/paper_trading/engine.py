@@ -13,7 +13,7 @@ from application.enums import ExecutionSafetyMode
 from core.models.candle import Candle
 from core.models.tick import Tick
 from engines.paper_trading.configuration import PaperTradingConfiguration
-from engines.paper_trading.enums import PaperEntryMode, PaperExitType, PaperOrderState, PaperPositionState
+from engines.paper_trading.enums import ManagedPaperSubmissionStatus, PaperEntryMode, PaperExitType, PaperOrderState, PaperPositionState
 from engines.paper_trading.events import (
     PAPER_ORDER_CANCELLED,
     PAPER_ORDER_CREATED,
@@ -42,6 +42,11 @@ from engines.strategy.enums import StrategyDecision, TradeDirection
 IST = ZoneInfo("Asia/Kolkata")
 SESSION_CLOSE = time(15, 30)
 SAFE_MODES = {ExecutionSafetyMode.ANALYSIS_ONLY, ExecutionSafetyMode.DRY_RUN}
+TERMINAL_MANAGED_STATUSES = {
+    ManagedPaperSubmissionStatus.FILLED,
+    ManagedPaperSubmissionStatus.CANCELLED,
+    ManagedPaperSubmissionStatus.REJECTED,
+}
 
 
 class PaperTradingEngine:
@@ -158,7 +163,10 @@ class PaperTradingEngine:
             purpose=purpose,
             instrument=order.symbol,
             submission_timestamp=order.created_at,
-            status="SUBMITTED",
+            updated_at=order.created_at,
+            status=ManagedPaperSubmissionStatus.SUBMITTED,
+            filled_quantity=order.filled_quantity,
+            order_quantity=order.quantity,
             order_fingerprint=fingerprint,
         )
         self._managed_submissions[order.client_order_id] = submission
@@ -177,8 +185,8 @@ class PaperTradingEngine:
         submission = self._managed_submissions.get(order_id)
         if submission is None:
             raise ValueError("Unknown managed paper submission.")
-        if submission.status != "CANCELLED":
-            submission = replace(submission, status="CANCELLED", cancelled_at=timestamp, cancellation_reason=reason)
+        if submission.status not in TERMINAL_MANAGED_STATUSES:
+            submission = replace(submission, updated_at=timestamp, status=ManagedPaperSubmissionStatus.CANCELLED, cancelled_at=timestamp, cancellation_reason=reason)
             self._managed_submissions[order_id] = submission
             self._orders_cancelled += 1
         self._last_event = PAPER_ORDER_CANCELLED
@@ -188,6 +196,39 @@ class PaperTradingEngine:
         key = _text(order_id_or_submission_id, "order_id_or_submission_id")
         order_id = self._managed_submissions_by_id.get(key, key)
         return self._managed_submissions.get(order_id)
+
+    def update_managed_order(self, order: OrderState, *, timestamp) -> ManagedPaperSubmission:
+        if not self._enabled_safe():
+            self._last_error = "Paper trading disabled by unsafe runtime mode"
+            raise RuntimeError(self._last_error)
+        if not isinstance(order, OrderState):
+            raise TypeError("order must be OrderState")
+        _aware(timestamp, "timestamp")
+        submission = self._managed_submissions.get(order.client_order_id)
+        if submission is None:
+            raise ValueError("Unknown managed paper submission.")
+        expected = _managed_order_fingerprint(order, submission.execution_plan_id, submission.purpose)
+        if expected != submission.order_fingerprint:
+            raise ValueError("Managed paper submission conflicts with order identity.")
+        status = _managed_status_from_order(order.status)
+        if order.filled_quantity < submission.filled_quantity:
+            raise ValueError("Managed paper fill quantity cannot decrease.")
+        if order.filled_quantity > submission.order_quantity:
+            raise ValueError("Managed paper fill quantity cannot exceed order quantity.")
+        if submission.status in TERMINAL_MANAGED_STATUSES and status is not submission.status:
+            raise ValueError("Managed paper terminal status cannot regress.")
+        if status is submission.status and order.filled_quantity == submission.filled_quantity:
+            return submission
+        updated = replace(
+            submission,
+            updated_at=timestamp,
+            status=status,
+            filled_quantity=order.filled_quantity,
+            cancelled_at=timestamp if status is ManagedPaperSubmissionStatus.CANCELLED else submission.cancelled_at,
+        )
+        self._managed_submissions[order.client_order_id] = updated
+        self._last_event = PAPER_ORDER_CANCELLED if status is ManagedPaperSubmissionStatus.CANCELLED else self._last_event
+        return updated
 
     def on_tick(self, tick: Tick, *, strategy=None, risk: RiskDecisionState | None = None) -> PaperTradeRecord | None:
         if not self._enabled_safe():
@@ -637,6 +678,20 @@ def _managed_order_fingerprint(order: OrderState, execution_plan_id: str, purpos
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _managed_status_from_order(status) -> ManagedPaperSubmissionStatus:
+    from engines.order_management.enums import OrderStatus
+
+    if status is OrderStatus.PARTIALLY_FILLED:
+        return ManagedPaperSubmissionStatus.PARTIALLY_FILLED
+    if status is OrderStatus.FILLED:
+        return ManagedPaperSubmissionStatus.FILLED
+    if status is OrderStatus.CANCELLED:
+        return ManagedPaperSubmissionStatus.CANCELLED
+    if status is OrderStatus.REJECTED:
+        return ManagedPaperSubmissionStatus.REJECTED
+    return ManagedPaperSubmissionStatus.SUBMITTED
 
 
 def _now():

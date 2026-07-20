@@ -21,6 +21,7 @@ from engines.paper_execution_coordinator import (
 )
 from engines.paper_trading.configuration import PaperTradingConfiguration
 from engines.paper_trading.engine import PaperTradingEngine
+from engines.paper_trading.enums import ManagedPaperSubmissionStatus
 from engines.risk.enums import RiskDecisionStatus, RiskReasonCode
 from engines.risk.models import RiskDecisionRecord
 from engines.strategy.enums import TradeDirection
@@ -247,6 +248,8 @@ def test_entry_fill_updates_create_protective_orders_once_and_preserve_approved_
     full = item._order_engine.apply(OrderCommand(OrderCommandType.FILL, receipt.entry_order.order_id, TS + timedelta(seconds=22), fill_quantity=50, fill_price=100.0))
     protected = item.on_order_update(full, timestamp=full.updated_at)
     assert protected.status is PaperExecutionStatus.PROTECTIVE_ORDERS_CREATED
+    assert item._paper_engine.managed_submission(receipt.entry_order.order_id).status is ManagedPaperSubmissionStatus.FILLED
+    assert item._paper_engine.managed_submission(receipt.entry_order.order_id).filled_quantity == 75
     assert protected.stop_order.quantity == 75
     assert protected.target_order.quantity == 75
     assert protected.stop_order.side is OrderSide.SELL
@@ -264,6 +267,56 @@ def test_entry_fill_updates_create_protective_orders_once_and_preserve_approved_
     assert again.stop_order.order_id == protected.stop_order.order_id
     assert item.snapshot().order_management_request_count == 3
     assert item.snapshot().paper_submission_count == 3
+
+
+def test_entry_partial_and_terminal_order_updates_synchronize_managed_submission_statuses():
+    item = coordinator()
+    receipt = item.execute(execution_request())
+    item._order_engine.apply(OrderCommand(OrderCommandType.ACKNOWLEDGE, receipt.entry_order.order_id, TS + timedelta(seconds=20), broker_order_id="broker-entry"))
+    partial = item._order_engine.apply(OrderCommand(OrderCommandType.FILL, receipt.entry_order.order_id, TS + timedelta(seconds=21), fill_quantity=25, fill_price=100.0))
+    item.on_order_update(partial, timestamp=partial.updated_at)
+    managed = item._paper_engine.managed_submission(receipt.entry_order.order_id)
+    assert managed.status is ManagedPaperSubmissionStatus.PARTIALLY_FILLED
+    assert managed.filled_quantity == 25
+    duplicate = item._paper_engine.update_managed_order(partial, timestamp=partial.updated_at)
+    assert duplicate is managed
+    with pytest.raises(ValueError, match="decrease"):
+        item._paper_engine.update_managed_order(replace(partial, filled_quantity=10), timestamp=TS + timedelta(seconds=22))
+    with pytest.raises(ValueError, match="exceed"):
+        item._paper_engine.update_managed_order(replace(partial, filled_quantity=100), timestamp=TS + timedelta(seconds=22))
+
+    cancelled_item = coordinator()
+    cancelled_receipt = cancelled_item.execute(execution_request(approved_plan(decision_id="cancel-status", client_request_id="cancel-status", signal_id="cancel-status"), request_id="cancel-status"))
+    cancelled_state = cancelled_item._order_engine.apply(OrderCommand(OrderCommandType.CANCEL, cancelled_receipt.entry_order.order_id, TS + timedelta(seconds=21)))
+    cancelled_item.on_order_update(cancelled_state, timestamp=cancelled_state.updated_at)
+    assert cancelled_item._paper_engine.managed_submission(cancelled_receipt.entry_order.order_id).status is ManagedPaperSubmissionStatus.CANCELLED
+
+    rejected_item = coordinator()
+    rejected_receipt = rejected_item.execute(execution_request(approved_plan(decision_id="reject-status", client_request_id="reject-status", signal_id="reject-status"), request_id="reject-status"))
+    rejected_state = rejected_item._order_engine.apply(OrderCommand(OrderCommandType.REJECT, rejected_receipt.entry_order.order_id, TS + timedelta(seconds=21), rejection_message="test reject"))
+    rejected_item.on_order_update(rejected_state, timestamp=rejected_state.updated_at)
+    assert rejected_item._paper_engine.managed_submission(rejected_receipt.entry_order.order_id).status is ManagedPaperSubmissionStatus.REJECTED
+
+
+def test_managed_submission_terminal_regression_unknown_and_conflicting_identity_fail_closed():
+    item = coordinator()
+    _, _, _, protected = execute_and_fill(item)
+    entry = item._order_engine.get_order(protected.entry_order.order_id)
+    with pytest.raises(ValueError, match="terminal"):
+        item._paper_engine.update_managed_order(replace(entry, status=OrderStatus.CANCELLED), timestamp=TS + timedelta(seconds=30))
+    stop_cancelled = item._order_engine.apply(OrderCommand(OrderCommandType.CANCEL, protected.stop_order.order_id, TS + timedelta(seconds=30)))
+    item.on_order_update(stop_cancelled, timestamp=stop_cancelled.updated_at)
+    with pytest.raises(ValueError, match="terminal"):
+        item._paper_engine.update_managed_order(replace(stop_cancelled, status=OrderStatus.FILLED, filled_quantity=75, remaining_quantity=0), timestamp=TS + timedelta(seconds=31))
+    target_rejected = item._order_engine.apply(OrderCommand(OrderCommandType.REJECT, protected.target_order.order_id, TS + timedelta(seconds=31), rejection_message="test reject"))
+    failed = item.on_order_update(target_rejected, timestamp=target_rejected.updated_at)
+    assert failed.status is PaperExecutionStatus.FAILED
+    with pytest.raises(ValueError, match="terminal"):
+        item._paper_engine.update_managed_order(replace(target_rejected, status=OrderStatus.FILLED, filled_quantity=75, remaining_quantity=0), timestamp=TS + timedelta(seconds=32))
+    with pytest.raises(ValueError, match="Unknown"):
+        item._paper_engine.update_managed_order(replace(entry, client_order_id="unknown-managed"), timestamp=TS + timedelta(seconds=33))
+    with pytest.raises(ValueError, match="conflicts"):
+        item._paper_engine.update_managed_order(replace(entry, quantity=50), timestamp=TS + timedelta(seconds=34))
 
 
 def test_exact_protective_plans_are_preserved_without_conversion_rounding_or_side_changes():
@@ -377,12 +430,12 @@ def test_cancellation_covers_entry_stop_and_target_managed_submissions_idempoten
     _, _, _, protected = execute_and_fill(item)
     cancelled = item.cancel(protected.receipt_id, timestamp=TS + timedelta(seconds=30), reason="operator")
     assert cancelled.status is PaperExecutionStatus.CANCELLED
-    for order in (cancelled.entry_order, cancelled.stop_order, cancelled.target_order):
-        submission = item._paper_engine.managed_submission(order.order_id)
-        assert submission.status == "CANCELLED"
+    assert item._paper_engine.managed_submission(cancelled.entry_order.order_id).status is ManagedPaperSubmissionStatus.FILLED
+    assert item._paper_engine.managed_submission(cancelled.stop_order.order_id).status is ManagedPaperSubmissionStatus.CANCELLED
+    assert item._paper_engine.managed_submission(cancelled.target_order.order_id).status is ManagedPaperSubmissionStatus.CANCELLED
     second = item.cancel(protected.receipt_id, timestamp=TS + timedelta(seconds=31), reason="operator")
     assert second is cancelled
-    assert item._paper_engine.snapshot().diagnostics.orders_cancelled == 3
+    assert item._paper_engine.snapshot().diagnostics.orders_cancelled == 2
     item._receipts[cancelled.receipt_id] = replace(cancelled, status=PaperExecutionStatus.COMPLETED)
     with pytest.raises(ValueError, match="Completed"):
         item.cancel(cancelled.receipt_id, timestamp=TS + timedelta(seconds=32))
@@ -398,7 +451,8 @@ def test_protective_update_routing_completion_and_opposite_cancellation_are_idem
     assert completed.entry_filled_quantity == 75
     assert completed.target_order.status is OrderStatus.FILLED
     assert completed.stop_order.status is OrderStatus.CANCELLED
-    assert item._paper_engine.managed_submission(completed.stop_order.order_id).status == "CANCELLED"
+    assert item._paper_engine.managed_submission(completed.target_order.order_id).status is ManagedPaperSubmissionStatus.FILLED
+    assert item._paper_engine.managed_submission(completed.stop_order.order_id).status is ManagedPaperSubmissionStatus.CANCELLED
     assert item.on_order_update(target_state, timestamp=target_state.updated_at) is completed
     unknown = replace(target_state, client_order_id="unknown-protective")
     assert item.on_order_update(unknown, timestamp=target_state.updated_at) is None

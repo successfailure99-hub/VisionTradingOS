@@ -7,7 +7,7 @@ from datetime import date, datetime
 from math import isfinite
 from numbers import Real
 
-from engines.paper_trading.enums import PaperExitType, PaperOrderState, PaperPositionState
+from engines.paper_trading.enums import ManagedPaperSubmissionStatus, PaperExitType, PaperOrderState, PaperPositionState
 from engines.strategy.enums import TradeDirection
 
 
@@ -257,7 +257,10 @@ class ManagedPaperSubmission:
     purpose: str
     instrument: str
     submission_timestamp: datetime
-    status: str
+    updated_at: datetime
+    status: ManagedPaperSubmissionStatus
+    filled_quantity: int
+    order_quantity: int
     order_fingerprint: str
     cancelled_at: datetime | None = None
     cancellation_reason: str | None = None
@@ -269,7 +272,15 @@ class ManagedPaperSubmission:
         object.__setattr__(self, "purpose", _purpose(self.purpose))
         object.__setattr__(self, "instrument", _text(self.instrument, "instrument").upper())
         _aware(self.submission_timestamp, "submission_timestamp")
-        object.__setattr__(self, "status", _submission_status(self.status))
+        _aware(self.updated_at, "updated_at")
+        if self.updated_at < self.submission_timestamp:
+            raise ValueError("updated_at cannot be before submission_timestamp")
+        if not isinstance(self.status, ManagedPaperSubmissionStatus):
+            raise TypeError("status must be ManagedPaperSubmissionStatus")
+        object.__setattr__(self, "filled_quantity", _non_negative_int(self.filled_quantity, "filled_quantity"))
+        object.__setattr__(self, "order_quantity", _positive_int(self.order_quantity, "order_quantity"))
+        if self.filled_quantity > self.order_quantity:
+            raise ValueError("filled_quantity cannot exceed order_quantity")
         _text(self.order_fingerprint, "order_fingerprint")
         if self.cancelled_at is not None:
             _aware(self.cancelled_at, "cancelled_at")
@@ -311,13 +322,6 @@ def _purpose(value: str) -> str:
     return purpose
 
 
-def _submission_status(value: str) -> str:
-    status = _text(value, "status").upper()
-    if status not in {"SUBMITTED", "CANCELLED"}:
-        raise ValueError("status must be SUBMITTED or CANCELLED")
-    return status
-
-
 def _aware(value: datetime | None, name: str) -> None:
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{name} must be timezone-aware datetime")
@@ -349,6 +353,12 @@ def _non_negative_real(value: Real | None, name: str) -> float:
 def _positive_int(value: int, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{name} must be positive integer")
+    return value
+
+
+def _non_negative_int(value: int, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be non-negative integer")
     return value
 
 
