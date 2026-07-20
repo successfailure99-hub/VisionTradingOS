@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
+from math import isfinite
 
 from core.base_engine import BaseEngine
 from core import events
@@ -150,11 +151,8 @@ class TradeExecutionPolicyEngine(BaseEngine):
         plan = self._plans.get(_text(execution_plan_id, "execution_plan_id"))
         if plan is None:
             raise ValueError("Unknown execution plan.")
-        if plan.status is ExecutionPlanStatus.EXPIRED or timestamp >= plan.valid_until:
-            expired = self.expire_plan(plan.execution_plan_id, timestamp=timestamp)
-            return expired
-        if plan.status is not ExecutionPlanStatus.AWAITING_MANUAL_APPROVAL:
-            raise ValueError("Plan is not awaiting manual approval.")
+        if not _manual_approval_eligible(plan, timestamp):
+            raise ValueError("Plan is not eligible for manual approval.")
         status = ExecutionPlanStatus.READY_FOR_PAPER if plan.execution_mode is ExecutionMode.PAPER else ExecutionPlanStatus.PREPARED
         approved = replace(
             plan,
@@ -233,7 +231,10 @@ class TradeExecutionPolicyEngine(BaseEngine):
         )
 
     def _evaluate(self, request: ExecutionRequest, policy: ExecutionPolicy) -> TradeExecutionPlan:
-        risk = _risk_view(request.risk_decision)
+        try:
+            risk = _risk_view(request.risk_decision)
+        except RiskInputValidationError:
+            return self._blocked_plan(request, policy, ExecutionDecisionStatus.INVALID, ExecutionReasonCode.INVALID_RISK_DECISION, "Risk decision is invalid.")
         mode = request.execution_mode or policy.default_execution_mode
         if not policy.enabled:
             return self._blocked_plan(request, policy, ExecutionDecisionStatus.REJECTED, ExecutionReasonCode.POLICY_DISABLED, "Execution policy is disabled.")
@@ -289,6 +290,9 @@ class TradeExecutionPolicyEngine(BaseEngine):
             return self._blocked_plan(request, policy, ExecutionDecisionStatus.REJECTED, ExecutionReasonCode.MISSING_STOP_PLAN, "Risk decision has no stop loss.")
         if policy.require_target_order and risk["target_price"] is None:
             return self._blocked_plan(request, policy, ExecutionDecisionStatus.REJECTED, ExecutionReasonCode.MISSING_TARGET_PLAN, "Risk decision has no target.")
+        protective_price_failure = self._validate_protective_prices(request, policy, risk, tick)
+        if protective_price_failure is not None:
+            return protective_price_failure
         geometry_failure = self._validate_geometry(request, policy, risk, entry_price)
         if geometry_failure is not None:
             return geometry_failure
@@ -323,6 +327,19 @@ class TradeExecutionPolicyEngine(BaseEngine):
             return self._blocked_plan(request, policy, ExecutionDecisionStatus.REJECTED, ExecutionReasonCode.INVALID_LIMIT_PRICE, "BUY stop-limit requires limit >= trigger.")
         if side is OrderSide.SELL and entry_price > trigger:
             return self._blocked_plan(request, policy, ExecutionDecisionStatus.REJECTED, ExecutionReasonCode.INVALID_LIMIT_PRICE, "SELL stop-limit requires limit <= trigger.")
+        return None
+
+    def _validate_protective_prices(self, request, policy, risk, tick):
+        stop = risk["stop_price"]
+        if stop is not None and (not isfinite(stop) or stop <= 0):
+            return self._blocked_plan(request, policy, ExecutionDecisionStatus.REJECTED, ExecutionReasonCode.INVALID_STOP_PRICE, "Stop price must be finite and positive.", "stop_price", str(stop))
+        if stop is not None and not _tick_aligned(stop, tick):
+            return self._blocked_plan(request, policy, ExecutionDecisionStatus.REJECTED, ExecutionReasonCode.INVALID_STOP_PRICE, "Stop price is not tick aligned.", "stop_price", str(stop), str(tick))
+        target = risk["target_price"]
+        if target is not None and (not isfinite(target) or target <= 0):
+            return self._blocked_plan(request, policy, ExecutionDecisionStatus.REJECTED, ExecutionReasonCode.INVALID_TARGET_PRICE, "Target price must be finite and positive.", "target_price", str(target))
+        if target is not None and not _tick_aligned(target, tick):
+            return self._blocked_plan(request, policy, ExecutionDecisionStatus.REJECTED, ExecutionReasonCode.INVALID_TARGET_PRICE, "Target price is not tick aligned.", "target_price", str(target), str(tick))
         return None
 
     def _validate_geometry(self, request, policy, risk, entry_price):
@@ -451,11 +468,11 @@ class TradeExecutionPolicyEngine(BaseEngine):
             None,
             None,
             ExecutionRoutingTarget.PLAN_ONLY,
-            ExecutionPlanStatus.REJECTED if status is not ExecutionDecisionStatus.LOCKED else ExecutionPlanStatus.AWAITING_MANUAL_APPROVAL,
+            _blocked_plan_status(status, reason),
             status,
             reason,
             (finding,),
-            policy.require_manual_approval,
+            reason is ExecutionReasonCode.MISSING_MANUAL_APPROVAL,
         )
 
     def _finding(self, timestamp, severity, reason, message, field_name=None, observed=None, limit=None):
@@ -505,6 +522,10 @@ class TradeExecutionPolicyEngine(BaseEngine):
         self._event_bus.publish(event_name, payload)
 
 
+class RiskInputValidationError(ValueError):
+    pass
+
+
 def _risk_view(risk, *, tolerate_invalid: bool = False) -> dict[str, object]:
     try:
         timestamp = getattr(risk, "timestamp")
@@ -546,9 +567,9 @@ def _risk_view(risk, *, tolerate_invalid: bool = False) -> dict[str, object]:
             "strategy_id": getattr(risk, "strategy_id", None) or getattr(risk, "plan_id", None),
             "manual_approval_required": bool(getattr(risk, "manual_approval_required", False)),
         }
-    except Exception:
+    except (AttributeError, TypeError, ValueError) as exc:
         if not tolerate_invalid:
-            raise
+            raise RiskInputValidationError("Risk decision is invalid.") from exc
         timestamp = getattr(risk, "timestamp", None)
         if not isinstance(timestamp, datetime) or timestamp.tzinfo is None:
             from datetime import timezone
@@ -571,6 +592,25 @@ def _risk_view(risk, *, tolerate_invalid: bool = False) -> dict[str, object]:
             "strategy_id": None,
             "manual_approval_required": False,
         }
+
+
+def _blocked_plan_status(status: ExecutionDecisionStatus, reason: ExecutionReasonCode) -> ExecutionPlanStatus:
+    if status is ExecutionDecisionStatus.LOCKED:
+        if reason is ExecutionReasonCode.MISSING_MANUAL_APPROVAL:
+            return ExecutionPlanStatus.AWAITING_MANUAL_APPROVAL
+        return ExecutionPlanStatus.LOCKED
+    return ExecutionPlanStatus.REJECTED
+
+
+def _manual_approval_eligible(plan: TradeExecutionPlan, timestamp: datetime) -> bool:
+    return (
+        plan.status is ExecutionPlanStatus.AWAITING_MANUAL_APPROVAL
+        and plan.decision_status is ExecutionDecisionStatus.LOCKED
+        and plan.primary_reason is ExecutionReasonCode.MISSING_MANUAL_APPROVAL
+        and plan.manual_approval_required is True
+        and plan.manual_approval_present is False
+        and timestamp < plan.valid_until
+    )
 
 
 def _entry_side(direction: TradeDirection) -> OrderSide:

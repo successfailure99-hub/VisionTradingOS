@@ -1,4 +1,4 @@
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -206,15 +206,79 @@ def test_manual_approval_required_by_default_and_replacement_approval_is_immutab
     assert awaiting.manual_approval_present is False
 
 
+def test_stopped_engine_returns_terminal_locked_plan_absent_from_active_indexes():
+    item = engine()
+    item.stop()
+    plan = item.evaluate(request(client_request_id="stopped", signal_id="stopped", risk_decision=risk_record(decision_id="risk-stopped")))
+    assert plan.decision_status is ExecutionDecisionStatus.LOCKED
+    assert plan.primary_reason is ExecutionReasonCode.ENGINE_STOPPED
+    assert plan.status is ExecutionPlanStatus.LOCKED
+    assert plan.execution_plan_id not in item.snapshot().active_plan_ids
+    with pytest.raises(ValueError, match="eligible for manual approval"):
+        item.approve_manual(plan.execution_plan_id, timestamp=TS + timedelta(seconds=20))
+    assert item.last_plan.status is ExecutionPlanStatus.LOCKED
+
+
+def test_engine_locked_plan_cannot_be_manually_approved():
+    item = engine()
+    item._state = ExecutionLifecycleState.LOCKED
+    plan = item.evaluate(request(client_request_id="locked", signal_id="locked", risk_decision=risk_record(decision_id="risk-locked")))
+    assert plan.decision_status is ExecutionDecisionStatus.LOCKED
+    assert plan.primary_reason is ExecutionReasonCode.ENGINE_LOCKED
+    assert plan.status is ExecutionPlanStatus.LOCKED
+    with pytest.raises(ValueError, match="eligible for manual approval"):
+        item.approve_manual(plan.execution_plan_id, timestamp=TS + timedelta(seconds=20))
+    assert item.last_plan.status is ExecutionPlanStatus.LOCKED
+
+
+def test_only_missing_manual_approval_creates_awaiting_manual_approval_plan():
+    awaiting = engine().evaluate(request(manual_approval=False))
+    stopped = engine()
+    stopped.stop()
+    stopped_plan = stopped.evaluate(request(client_request_id="stopped-only", signal_id="stopped-only", risk_decision=risk_record(decision_id="risk-stopped-only")))
+    assert awaiting.primary_reason is ExecutionReasonCode.MISSING_MANUAL_APPROVAL
+    assert awaiting.status is ExecutionPlanStatus.AWAITING_MANUAL_APPROVAL
+    assert stopped_plan.primary_reason is ExecutionReasonCode.ENGINE_STOPPED
+    assert stopped_plan.status is ExecutionPlanStatus.LOCKED
+
+
+def test_manual_approval_requires_original_missing_approval_reason():
+    item = engine()
+    awaiting = item.evaluate(request(manual_approval=False))
+    forged = replace(awaiting, primary_reason=ExecutionReasonCode.ENGINE_LOCKED)
+    item._plans[forged.execution_plan_id] = forged
+    with pytest.raises(ValueError, match="eligible for manual approval"):
+        item.approve_manual(forged.execution_plan_id, timestamp=TS + timedelta(seconds=20))
+    assert item.last_plan is awaiting
+
+
 def test_manual_approval_cannot_override_rejected_or_expired_plans():
     item = engine()
     blocked = item.evaluate(request(risk_decision=risk_record(status=RiskDecisionStatus.REJECTED, approved=False, approved_quantity=0, approved_lots=0), requested_quantity=1))
     with pytest.raises(ValueError):
         item.approve_manual(blocked.execution_plan_id, timestamp=TS + timedelta(seconds=20))
     awaiting = item.evaluate(request(manual_approval=False, client_request_id="client-expire", signal_id="signal-expire", risk_decision=risk_record(decision_id="risk-expire")))
-    expired = item.approve_manual(awaiting.execution_plan_id, timestamp=awaiting.valid_until)
-    assert expired.status is ExecutionPlanStatus.EXPIRED
-    assert expired.decision_status is ExecutionDecisionStatus.EXPIRED
+    with pytest.raises(ValueError, match="eligible for manual approval"):
+        item.approve_manual(awaiting.execution_plan_id, timestamp=awaiting.valid_until)
+    assert item.last_plan.status is ExecutionPlanStatus.AWAITING_MANUAL_APPROVAL
+
+
+def test_invalid_risk_input_returns_invalid_without_failing_lifecycle_and_recovers():
+    class InvalidRisk:
+        timestamp = TS
+        instrument = "NIFTY"
+        direction = "bullish"
+        approved_quantity = "not-a-quantity"
+        entry_price = 100.0
+
+    item = engine()
+    invalid = item.evaluate(request(risk_decision=InvalidRisk(), client_request_id="invalid-risk", signal_id="invalid-risk"))
+    assert invalid.decision_status is ExecutionDecisionStatus.INVALID
+    assert invalid.primary_reason is ExecutionReasonCode.INVALID_RISK_DECISION
+    assert item.snapshot().lifecycle_state is ExecutionLifecycleState.READY
+    recovered = item.evaluate(request(client_request_id="valid-after-invalid", signal_id="valid-after-invalid", risk_decision=risk_record(decision_id="risk-after-invalid")))
+    assert recovered.decision_status is ExecutionDecisionStatus.APPROVED
+    assert item.snapshot().lifecycle_state is ExecutionLifecycleState.ACTIVE
 
 
 def test_order_type_policy_limit_market_stop_limit_and_live_mode_blocking():
@@ -274,6 +338,61 @@ def test_missing_and_invalid_protective_geometry_is_blocked():
     assert bad_stop.primary_reason is ExecutionReasonCode.INVALID_STOP_GEOMETRY
     bad_target = engine().evaluate(request(risk_decision=risk_record(decision_id="bad-target", target_price=99.0), client_request_id="bad-target"))
     assert bad_target.primary_reason is ExecutionReasonCode.INVALID_TARGET_GEOMETRY
+
+
+def test_protective_prices_must_be_positive_finite_and_tick_aligned_before_plans_are_created():
+    bullish_stop = engine().evaluate(request(risk_decision=risk_record(decision_id="offtick-bull-stop", stop_loss_price=95.03), client_request_id="offtick-bull-stop"))
+    assert bullish_stop.primary_reason is ExecutionReasonCode.INVALID_STOP_PRICE
+    assert bullish_stop.stop_plan is None
+    bearish_stop = engine().evaluate(
+        request(
+            risk_decision=risk_record(decision_id="offtick-bear-stop", direction=TradeDirection.BEARISH, stop_loss_price=105.03, target_price=90.0),
+            client_request_id="offtick-bear-stop",
+            signal_id="offtick-bear-stop",
+        )
+    )
+    assert bearish_stop.primary_reason is ExecutionReasonCode.INVALID_STOP_PRICE
+    assert bearish_stop.stop_plan is None
+    target = engine().evaluate(request(risk_decision=risk_record(decision_id="offtick-target", target_price=110.03), client_request_id="offtick-target"))
+    assert target.primary_reason is ExecutionReasonCode.INVALID_TARGET_PRICE
+    assert target.target_plan is None
+    nonfinite = engine().evaluate(request(risk_decision=risk_record(decision_id="nonfinite-stop", stop_loss_price=float("nan")), client_request_id="nonfinite-stop"))
+    assert nonfinite.primary_reason is ExecutionReasonCode.INVALID_STOP_PRICE
+    accepted = engine().evaluate(request(risk_decision=risk_record(decision_id="tick-aligned", stop_loss_price=95.05, target_price=110.05), client_request_id="tick-aligned", signal_id="tick-aligned"))
+    assert accepted.decision_status is ExecutionDecisionStatus.APPROVED
+    assert accepted.stop_plan.trigger_price == 95.05
+    assert accepted.target_plan.limit_price == 110.05
+
+
+def test_rejected_protective_price_paths_never_create_order_management_or_paper_submissions():
+    app = ApplicationOrchestrator(EventBus(), RuntimeConfiguration())
+    app.start()
+    runtime = app.get_runtime(RuntimeInstrument.NIFTY)
+    risk = legacy_risk(plan_id="bad-protective", stop_price=95.03)
+    runtime.risk_engine.record_decision(risk)
+    plan = app.evaluate_execution_policy(
+        RuntimeInstrument.NIFTY,
+        ExecutionRequest(
+            instrument="NIFTY",
+            timestamp=TS,
+            risk_decision=risk,
+            execution_mode=ExecutionMode.PAPER,
+            requested_order_type=OrderType.LIMIT,
+            requested_entry_price=100.0,
+            market_reference_price=100.0,
+            requested_quantity=75,
+            manual_approval=True,
+            signal_id="bad-protective",
+            strategy_id="bad-protective",
+            client_request_id="bad-protective",
+        ),
+    )
+    assert plan.primary_reason is ExecutionReasonCode.INVALID_STOP_PRICE
+    assert app.create_order_from_execution_plan(RuntimeInstrument.NIFTY, plan) is None
+    assert runtime.order_engine.order_count == 0
+    assert runtime.paper_trading_engine.snapshot().diagnostics.orders_created == 0
+    assert runtime.paper_trading_engine.snapshot().diagnostics.broker_order_calls == 0
+    assert runtime.execution_policy_engine.snapshot().broker_order_calls == 0
 
 
 def test_decision_staleness_plan_validity_and_replay_fingerprint_stability():
