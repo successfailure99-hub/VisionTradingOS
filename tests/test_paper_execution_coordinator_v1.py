@@ -8,7 +8,7 @@ from application import ApplicationOrchestrator, RuntimeConfiguration, RuntimeIn
 from core.event_bus import EventBus
 from core import events
 from engines.order_management.enums import OrderCommandType, OrderSide, OrderStatus, OrderType
-from engines.order_management.models import OrderCommand
+from engines.order_management.models import OrderCommand, OrderRequest, OrderSnapshot
 from engines.order_management.order_management_engine import OrderManagementEngine
 from engines.paper_execution_coordinator import (
     CoordinatorLifecycleState,
@@ -123,6 +123,14 @@ def unsafe_plan(**fields):
     for name, value in fields.items():
         object.__setattr__(plan, name, value)
     return plan
+
+
+def execute_and_fill(item, plan=None):
+    plan = plan or approved_plan()
+    receipt = item.execute(execution_request(plan))
+    item._order_engine.apply(OrderCommand(OrderCommandType.ACKNOWLEDGE, receipt.entry_order.order_id, TS + timedelta(seconds=20), broker_order_id="broker-entry"))
+    full = item._order_engine.apply(OrderCommand(OrderCommandType.FILL, receipt.entry_order.order_id, TS + timedelta(seconds=21), fill_quantity=75, fill_price=100.0))
+    return plan, receipt, full, item.on_order_update(full, timestamp=full.updated_at)
 
 
 def test_models_are_immutable_and_validate_required_inputs():
@@ -243,13 +251,157 @@ def test_entry_fill_updates_create_protective_orders_once_and_preserve_approved_
     assert protected.target_order.quantity == 75
     assert protected.stop_order.side is OrderSide.SELL
     assert protected.target_order.side is OrderSide.SELL
+    assert protected.stop_order.order_type is plan.stop_plan.order_type is OrderType.STOP_LIMIT
+    assert protected.stop_order.limit_price == plan.stop_plan.limit_price
     assert protected.stop_order.trigger_price == plan.stop_plan.trigger_price
+    assert protected.target_order.order_type is plan.target_plan.order_type
     assert protected.target_order.limit_price == plan.target_plan.limit_price
     assert protected.stop_order.reduce_only is True
+    assert protected.target_order.reduce_only is True
+    assert protected.stop_paper_submission_id == f"paper-submission:stop_loss:{protected.stop_order.order_id}"
+    assert protected.target_paper_submission_id == f"paper-submission:target:{protected.target_order.order_id}"
     again = item.on_order_update(full, timestamp=full.updated_at)
     assert again.stop_order.order_id == protected.stop_order.order_id
     assert item.snapshot().order_management_request_count == 3
     assert item.snapshot().paper_submission_count == 3
+
+
+def test_exact_protective_plans_are_preserved_without_conversion_rounding_or_side_changes():
+    item = coordinator()
+    plan, _, _, protected = execute_and_fill(item)
+    assert protected.stop_order.order_type is OrderType.STOP_LIMIT
+    assert protected.stop_order.limit_price == plan.stop_plan.limit_price == 95.0
+    assert protected.stop_order.trigger_price == plan.stop_plan.trigger_price == 95.0
+    assert protected.target_order.order_type is OrderType.LIMIT
+    assert protected.target_order.limit_price == plan.target_plan.limit_price == 110.0
+    assert protected.stop_order.side is plan.stop_plan.side is OrderSide.SELL
+    assert protected.target_order.side is plan.target_plan.side is OrderSide.SELL
+    assert protected.stop_order.reduce_only is True
+    assert protected.target_order.reduce_only is True
+
+
+def test_partial_protective_failure_preserves_stop_order_and_blocks_duplicate_recreation():
+    class FailsStopPaper(PaperTradingEngine):
+        def submit_managed_order(self, order, *, execution_plan, purpose):
+            if purpose == "stop_loss":
+                raise RuntimeError("stop submit unavailable")
+            return super().submit_managed_order(order, execution_plan=execution_plan, purpose=purpose)
+
+    item = coordinator(paper=FailsStopPaper(EventBus(), instrument="NIFTY", timeframe="1m", safety_mode=RuntimeConfiguration().safety_mode))
+    _, _, full, failed = execute_and_fill(item)
+    assert failed.status is PaperExecutionStatus.FAILED
+    assert failed.primary_reason is PaperExecutionReasonCode.PROTECTIVE_PAPER_SUBMISSION_FAILED
+    assert failed.stop_order is not None
+    assert failed.target_order is None
+    assert failed.paper_submission_count == 1
+    assert item.snapshot().order_management_request_count == 2
+    assert item.snapshot().paper_submission_count == 1
+    again = item.on_order_update(full, timestamp=full.updated_at)
+    assert again is failed
+    assert item.snapshot().order_management_request_count == 2
+    assert item.snapshot().paper_submission_count == 1
+
+
+def test_target_creation_failure_preserves_stop_order_and_stop_submission():
+    item = coordinator()
+    original_create = item._order_engine.create
+
+    def create(snapshot):
+        if snapshot.request.client_order_id.startswith("paper-target:"):
+            raise RuntimeError("target create unavailable")
+        return original_create(snapshot)
+
+    item._order_engine.create = create
+    _, _, full, failed = execute_and_fill(item)
+    assert failed.status is PaperExecutionStatus.FAILED
+    assert failed.primary_reason is PaperExecutionReasonCode.PROTECTIVE_ORDER_CREATION_FAILED
+    assert failed.stop_order is not None
+    assert failed.stop_paper_submission_id == f"paper-submission:stop_loss:{failed.stop_order.order_id}"
+    assert failed.target_order is None
+    assert failed.paper_submission_count == 2
+    again = item.on_order_update(full, timestamp=full.updated_at)
+    assert again is failed
+    assert item.snapshot().order_management_request_count == 2
+    assert item.snapshot().paper_submission_count == 2
+
+
+def test_target_submission_failure_preserves_both_order_references_without_duplicate_target():
+    class FailsTargetPaper(PaperTradingEngine):
+        def submit_managed_order(self, order, *, execution_plan, purpose):
+            if purpose == "target":
+                raise RuntimeError("target submit unavailable")
+            return super().submit_managed_order(order, execution_plan=execution_plan, purpose=purpose)
+
+    item = coordinator(paper=FailsTargetPaper(EventBus(), instrument="NIFTY", timeframe="1m", safety_mode=RuntimeConfiguration().safety_mode))
+    _, _, full, failed = execute_and_fill(item)
+    assert failed.status is PaperExecutionStatus.FAILED
+    assert failed.primary_reason is PaperExecutionReasonCode.PROTECTIVE_PAPER_SUBMISSION_FAILED
+    assert failed.stop_order is not None
+    assert failed.target_order is not None
+    assert failed.stop_paper_submission_id == f"paper-submission:stop_loss:{failed.stop_order.order_id}"
+    assert failed.target_paper_submission_id is None
+    assert failed.paper_submission_count == 2
+    again = item.on_order_update(full, timestamp=full.updated_at)
+    assert again is failed
+    assert item.snapshot().order_management_request_count == 3
+    assert item.snapshot().paper_submission_count == 2
+
+
+def test_managed_paper_submission_records_retry_conflicts_and_validation():
+    bus = EventBus()
+    paper = PaperTradingEngine(bus, instrument="NIFTY", timeframe="1m", safety_mode=RuntimeConfiguration().safety_mode)
+    item = coordinator(paper=paper)
+    plan = approved_plan()
+    receipt = item.execute(execution_request(plan))
+    submission = paper.managed_submission(receipt.paper_submission_id)
+    assert submission.order_id == receipt.entry_order.order_id
+    assert submission.execution_plan_id == plan.execution_plan_id
+    assert submission.purpose == "entry"
+    assert submission.instrument == "NIFTY"
+    assert paper.submit_managed_order(item._order_engine.get_order(receipt.entry_order.order_id), execution_plan=plan, purpose="entry") == submission.submission_id
+    assert paper.snapshot().diagnostics.orders_created == 1
+    with pytest.raises(ValueError, match="purpose"):
+        paper.submit_managed_order(item._order_engine.get_order(receipt.entry_order.order_id), execution_plan=plan, purpose="invalid")
+    with pytest.raises(ValueError, match="conflicts"):
+        paper.submit_managed_order(replace(item._order_engine.get_order(receipt.entry_order.order_id), quantity=50), execution_plan=plan, purpose="entry")
+    wrong_order = replace(item._order_engine.get_order(receipt.entry_order.order_id), symbol="BANKNIFTY", client_order_id="wrong")
+    with pytest.raises(ValueError, match="instrument"):
+        paper.submit_managed_order(wrong_order, execution_plan=plan, purpose="entry")
+    unsafe = PaperTradingEngine(bus, instrument="NIFTY", timeframe="1m", safety_mode=object())
+    with pytest.raises(RuntimeError, match="disabled"):
+        unsafe.submit_managed_order(item._order_engine.get_order(receipt.entry_order.order_id), execution_plan=plan, purpose="entry")
+
+
+def test_cancellation_covers_entry_stop_and_target_managed_submissions_idempotently():
+    item = coordinator()
+    _, _, _, protected = execute_and_fill(item)
+    cancelled = item.cancel(protected.receipt_id, timestamp=TS + timedelta(seconds=30), reason="operator")
+    assert cancelled.status is PaperExecutionStatus.CANCELLED
+    for order in (cancelled.entry_order, cancelled.stop_order, cancelled.target_order):
+        submission = item._paper_engine.managed_submission(order.order_id)
+        assert submission.status == "CANCELLED"
+    second = item.cancel(protected.receipt_id, timestamp=TS + timedelta(seconds=31), reason="operator")
+    assert second is cancelled
+    assert item._paper_engine.snapshot().diagnostics.orders_cancelled == 3
+    item._receipts[cancelled.receipt_id] = replace(cancelled, status=PaperExecutionStatus.COMPLETED)
+    with pytest.raises(ValueError, match="Completed"):
+        item.cancel(cancelled.receipt_id, timestamp=TS + timedelta(seconds=32))
+
+
+def test_protective_update_routing_completion_and_opposite_cancellation_are_idempotent():
+    item = coordinator()
+    _, _, _, protected = execute_and_fill(item)
+    target_state = item._order_engine.apply(OrderCommand(OrderCommandType.ACKNOWLEDGE, protected.target_order.order_id, TS + timedelta(seconds=30), broker_order_id="broker-target"))
+    target_state = item._order_engine.apply(OrderCommand(OrderCommandType.FILL, protected.target_order.order_id, TS + timedelta(seconds=31), fill_quantity=75, fill_price=110.0))
+    completed = item.on_order_update(target_state, timestamp=target_state.updated_at)
+    assert completed.status is PaperExecutionStatus.COMPLETED
+    assert completed.entry_filled_quantity == 75
+    assert completed.target_order.status is OrderStatus.FILLED
+    assert completed.stop_order.status is OrderStatus.CANCELLED
+    assert item._paper_engine.managed_submission(completed.stop_order.order_id).status == "CANCELLED"
+    assert item.on_order_update(target_state, timestamp=target_state.updated_at) is completed
+    unknown = replace(target_state, client_order_id="unknown-protective")
+    assert item.on_order_update(unknown, timestamp=target_state.updated_at) is None
 
 
 def test_zero_fill_unknown_order_stale_duplicate_and_cancelled_paths_are_safe():

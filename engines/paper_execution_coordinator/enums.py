@@ -59,6 +59,7 @@ class PaperExecutionReasonCode(str, Enum):
     ENTRY_NOT_FILLED = "entry_not_filled"
     INVALID_PROTECTIVE_PLAN = "invalid_protective_plan"
     PROTECTIVE_ORDER_CREATION_FAILED = "protective_order_creation_failed"
+    PROTECTIVE_PAPER_SUBMISSION_FAILED = "protective_paper_submission_failed"
     INCONSISTENT_ORDER_STATE = "inconsistent_order_state"
     INTERNAL_COORDINATION_ERROR = "internal_coordination_error"
     CANCELLED = "cancelled"

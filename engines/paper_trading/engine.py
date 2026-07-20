@@ -4,6 +4,8 @@ Deterministic Paper Trading & Position Lifecycle Engine V1.
 
 from dataclasses import replace
 from datetime import time
+import hashlib
+import json
 from math import isfinite
 from zoneinfo import ZoneInfo
 
@@ -23,6 +25,7 @@ from engines.paper_trading.events import (
     PAPER_TRADE_RECORDED,
 )
 from engines.paper_trading.models import (
+    ManagedPaperSubmission,
     PaperJournalSummary,
     PaperOrder,
     PaperPosition,
@@ -75,6 +78,8 @@ class PaperTradingEngine:
         self._orders_expired = 0
         self._positions_opened = 0
         self._positions_closed = 0
+        self._managed_submissions: dict[str, ManagedPaperSubmission] = {}
+        self._managed_submissions_by_id: dict[str, str] = {}
 
     @property
     def active_order(self) -> PaperOrder | None:
@@ -138,19 +143,51 @@ class PaperTradingEngine:
             raise TypeError("order must be OrderState")
         if order.symbol != self._instrument:
             raise ValueError("Managed order instrument does not match paper runtime.")
+        plan_id = _text(getattr(execution_plan, "execution_plan_id", None), "execution_plan_id")
+        purpose = _managed_purpose(purpose)
+        fingerprint = _managed_order_fingerprint(order, plan_id, purpose)
+        existing = self._managed_submissions.get(order.client_order_id)
+        if existing is not None:
+            if existing.order_fingerprint != fingerprint:
+                raise ValueError("Managed paper submission conflicts with existing order identity.")
+            return existing.submission_id
+        submission = ManagedPaperSubmission(
+            submission_id=f"paper-submission:{purpose}:{order.client_order_id}",
+            order_id=order.client_order_id,
+            execution_plan_id=plan_id,
+            purpose=purpose,
+            instrument=order.symbol,
+            submission_timestamp=order.created_at,
+            status="SUBMITTED",
+            order_fingerprint=fingerprint,
+        )
+        self._managed_submissions[order.client_order_id] = submission
+        self._managed_submissions_by_id[submission.submission_id] = order.client_order_id
         self._orders_created += 1
         self._last_event = PAPER_ORDER_CREATED
-        return f"paper-submission:{purpose}:{order.client_order_id}"
+        return submission.submission_id
 
     def cancel_managed_order(self, order_id: str, *, timestamp, reason: str) -> str:
         if not self._enabled_safe():
             self._last_error = "Paper trading disabled by unsafe runtime mode"
             raise RuntimeError(self._last_error)
         _text(order_id, "order_id")
+        _aware(timestamp, "timestamp")
         _text(reason, "reason")
-        self._orders_cancelled += 1
+        submission = self._managed_submissions.get(order_id)
+        if submission is None:
+            raise ValueError("Unknown managed paper submission.")
+        if submission.status != "CANCELLED":
+            submission = replace(submission, status="CANCELLED", cancelled_at=timestamp, cancellation_reason=reason)
+            self._managed_submissions[order_id] = submission
+            self._orders_cancelled += 1
         self._last_event = PAPER_ORDER_CANCELLED
         return f"paper-cancel:{order_id}"
+
+    def managed_submission(self, order_id_or_submission_id: str) -> ManagedPaperSubmission | None:
+        key = _text(order_id_or_submission_id, "order_id_or_submission_id")
+        order_id = self._managed_submissions_by_id.get(key, key)
+        return self._managed_submissions.get(order_id)
 
     def on_tick(self, tick: Tick, *, strategy=None, risk: RiskDecisionState | None = None) -> PaperTradeRecord | None:
         if not self._enabled_safe():
@@ -245,6 +282,7 @@ class PaperTradingEngine:
             last_event=self._last_event,
             last_error=self._last_error,
             diagnostics=diagnostics,
+            managed_submissions=tuple(self._managed_submissions[key] for key in sorted(self._managed_submissions)),
         )
 
     def _trigger_order(self, timestamp, market_price: float) -> None:
@@ -571,6 +609,34 @@ def _text(value: str, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be non-empty text")
     return value.strip()
+
+
+def _aware(value, name: str) -> None:
+    if not hasattr(value, "tzinfo") or value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{name} must be timezone-aware datetime")
+
+
+def _managed_purpose(value: str) -> str:
+    purpose = _text(value, "purpose").lower()
+    if purpose not in {"entry", "stop_loss", "target"}:
+        raise ValueError("purpose must be entry, stop_loss or target")
+    return purpose
+
+
+def _managed_order_fingerprint(order: OrderState, execution_plan_id: str, purpose: str) -> str:
+    payload = {
+        "order_id": order.client_order_id,
+        "execution_plan_id": execution_plan_id,
+        "purpose": purpose,
+        "instrument": order.symbol,
+        "side": order.side.value,
+        "order_type": order.order_type.value,
+        "quantity": order.quantity,
+        "limit_price": order.limit_price,
+        "trigger_price": order.trigger_price,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _now():

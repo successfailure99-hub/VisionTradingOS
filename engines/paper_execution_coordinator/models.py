@@ -161,6 +161,8 @@ class PaperExecutionReceipt:
     stop_order: CoordinatedOrderReference | None
     target_order: CoordinatedOrderReference | None
     paper_submission_id: str | None
+    stop_paper_submission_id: str | None
+    target_paper_submission_id: str | None
     status: PaperExecutionStatus
     decision: PaperExecutionDecision
     primary_reason: PaperExecutionReasonCode
@@ -190,8 +192,10 @@ class PaperExecutionReceipt:
             value = getattr(self, name)
             if value is not None and not isinstance(value, CoordinatedOrderReference):
                 raise TypeError(f"{name} must be CoordinatedOrderReference or None")
-        if self.paper_submission_id is not None:
-            object.__setattr__(self, "paper_submission_id", _text(self.paper_submission_id, "paper_submission_id"))
+        for name in ("paper_submission_id", "stop_paper_submission_id", "target_paper_submission_id"):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, _text(value, name))
         if not isinstance(self.status, PaperExecutionStatus):
             raise TypeError("status must be PaperExecutionStatus")
         if not isinstance(self.decision, PaperExecutionDecision):

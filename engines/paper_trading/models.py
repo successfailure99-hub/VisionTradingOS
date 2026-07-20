@@ -250,6 +250,36 @@ class PaperTradingDiagnostics:
 
 
 @dataclass(frozen=True, slots=True)
+class ManagedPaperSubmission:
+    submission_id: str
+    order_id: str
+    execution_plan_id: str
+    purpose: str
+    instrument: str
+    submission_timestamp: datetime
+    status: str
+    order_fingerprint: str
+    cancelled_at: datetime | None = None
+    cancellation_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        _text(self.submission_id, "submission_id")
+        _text(self.order_id, "order_id")
+        _text(self.execution_plan_id, "execution_plan_id")
+        object.__setattr__(self, "purpose", _purpose(self.purpose))
+        object.__setattr__(self, "instrument", _text(self.instrument, "instrument").upper())
+        _aware(self.submission_timestamp, "submission_timestamp")
+        object.__setattr__(self, "status", _submission_status(self.status))
+        _text(self.order_fingerprint, "order_fingerprint")
+        if self.cancelled_at is not None:
+            _aware(self.cancelled_at, "cancelled_at")
+            if self.cancelled_at < self.submission_timestamp:
+                raise ValueError("cancelled_at cannot be before submission_timestamp")
+        if self.cancellation_reason is not None:
+            _text(self.cancellation_reason, "cancellation_reason")
+
+
+@dataclass(frozen=True, slots=True)
 class PaperTradingSnapshot:
     enabled: bool
     safe_mode_confirmed: bool
@@ -260,12 +290,32 @@ class PaperTradingSnapshot:
     last_event: str
     last_error: str | None
     diagnostics: PaperTradingDiagnostics
+    managed_submissions: tuple[ManagedPaperSubmission, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "managed_submissions", tuple(self.managed_submissions))
+        if any(not isinstance(item, ManagedPaperSubmission) for item in self.managed_submissions):
+            raise TypeError("managed_submissions must contain ManagedPaperSubmission values")
 
 
 def _text(value: str | None, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be non-empty text")
     return value.strip()
+
+
+def _purpose(value: str) -> str:
+    purpose = _text(value, "purpose").lower()
+    if purpose not in {"entry", "stop_loss", "target"}:
+        raise ValueError("purpose must be entry, stop_loss or target")
+    return purpose
+
+
+def _submission_status(value: str) -> str:
+    status = _text(value, "status").upper()
+    if status not in {"SUBMITTED", "CANCELLED"}:
+        raise ValueError("status must be SUBMITTED or CANCELLED")
+    return status
 
 
 def _aware(value: datetime | None, name: str) -> None:

@@ -206,6 +206,11 @@ class PaperExecutionCoordinator(BaseEngine):
         receipt = self._receipts[receipt_id]
         if receipt.status in TERMINAL_STATUSES:
             return receipt
+        purpose = self._purpose_for_order(receipt, order_update.client_order_id)
+        if purpose is None:
+            return None
+        if purpose is not CoordinatedOrderPurpose.ENTRY:
+            return self._on_protective_update(receipt, purpose, order_update, timestamp)
         if order_update.filled_quantity < receipt.entry_filled_quantity:
             failed = self._transition(
                 receipt,
@@ -249,6 +254,9 @@ class PaperExecutionCoordinator(BaseEngine):
             filled = replace(receipt, updated_at=timestamp, status=PaperExecutionStatus.ENTRY_FILLED, entry_filled_quantity=order_update.filled_quantity, remaining_quantity=0)
             if filled.stop_order is None and filled.target_order is None:
                 filled = self._create_protective_orders(filled, order_update, timestamp)
+            if filled.status is PaperExecutionStatus.FAILED:
+                self._publish(events.PAPER_EXECUTION_FAILED, filled)
+                return filled
             self._store_active(filled)
             self._publish(events.PAPER_ENTRY_FILLED, filled)
             if filled.stop_order is not None or filled.target_order is not None:
@@ -266,14 +274,15 @@ class PaperExecutionCoordinator(BaseEngine):
             raise ValueError("Completed paper execution cannot be cancelled.")
         if receipt.status in {PaperExecutionStatus.CANCELLED, PaperExecutionStatus.REJECTED, PaperExecutionStatus.EXPIRED, PaperExecutionStatus.FAILED}:
             return receipt
+        updated_receipt = receipt
         for order in (receipt.entry_order, receipt.stop_order, receipt.target_order):
             if order is not None:
                 state = self._order_engine.get_order(order.order_id)
                 if state is not None and state.status not in {OrderStatus.CANCELLED, OrderStatus.FILLED, OrderStatus.REJECTED}:
-                    self._order_engine.apply(OrderCommand(OrderCommandType.CANCEL, order.order_id, timestamp))
-        if hasattr(self._paper_engine, "cancel_managed_order") and receipt.entry_order is not None:
-            self._paper_engine.cancel_managed_order(receipt.entry_order.order_id, timestamp=timestamp, reason=reason)
-        cancelled = replace(receipt, updated_at=timestamp, status=PaperExecutionStatus.CANCELLED, decision=PaperExecutionDecision.REJECTED, primary_reason=PaperExecutionReasonCode.CANCELLED)
+                    state = self._order_engine.apply(OrderCommand(OrderCommandType.CANCEL, order.order_id, timestamp))
+                    updated_receipt = self._swap_order_reference(updated_receipt, order.purpose, _order_reference(state, order.purpose, reduce_only=order.reduce_only))
+                self._cancel_managed_submission(order.order_id, timestamp, reason)
+        cancelled = replace(updated_receipt, updated_at=timestamp, status=PaperExecutionStatus.CANCELLED, decision=PaperExecutionDecision.REJECTED, primary_reason=PaperExecutionReasonCode.CANCELLED)
         self._store_terminal(cancelled)
         self._publish(events.PAPER_EXECUTION_CANCELLED, cancelled)
         self._publish(events.PAPER_EXECUTION_COORDINATOR_STATE_UPDATED, self.snapshot())
@@ -438,49 +447,49 @@ class PaperExecutionCoordinator(BaseEngine):
         if entry.filled_quantity > plan.entry_quantity:
             finding = self._finding(timestamp, PaperExecutionSeverity.ERROR, PaperExecutionReasonCode.INCONSISTENT_ORDER_STATE, "Filled quantity exceeds approved plan quantity.", "filled_quantity", entry.filled_quantity, plan.entry_quantity)
             return self._transition(receipt, timestamp, PaperExecutionStatus.FAILED, PaperExecutionDecision.INVALID, PaperExecutionReasonCode.INCONSISTENT_ORDER_STATE, finding)
-        stop_ref = receipt.stop_order
-        target_ref = receipt.target_order
-        order_delta = 0
-        paper_delta = 0
+        current = receipt
         for protective in (plan.stop_plan, plan.target_plan):
             if protective is None:
                 continue
             purpose = CoordinatedOrderPurpose.STOP_LOSS if protective.purpose is ProtectiveOrderPurpose.STOP_LOSS else CoordinatedOrderPurpose.TARGET
-            if purpose is CoordinatedOrderPurpose.STOP_LOSS and stop_ref is not None:
+            if purpose is CoordinatedOrderPurpose.STOP_LOSS and current.stop_order is not None:
                 continue
-            if purpose is CoordinatedOrderPurpose.TARGET and target_ref is not None:
+            if purpose is CoordinatedOrderPurpose.TARGET and current.target_order is not None:
                 continue
-            order = self._create_protective_order(plan, protective, purpose, entry.filled_quantity, timestamp)
+            try:
+                order = self._create_protective_order(plan, protective, purpose, entry.filled_quantity, timestamp)
+            except Exception as exc:
+                failed = self._protective_failure_receipt(current, timestamp, PaperExecutionReasonCode.PROTECTIVE_ORDER_CREATION_FAILED, f"{purpose.value} order creation failed: {_safe_message(exc)}")
+                self._store_terminal(failed)
+                return failed
             self._order_management_request_count += 1
-            order_delta += 1
-            self._paper_engine.submit_managed_order(order, execution_plan=plan, purpose=purpose.value)
-            self._paper_submission_count += 1
-            paper_delta += 1
             ref = _order_reference(order, purpose, reduce_only=True)
+            current = self._swap_order_reference(
+                replace(current, updated_at=timestamp, status=PaperExecutionStatus.ENTRY_FILLED, order_management_request_count=current.order_management_request_count + 1),
+                purpose,
+                ref,
+            )
+            self._store_active(current)
+            try:
+                paper_submission_id = self._paper_engine.submit_managed_order(order, execution_plan=plan, purpose=purpose.value)
+            except Exception as exc:
+                failed = self._protective_failure_receipt(current, timestamp, PaperExecutionReasonCode.PROTECTIVE_PAPER_SUBMISSION_FAILED, f"{purpose.value} paper submission failed: {_safe_message(exc)}")
+                self._store_terminal(failed)
+                return failed
+            self._paper_submission_count += 1
             if purpose is CoordinatedOrderPurpose.STOP_LOSS:
-                stop_ref = ref
+                current = replace(current, updated_at=timestamp, stop_paper_submission_id=paper_submission_id, paper_submission_count=current.paper_submission_count + 1)
             else:
-                target_ref = ref
-        status = PaperExecutionStatus.PROTECTIVE_ORDERS_CREATED if stop_ref is not None or target_ref is not None else PaperExecutionStatus.ENTRY_FILLED
-        return replace(
-            receipt,
-            updated_at=timestamp,
-            status=status,
-            stop_order=stop_ref,
-            target_order=target_ref,
-            order_management_request_count=receipt.order_management_request_count + order_delta,
-            paper_submission_count=receipt.paper_submission_count + paper_delta,
-        )
+                current = replace(current, updated_at=timestamp, target_paper_submission_id=paper_submission_id, paper_submission_count=current.paper_submission_count + 1)
+            self._store_active(current)
+        status = PaperExecutionStatus.PROTECTIVE_ORDERS_CREATED if current.stop_order is not None or current.target_order is not None else PaperExecutionStatus.ENTRY_FILLED
+        current = replace(current, updated_at=timestamp, status=status)
+        self._store_active(current)
+        return current
 
     def _create_protective_order(self, plan: TradeExecutionPlan, protective: ProtectiveOrderPlan, purpose: CoordinatedOrderPurpose, quantity: int, timestamp: datetime) -> OrderState:
         if protective.quantity != plan.entry_quantity or quantity <= 0 or not protective.reduce_only:
             raise ExpectedCoordinationError(PaperExecutionReasonCode.INVALID_PROTECTIVE_PLAN, "Protective plan is inconsistent.")
-        order_type = protective.order_type
-        limit = protective.limit_price
-        trigger = protective.trigger_price
-        if purpose is CoordinatedOrderPurpose.STOP_LOSS and order_type is OrderType.STOP_LIMIT and trigger is not None:
-            order_type = OrderType.STOP_MARKET
-            limit = None
         request = OrderRequest(
             client_order_id=f"paper-{purpose.value}:{plan.execution_plan_id}",
             symbol=plan.instrument,
@@ -488,13 +497,16 @@ class PaperExecutionCoordinator(BaseEngine):
             timeframe=self._timeframe,
             timestamp=timestamp,
             side=protective.side,
-            order_type=order_type,
+            order_type=protective.order_type,
             product_type=ProductType.INTRADAY,
             quantity=quantity,
-            limit_price=limit,
-            trigger_price=trigger,
+            limit_price=protective.limit_price,
+            trigger_price=protective.trigger_price,
         )
-        risk = self._risk_state_for_order(plan, protective.side, limit or trigger or plan.market_reference_price, timestamp)
+        risk_entry_price = protective.trigger_price if protective.order_type is OrderType.STOP_LIMIT else protective.limit_price
+        if risk_entry_price is None:
+            raise ExpectedCoordinationError(PaperExecutionReasonCode.INVALID_PROTECTIVE_PLAN, "Protective order price is missing.")
+        risk = self._risk_state_for_order(plan, protective.side, risk_entry_price, timestamp)
         snapshot = OrderSnapshot(plan.instrument, self._timeframe, timestamp, risk, request)
         return self._order_engine.create(snapshot)
 
@@ -512,6 +524,8 @@ class PaperExecutionCoordinator(BaseEngine):
             stop_order=None,
             target_order=None,
             paper_submission_id=paper_submission_id,
+            stop_paper_submission_id=None,
+            target_paper_submission_id=None,
             status=status,
             decision=decision,
             primary_reason=reason,
@@ -529,6 +543,81 @@ class PaperExecutionCoordinator(BaseEngine):
             correlation_id=request.correlation_id,
             session_id=request.session_id,
         )
+
+    def _on_protective_update(self, receipt: PaperExecutionReceipt, purpose: CoordinatedOrderPurpose, order_update: OrderState, timestamp: datetime) -> PaperExecutionReceipt:
+        existing = receipt.stop_order if purpose is CoordinatedOrderPurpose.STOP_LOSS else receipt.target_order
+        if existing is None:
+            return receipt
+        if order_update.filled_quantity > order_update.quantity:
+            failed = self._transition(receipt, timestamp, PaperExecutionStatus.FAILED, PaperExecutionDecision.INVALID, PaperExecutionReasonCode.INCONSISTENT_ORDER_STATE, self._finding(timestamp, PaperExecutionSeverity.ERROR, PaperExecutionReasonCode.INCONSISTENT_ORDER_STATE, "Protective fill quantity cannot exceed order quantity.", "filled_quantity", order_update.filled_quantity, order_update.quantity))
+            self._store_terminal(failed)
+            self._publish(events.PAPER_EXECUTION_FAILED, failed)
+            return failed
+        if order_update.filled_quantity < 0:
+            failed = self._transition(receipt, timestamp, PaperExecutionStatus.FAILED, PaperExecutionDecision.INVALID, PaperExecutionReasonCode.INCONSISTENT_ORDER_STATE, self._finding(timestamp, PaperExecutionSeverity.ERROR, PaperExecutionReasonCode.INCONSISTENT_ORDER_STATE, "Protective fill quantity cannot be negative.", "filled_quantity", order_update.filled_quantity, 0))
+            self._store_terminal(failed)
+            self._publish(events.PAPER_EXECUTION_FAILED, failed)
+            return failed
+        updated = self._swap_order_reference(receipt, purpose, _order_reference(order_update, purpose, reduce_only=True))
+        if order_update.status is OrderStatus.FILLED:
+            updated = self._cancel_opposite_protective(updated, purpose, timestamp)
+            completed = replace(updated, updated_at=timestamp, status=PaperExecutionStatus.COMPLETED, decision=PaperExecutionDecision.APPROVED, primary_reason=PaperExecutionReasonCode.COMPLETED, remaining_quantity=0)
+            self._store_terminal(completed)
+            self._publish(events.PAPER_EXECUTION_COMPLETED, completed)
+            return completed
+        if order_update.status is OrderStatus.CANCELLED:
+            updated = replace(updated, updated_at=timestamp)
+            self._store_active(updated)
+            self._publish(events.PAPER_EXECUTION_COORDINATOR_STATE_UPDATED, self.snapshot())
+            return updated
+        if order_update.status is OrderStatus.REJECTED:
+            failed = self._transition(updated, timestamp, PaperExecutionStatus.FAILED, PaperExecutionDecision.INVALID, PaperExecutionReasonCode.INCONSISTENT_ORDER_STATE, self._finding(timestamp, PaperExecutionSeverity.ERROR, PaperExecutionReasonCode.INCONSISTENT_ORDER_STATE, f"{purpose.value} order was rejected."))
+            self._store_terminal(failed)
+            self._publish(events.PAPER_EXECUTION_FAILED, failed)
+            return failed
+        updated = replace(updated, updated_at=timestamp, status=PaperExecutionStatus.ACTIVE)
+        self._store_active(updated)
+        self._publish(events.PAPER_EXECUTION_COORDINATOR_STATE_UPDATED, self.snapshot())
+        return updated
+
+    def _cancel_opposite_protective(self, receipt: PaperExecutionReceipt, filled_purpose: CoordinatedOrderPurpose, timestamp: datetime) -> PaperExecutionReceipt:
+        opposite = CoordinatedOrderPurpose.TARGET if filled_purpose is CoordinatedOrderPurpose.STOP_LOSS else CoordinatedOrderPurpose.STOP_LOSS
+        order = receipt.target_order if opposite is CoordinatedOrderPurpose.TARGET else receipt.stop_order
+        if order is None:
+            return receipt
+        state = self._order_engine.get_order(order.order_id)
+        updated = receipt
+        if state is not None and state.status not in {OrderStatus.CANCELLED, OrderStatus.FILLED, OrderStatus.REJECTED}:
+            state = self._order_engine.apply(OrderCommand(OrderCommandType.CANCEL, order.order_id, timestamp))
+            updated = self._swap_order_reference(updated, opposite, _order_reference(state, opposite, reduce_only=True))
+        self._cancel_managed_submission(order.order_id, timestamp, "opposite protective filled")
+        return updated
+
+    def _cancel_managed_submission(self, order_id: str, timestamp: datetime, reason: str) -> None:
+        if not hasattr(self._paper_engine, "managed_submission") or not hasattr(self._paper_engine, "cancel_managed_order"):
+            return
+        submission = self._paper_engine.managed_submission(order_id)
+        if submission is not None and submission.status != "CANCELLED":
+            self._paper_engine.cancel_managed_order(order_id, timestamp=timestamp, reason=reason)
+
+    def _swap_order_reference(self, receipt: PaperExecutionReceipt, purpose: CoordinatedOrderPurpose, reference: CoordinatedOrderReference) -> PaperExecutionReceipt:
+        if purpose is CoordinatedOrderPurpose.ENTRY:
+            return replace(receipt, entry_order=reference)
+        if purpose is CoordinatedOrderPurpose.STOP_LOSS:
+            return replace(receipt, stop_order=reference)
+        if purpose is CoordinatedOrderPurpose.TARGET:
+            return replace(receipt, target_order=reference)
+        raise ValueError("Unsupported coordinated order purpose.")
+
+    def _protective_failure_receipt(self, receipt: PaperExecutionReceipt, timestamp: datetime, reason: PaperExecutionReasonCode, message: str) -> PaperExecutionReceipt:
+        finding = self._finding(timestamp, PaperExecutionSeverity.ERROR, reason, message)
+        return self._transition(receipt, timestamp, PaperExecutionStatus.FAILED, PaperExecutionDecision.INVALID, reason, finding)
+
+    def _purpose_for_order(self, receipt: PaperExecutionReceipt, order_id: str) -> CoordinatedOrderPurpose | None:
+        for order in (receipt.entry_order, receipt.stop_order, receipt.target_order):
+            if order is not None and order.order_id == order_id:
+                return order.purpose
+        return None
 
     def _rejected_receipt(self, request, policy, reason, message, field_name=None, observed=None, expected=None, *, decision=PaperExecutionDecision.REJECTED, status=PaperExecutionStatus.REJECTED, severity=PaperExecutionSeverity.ERROR):
         finding = self._finding(request.timestamp, severity, reason, message, field_name, observed, expected)
