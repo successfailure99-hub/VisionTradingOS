@@ -15,6 +15,7 @@ from engines.market_data.market_data_engine import MarketDataEngine
 from engines.order_management.models import OrderCommand, OrderRequest, OrderState
 from engines.position.models import PositionFill, PositionMark
 from engines.risk.models import AccountRiskState, RiskPolicy, TradeRiskPlan
+from engines.trade_execution_policy.models import ExecutionRequest, TradeExecutionPlan
 from engines.performance_analytics.engine import PerformanceAnalyticsEngine
 from engines.deterministic_backtest.engine import DeterministicBacktestEngine
 from engines.historical_market_replay import ReplayConfiguration, ReplayMode
@@ -202,6 +203,14 @@ class ApplicationOrchestrator:
     def create_order(self, instrument: str | RuntimeInstrument, request: OrderRequest) -> OrderState:
         self._require_running()
         return self.get_runtime(instrument).create_order(request)
+
+    def evaluate_execution_policy(self, instrument: str | RuntimeInstrument, request: ExecutionRequest) -> TradeExecutionPlan:
+        self._require_running()
+        return self.get_runtime(instrument).evaluate_execution_policy(request)
+
+    def create_order_from_execution_plan(self, instrument: str | RuntimeInstrument, plan: TradeExecutionPlan) -> OrderState | None:
+        self._require_running()
+        return self.get_runtime(instrument).create_order_from_execution_plan(plan)
 
     def submit_order(self, order: OrderState):
         self._require_running()
