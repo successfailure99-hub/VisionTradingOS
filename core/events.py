@@ -148,6 +148,18 @@ EXECUTION_RECONCILIATION_INVALID = "execution_reconciliation_invalid"
 EXECUTION_RECONCILIATION_FAILED = "execution_reconciliation_failed"
 
 # ==================================================
+# Shadow Trading Session Events
+# ==================================================
+
+SHADOW_SESSION_STATE_UPDATED = "shadow_session_state_updated"
+SHADOW_SESSION_STARTED = "shadow_session_started"
+SHADOW_SESSION_OBSERVATION_RECORDED = "shadow_session_observation_recorded"
+SHADOW_SESSION_COMPLETED = "shadow_session_completed"
+SHADOW_SESSION_WARNING = "shadow_session_warning"
+SHADOW_SESSION_DEGRADED = "shadow_session_degraded"
+SHADOW_SESSION_FAILED = "shadow_session_failed"
+
+# ==================================================
 # Order Management Events
 # ==================================================
 
