@@ -160,6 +160,18 @@ SHADOW_SESSION_DEGRADED = "shadow_session_degraded"
 SHADOW_SESSION_FAILED = "shadow_session_failed"
 
 # ==================================================
+# Zerodha Read-Only Connectivity Events
+# ==================================================
+
+ZERODHA_CONNECTION_STATE_UPDATED = "zerodha_connection_state_updated"
+ZERODHA_CONNECTED = "zerodha_connected"
+ZERODHA_DISCONNECTED = "zerodha_disconnected"
+ZERODHA_AUTHENTICATION_FAILED = "zerodha_authentication_failed"
+ZERODHA_SUBSCRIPTION_UPDATED = "zerodha_subscription_updated"
+ZERODHA_TICK_REJECTED = "zerodha_tick_rejected"
+ZERODHA_CONNECTION_FAILED = "zerodha_connection_failed"
+
+# ==================================================
 # Order Management Events
 # ==================================================
 
