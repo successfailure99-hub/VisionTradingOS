@@ -5,6 +5,7 @@ Application Orchestrator V1.
 from application.enums import ExecutionSafetyMode, RuntimeInstrument, RuntimeStatus
 from application.models import OrchestratorSnapshot, RuntimeConfiguration, RuntimeSnapshot
 from application.symbol_runtime import SymbolRuntime
+from application.live_shadow_session import LiveShadowMarketSessionCoordinator, LiveShadowSessionRequest
 from adapters.zerodha import ZerodhaCredentials, ZerodhaReadOnlyAdapter
 from brokers.zerodha.adapter import ZerodhaBrokerAdapter
 from brokers.zerodha.enums import BrokerExecutionMode
@@ -91,7 +92,8 @@ class ApplicationOrchestrator:
             instrument: SymbolRuntime(event_bus, self._configuration, instrument)
             for instrument in self._configuration.instruments
         }
-        self.zerodha_adapter = zerodha_adapter or ZerodhaReadOnlyAdapter(event_bus, tick_consumer=self.process_tick)
+        self.live_shadow_session_coordinator = LiveShadowMarketSessionCoordinator(event_bus, orchestrator=self)
+        self.zerodha_adapter = zerodha_adapter or ZerodhaReadOnlyAdapter(event_bus, tick_consumer=self.process_live_zerodha_tick)
         self.deterministic_backtest_engine = DeterministicBacktestEngine(
             event_bus,
             configuration=self._configuration.deterministic_backtest_configuration,
@@ -130,14 +132,23 @@ class ApplicationOrchestrator:
         self._status = RuntimeStatus.STOPPED
         return self.snapshot()
 
-    def process_tick(self, tick: Tick) -> RuntimeSnapshot:
+    def process_tick(self, tick: Tick, *, observe_shadow: bool = True) -> RuntimeSnapshot:
+        snapshot, _, _ = self._process_tick_with_acceptance(tick, observe_shadow=observe_shadow)
+        return snapshot
+
+    def process_live_zerodha_tick(self, tick: Tick) -> RuntimeSnapshot:
+        snapshot, accepted, authoritative_tick = self._process_tick_with_acceptance(tick, observe_shadow=False)
+        self.live_shadow_session_coordinator.observe_tick(authoritative_tick, accepted=accepted)
+        return snapshot
+
+    def _process_tick_with_acceptance(self, tick: Tick, *, observe_shadow: bool) -> tuple[RuntimeSnapshot, bool, Tick]:
         self._require_running()
         runtime = self._runtime_for_core_instrument(tick.symbol)
-        accepted = self.market_data_engine.on_tick(tick)
-        if accepted is None:
-            return runtime.snapshot(self._latest_journal_record_for(runtime.instrument))
-        runtime.process_tick(tick)
-        return runtime.snapshot(self._latest_journal_record_for(runtime.instrument))
+        accepted_tick = self.market_data_engine.on_tick(tick)
+        if accepted_tick is None:
+            return runtime.snapshot(self._latest_journal_record_for(runtime.instrument)), False, tick
+        runtime.process_tick(accepted_tick, observe_shadow=observe_shadow)
+        return runtime.snapshot(self._latest_journal_record_for(runtime.instrument)), True, accepted_tick
 
     def process_daily_ohlc(self, instrument: str | RuntimeInstrument, daily_ohlc: DailyOHLC):
         self._require_running()
@@ -277,6 +288,27 @@ class ApplicationOrchestrator:
     def reset_zerodha_adapter(self):
         return self.zerodha_adapter.reset()
 
+    def start_live_shadow_coordinator(self):
+        return self.live_shadow_session_coordinator.start()
+
+    def start_live_shadow_session(self, request: LiveShadowSessionRequest):
+        return self.live_shadow_session_coordinator.start_session(request)
+
+    def observe_live_shadow_zerodha_state(self):
+        return self.live_shadow_session_coordinator.observe_zerodha_state()
+
+    def stop_live_shadow_session(self, *, timestamp, reason: str = "session_completed"):
+        return self.live_shadow_session_coordinator.stop_session(timestamp=timestamp, reason=reason)
+
+    def get_live_shadow_snapshot(self):
+        return self.live_shadow_session_coordinator.snapshot()
+
+    def get_live_shadow_report(self, session_id: str):
+        return self.live_shadow_session_coordinator.get_report(session_id)
+
+    def reset_live_shadow_coordinator(self):
+        return self.live_shadow_session_coordinator.reset()
+
     def submit_order(self, order: OrderState):
         self._require_running()
         if self._configuration.safety_mode is not ExecutionSafetyMode.DRY_RUN:
@@ -321,6 +353,7 @@ class ApplicationOrchestrator:
         self.historical_replay_engine.reset(clear_persistent_data=False)
         self.deterministic_backtest_engine.reset()
         self.zerodha_adapter.reset()
+        self.live_shadow_session_coordinator.reset()
         for runtime in self._runtimes.values():
             runtime.reset()
             if previous_status is RuntimeStatus.RUNNING:
@@ -391,6 +424,7 @@ class ApplicationOrchestrator:
             historical_replay=self.historical_replay_engine.snapshot(),
             deterministic_backtest=self.deterministic_backtest_engine.snapshot(),
             zerodha_connection=self.zerodha_adapter.snapshot(),
+            live_shadow_session=self.live_shadow_session_coordinator.snapshot(),
         )
 
     def _runtime_for_core_instrument(self, instrument: Instrument) -> SymbolRuntime:

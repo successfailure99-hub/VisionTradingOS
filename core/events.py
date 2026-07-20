@@ -172,6 +172,18 @@ ZERODHA_TICK_REJECTED = "zerodha_tick_rejected"
 ZERODHA_CONNECTION_FAILED = "zerodha_connection_failed"
 
 # ==================================================
+# Live Shadow Market Session Events
+# ==================================================
+
+LIVE_SHADOW_SESSION_STATE_UPDATED = "live_shadow_session_state_updated"
+LIVE_SHADOW_SESSION_STARTED = "live_shadow_session_started"
+LIVE_SHADOW_TICK_OBSERVED = "live_shadow_tick_observed"
+LIVE_SHADOW_SESSION_WARNING = "live_shadow_session_warning"
+LIVE_SHADOW_SESSION_DEGRADED = "live_shadow_session_degraded"
+LIVE_SHADOW_SESSION_FAILED = "live_shadow_session_failed"
+LIVE_SHADOW_SESSION_COMPLETED = "live_shadow_session_completed"
+
+# ==================================================
 # Order Management Events
 # ==================================================
 

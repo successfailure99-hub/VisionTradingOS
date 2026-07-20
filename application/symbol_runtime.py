@@ -178,7 +178,7 @@ class SymbolRuntime:
     def mark_error(self) -> None:
         self._status = RuntimeStatus.ERROR
 
-    def process_tick(self, tick: Tick) -> RuntimeSnapshot:
+    def process_tick(self, tick: Tick, *, observe_shadow: bool = True) -> RuntimeSnapshot:
         self._require_running()
         if tick.symbol is not self._core_instrument:
             raise ValueError("Tick instrument does not match SymbolRuntime.")
@@ -211,7 +211,8 @@ class SymbolRuntime:
         self._updated_at = tick.timestamp
         self._refresh_dashboard_analysis(tick.timestamp, tick.last_price)
         self._process_paper_tick(tick)
-        self.shadow_trading_session_engine.observe_market_event("tick_processed", tick, timestamp=tick.timestamp)
+        if observe_shadow:
+            self.shadow_trading_session_engine.observe_market_event("tick_processed", tick, timestamp=tick.timestamp)
         return self.snapshot()
 
     def process_vwap_tick(
