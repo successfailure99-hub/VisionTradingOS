@@ -33,6 +33,7 @@ from engines.risk.models import RiskDecisionRecord
 from engines.strategy.enums import TradeDirection
 from engines.trade_execution_policy import ExecutionMode, ExecutionPolicy, ExecutionRequest, TradeExecutionPolicyEngine
 from engines.trade_execution_policy.enums import ExecutionPlanStatus
+from engines.execution_reconciliation.engine import _status_for
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -414,7 +415,7 @@ def test_expected_inconsistencies_do_not_fail_lifecycle_and_valid_reconciliation
     _, _, _, _, engine, plan, receipt = execute_entry()
     missing = replace(receipt, entry_order=replace(receipt.entry_order, order_id="missing-order"))
     report = engine.reconcile(request_for(plan, missing, request_id="missing-order"))
-    assert report.reconciliation_status is ReconciliationStatus.INCOMPLETE
+    assert report.reconciliation_status is ReconciliationStatus.INCONSISTENT
     assert engine.snapshot().lifecycle_state is ReconciliationLifecycleState.ACTIVE
     ok = engine.reconcile(request_for(plan, receipt, request_id="after-missing"))
     assert ok.reconciliation_status is ReconciliationStatus.CONSISTENT
@@ -440,8 +441,167 @@ def test_one_runtime_inconsistency_does_not_affect_another_runtime():
     good = execute_entry()
     bad_report = bad[4].reconcile(request_for(bad[5], replace(bad[6], entry_order=replace(bad[6].entry_order, order_id="missing")), request_id="bad-runtime"))
     good_report = good[4].reconcile(request_for(good[5], good[6], request_id="good-runtime"))
-    assert bad_report.reconciliation_status is ReconciliationStatus.INCOMPLETE
+    assert bad_report.reconciliation_status is ReconciliationStatus.INCONSISTENT
     assert good_report.reconciliation_status is ReconciliationStatus.CONSISTENT
+
+
+def test_missing_receipt_report_is_finalized_stored_published_and_zero_read():
+    bus, _, _, _, _, engine = runtime_parts()
+    seen = []
+    for name in (events.EXECUTION_RECONCILIATION_COMPLETED, events.EXECUTION_RECONCILIATION_INCONSISTENT, events.EXECUTION_RECONCILIATION_STATE_UPDATED):
+        bus.subscribe(name, lambda payload, event_name=name: seen.append(event_name))
+    engine.start()
+    before = engine.snapshot()
+    report = engine.reconcile_receipt("missing-receipt", timestamp=TS + timedelta(minutes=1))
+    snap = engine.snapshot()
+    assert engine.get_report(report.report_id) == report
+    assert engine.get_report_for_request(f"reconcile-receipt:missing-receipt:{(TS + timedelta(minutes=1)).isoformat()}") == report
+    assert snap.last_report == report
+    assert snap.reconciliation_count == before.reconciliation_count + 1
+    assert snap.incomplete_count == before.incomplete_count + 1
+    assert report.reconciliation_status is ReconciliationStatus.INCOMPLETE
+    assert report.order_management_read_count == 0
+    assert report.paper_trading_read_count == 0
+    assert report.position_read_count == 0
+    assert report.mutation_calls == 0
+    assert report.broker_order_calls == 0
+    assert events.EXECUTION_RECONCILIATION_COMPLETED in seen
+    assert events.EXECUTION_RECONCILIATION_INCONSISTENT in seen
+    assert events.EXECUTION_RECONCILIATION_STATE_UPDATED in seen
+
+
+def test_missing_plan_report_is_finalized_stored_and_published():
+    bus, _, _, _, coordinator, engine = runtime_parts()
+    seen = []
+    bus.subscribe(events.EXECUTION_RECONCILIATION_COMPLETED, lambda payload: seen.append(payload.report_id))
+    engine.start()
+    plan = approved_plan()
+    receipt = coordinator.execute(paper_request(plan))
+    coordinator._latest_plan_by_receipt.clear()
+    report = engine.reconcile_receipt(receipt.receipt_id, timestamp=TS + timedelta(minutes=2))
+    assert engine.get_report(report.report_id) == report
+    assert engine.snapshot().last_report == report
+    assert report.reconciliation_status is ReconciliationStatus.INCOMPLETE
+    assert report.primary_reason is ReconciliationReasonCode.INVALID_EXECUTION_PLAN
+    assert seen == [report.report_id]
+
+
+def test_blocked_reports_are_finalized_published_stored_and_zero_read():
+    bus, _, _, _, _, engine = runtime_parts()
+    plan = approved_plan()
+    receipt = engine._coordinator.execute(paper_request(plan))
+    seen = []
+    for name in (events.EXECUTION_RECONCILIATION_COMPLETED, events.EXECUTION_RECONCILIATION_INVALID, events.EXECUTION_RECONCILIATION_STATE_UPDATED):
+        bus.subscribe(name, lambda payload, event_name=name: seen.append(event_name))
+    engine.start()
+    engine.stop()
+    stopped = engine.reconcile(request_for(plan, receipt, request_id="stopped-finalized"))
+    assert engine.get_report(stopped.report_id) == stopped
+    assert engine.snapshot().last_report == stopped
+    assert stopped.order_management_read_count == stopped.paper_trading_read_count == stopped.position_read_count == 0
+    assert stopped.reconciliation_status is ReconciliationStatus.INVALID
+    assert events.EXECUTION_RECONCILIATION_INVALID in seen
+
+    _, _, _, _, _, locked_engine = runtime_parts()
+    locked_engine.start()
+    locked_engine._state = ReconciliationLifecycleState.LOCKED
+    locked = locked_engine.reconcile(request_for(plan, receipt, request_id="locked-finalized"))
+    assert locked_engine.get_report(locked.report_id) == locked
+    assert locked.order_management_read_count == locked.paper_trading_read_count == locked.position_read_count == 0
+
+    _, _, _, _, _, disabled_engine = runtime_parts()
+    disabled = disabled_engine.reconcile(request_for(plan, receipt, request_id="disabled-finalized"), policy=ExecutionReconciliationPolicy(enabled=False))
+    assert disabled_engine.get_report(disabled.report_id) == disabled
+    assert disabled.order_management_read_count == disabled.paper_trading_read_count == disabled.position_read_count == 0
+
+
+def test_status_precedence_for_contradictions_missing_state_warnings_and_failure():
+    _, _, _, _, engine, plan, receipt = execute_entry()
+    fingerprint = engine.reconcile(request_for(plan, replace(receipt, execution_plan_fingerprint="x"), request_id="fp-only"))
+    assert fingerprint.reconciliation_status is ReconciliationStatus.INCONSISTENT
+    both = engine.reconcile(request_for(plan, replace(receipt, execution_plan_fingerprint="x", entry_order=replace(receipt.entry_order, order_id="missing")), request_id="fp-missing"))
+    assert both.reconciliation_status is ReconciliationStatus.INCONSISTENT
+    plan_id = engine.reconcile(request_for(plan, replace(receipt, execution_plan_id="other", paper_submission_id="missing-submission"), request_id="planid-missing"))
+    assert plan_id.reconciliation_status is ReconciliationStatus.INCONSISTENT
+
+    _, _, _, _, _, empty_engine = runtime_parts()
+    missing_only = empty_engine.reconcile(request_for(plan, replace(receipt, entry_order=None, paper_submission_id=None), request_id="pure-missing-entry"))
+    assert missing_only.reconciliation_status is ReconciliationStatus.INCOMPLETE
+    missing_submission = engine.reconcile(request_for(plan, replace(receipt, paper_submission_id="missing-submission"), request_id="pure-missing-submission"))
+    assert missing_submission.reconciliation_status is ReconciliationStatus.INCOMPLETE
+
+    warning = engine._finding(TS, ReconciliationSeverity.WARNING, ReconciliationReasonCode.CONSISTENT, "warning only", ReconciliationBoundary.CROSS_BOUNDARY)
+    assert _status_for((warning,)) is ReconciliationStatus.CONSISTENT_WITH_WARNINGS
+
+
+def test_report_read_counts_are_per_operation_and_snapshot_counts_are_cumulative():
+    _, _, _, _, engine, plan, receipt = execute_entry()
+    first = engine.reconcile(request_for(plan, receipt, request_id="read-one"))
+    assert first.order_management_read_count == 2
+    assert first.paper_trading_read_count == 2
+    assert first.position_read_count == 1
+    snap_after_first = engine.snapshot()
+    second = engine.reconcile(request_for(plan, receipt, request_id="read-two", entry_order=engine._order_engine.get_order(receipt.entry_order.order_id), entry_managed_submission=engine._paper_engine.managed_submission(receipt.paper_submission_id), position=None))
+    assert second is first
+    assert second.order_management_read_count == 2
+    assert second.paper_trading_read_count == 2
+    assert second.position_read_count == 1
+    snap_after_second = engine.snapshot()
+    assert snap_after_second.order_management_read_count > snap_after_first.order_management_read_count
+    assert snap_after_second.paper_trading_read_count > snap_after_first.paper_trading_read_count
+    assert snap_after_second.position_read_count > snap_after_first.position_read_count
+
+
+def test_idempotency_finalization_retry_conflict_and_same_state_reuse():
+    bus, _, _, _, _, engine = runtime_parts()
+    completion_events = []
+    bus.subscribe(events.EXECUTION_RECONCILIATION_COMPLETED, lambda payload: completion_events.append(payload.report_id))
+    engine.start()
+    plan = approved_plan()
+    receipt = engine._coordinator.execute(paper_request(plan))
+    request = request_for(plan, receipt, request_id="idem")
+    first = engine.reconcile(request)
+    count = engine.snapshot().reconciliation_count
+    findings_count = len(engine.snapshot().findings)
+    reads = (engine.snapshot().order_management_read_count, engine.snapshot().paper_trading_read_count, engine.snapshot().position_read_count)
+    events_count = len(completion_events)
+    retry = engine.reconcile(request)
+    assert retry is first
+    assert engine.snapshot().reconciliation_count == count
+    assert len(engine.snapshot().findings) == findings_count
+    assert (engine.snapshot().order_management_read_count, engine.snapshot().paper_trading_read_count, engine.snapshot().position_read_count) == reads
+    assert len(completion_events) == events_count
+
+    conflict = engine.reconcile(request_for(plan, receipt, request_id="idem", correlation_id="changed"))
+    assert conflict.reconciliation_status is ReconciliationStatus.INVALID
+    assert engine.get_report_for_request("idem") is first
+    conflict_count = engine.snapshot().reconciliation_count
+    conflict_retry = engine.reconcile(request_for(plan, receipt, request_id="idem", correlation_id="changed"))
+    assert conflict_retry is conflict
+    assert engine.snapshot().reconciliation_count == conflict_count
+
+    same_state = engine.reconcile(request_for(plan, receipt, request_id="same-state"))
+    assert same_state is first
+    assert same_state.input_fingerprint == first.input_fingerprint
+    assert engine.snapshot().reconciliation_count == conflict_count
+
+
+def test_report_lookup_is_read_only_and_silent():
+    bus, _, _, _, _, engine = runtime_parts()
+    seen = []
+    bus.subscribe(events.EXECUTION_RECONCILIATION_COMPLETED, lambda payload: seen.append(payload.report_id))
+    engine.start()
+    plan = approved_plan()
+    receipt = engine._coordinator.execute(paper_request(plan))
+    report = engine.reconcile(request_for(plan, receipt, request_id="lookup"))
+    reads = (engine.snapshot().order_management_read_count, engine.snapshot().paper_trading_read_count, engine.snapshot().position_read_count)
+    events_count = len(seen)
+    assert engine.get_report(report.report_id) is report
+    assert engine.get_report_for_request("lookup") is report
+    assert engine.get_report("unknown") is None
+    assert engine.get_report_for_request("unknown") is None
+    assert (engine.snapshot().order_management_read_count, engine.snapshot().paper_trading_read_count, engine.snapshot().position_read_count) == reads
+    assert len(seen) == events_count
 
 
 def test_runtime_and_orchestrator_expose_explicit_reconciliation_without_autonomous_loop():

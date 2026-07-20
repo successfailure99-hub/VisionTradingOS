@@ -236,6 +236,7 @@ class ExecutionReconciliationSnapshot:
     consistent_count: int
     warning_count: int
     inconsistent_count: int
+    incomplete_count: int
     invalid_count: int
     failed_count: int
     active_report_ids: tuple[str, ...]
@@ -253,7 +254,7 @@ class ExecutionReconciliationSnapshot:
             raise TypeError("lifecycle_state must be ReconciliationLifecycleState")
         if self.last_report is not None and not isinstance(self.last_report, ExecutionReconciliationReport):
             raise TypeError("last_report must be ExecutionReconciliationReport or None")
-        for name in ("reconciliation_count", "consistent_count", "warning_count", "inconsistent_count", "invalid_count", "failed_count", "order_management_read_count", "paper_trading_read_count", "position_read_count", "broker_order_calls", "mutation_calls"):
+        for name in ("reconciliation_count", "consistent_count", "warning_count", "inconsistent_count", "incomplete_count", "invalid_count", "failed_count", "order_management_read_count", "paper_trading_read_count", "position_read_count", "broker_order_calls", "mutation_calls"):
             object.__setattr__(self, name, _non_negative_int(getattr(self, name), name))
         object.__setattr__(self, "active_report_ids", tuple(_text(item, "active_report_id") for item in self.active_report_ids))
         object.__setattr__(self, "findings", tuple(self.findings))

@@ -140,6 +140,7 @@ class ExecutionReconciliationEngine(BaseEngine):
         self._consistent_count = 0
         self._warning_count = 0
         self._inconsistent_count = 0
+        self._incomplete_count = 0
         self._invalid_count = 0
         self._failed_count = 0
         self._order_reads = 0
@@ -171,41 +172,60 @@ class ExecutionReconciliationEngine(BaseEngine):
         self._publish(events.EXECUTION_RECONCILIATION_STATE_UPDATED, snapshot)
         return snapshot
 
+    def get_report(self, report_id: str) -> ExecutionReconciliationReport | None:
+        if not isinstance(report_id, str):
+            return None
+        return self._reports.get(report_id.strip())
+
+    def get_report_for_request(self, request_id: str) -> ExecutionReconciliationReport | None:
+        if not isinstance(request_id, str):
+            return None
+        report_id = self._request_reports.get(request_id.strip())
+        return None if report_id is None else self._reports.get(report_id)
+
     def reconcile_receipt(self, receipt_id: str, *, timestamp: datetime) -> ExecutionReconciliationReport:
         _aware(timestamp, "timestamp")
         rid = _text(receipt_id, "receipt_id")
+        request_id = f"reconcile-receipt:{rid}:{timestamp.isoformat()}"
+        existing = self.get_report_for_request(request_id)
+        if existing is not None:
+            return existing
         receipt = self._lookup_receipt(rid)
         if receipt is None:
-            return self._minimal_report(
+            report = self._minimal_report(
                 timestamp,
                 instrument=self._instrument,
                 plan_id="-",
                 plan_fingerprint="-",
                 receipt_id=rid,
                 receipt_status="-",
-                request_fingerprint=f"missing:{rid}",
+                request_fingerprint=request_id,
                 reason=ReconciliationReasonCode.RECEIPT_NOT_FOUND,
                 message="Paper execution receipt was not found.",
                 boundary=ReconciliationBoundary.COORDINATOR_RECEIPT,
                 status=ReconciliationStatus.INCOMPLETE,
+                input_fingerprint=f"missing-receipt:{rid}",
             )
+            return self._finalize_report(report, request_id=request_id, request_fingerprint=report.request_fingerprint, store_idempotency=True)
         plan = self._lookup_plan(receipt.execution_plan_id)
         if plan is None:
-            return self._minimal_report(
+            report = self._minimal_report(
                 timestamp,
                 instrument=receipt.instrument,
                 plan_id=receipt.execution_plan_id,
                 plan_fingerprint=receipt.execution_plan_fingerprint,
                 receipt_id=receipt.receipt_id,
                 receipt_status=receipt.status.value,
-                request_fingerprint=f"missing-plan:{receipt.receipt_id}",
+                request_fingerprint=request_id,
                 reason=ReconciliationReasonCode.INVALID_EXECUTION_PLAN,
                 message="Execution plan was not available for receipt reconciliation.",
                 boundary=ReconciliationBoundary.EXECUTION_PLAN,
                 status=ReconciliationStatus.INCOMPLETE,
+                input_fingerprint=f"missing-plan:{receipt.receipt_id}:{receipt.execution_plan_id}",
             )
+            return self._finalize_report(report, request_id=request_id, request_fingerprint=report.request_fingerprint, store_idempotency=True)
         request = ExecutionReconciliationRequest(
-            request_id=f"reconcile:{receipt.receipt_id}",
+            request_id=request_id,
             timestamp=timestamp,
             instrument=receipt.instrument,
             execution_plan=plan,
@@ -225,31 +245,38 @@ class ExecutionReconciliationEngine(BaseEngine):
         active_policy = policy or self._policy
         if not isinstance(active_policy, ExecutionReconciliationPolicy):
             raise TypeError("policy must be ExecutionReconciliationPolicy")
+        request_fp = request.fingerprint()
+        existing_fp = self._request_fingerprints.get(request.request_id)
+        if existing_fp is not None and existing_fp == request_fp:
+            return self._reports[self._request_reports[request.request_id]]
+        if existing_fp is not None and existing_fp != request_fp:
+            conflict = self._duplicate_conflict_report(request, request_fp, existing_fp)
+            existing_conflict = self._input_reports.get(conflict.input_fingerprint)
+            if existing_conflict is not None:
+                return self._reports[existing_conflict]
+            return self._finalize_report(conflict, request_id=None, request_fingerprint=None, store_idempotency=True)
         if self._state is ReconciliationLifecycleState.STOPPED:
-            return self._blocked_report(request, ReconciliationReasonCode.ENGINE_STOPPED, "Execution reconciliation engine is stopped.")
+            report = self._blocked_report(request, ReconciliationReasonCode.ENGINE_STOPPED, "Execution reconciliation engine is stopped.")
+            return self._finalize_report(report, request_id=request.request_id, request_fingerprint=request_fp, store_idempotency=True)
         if self._state is ReconciliationLifecycleState.LOCKED or not active_policy.enabled:
-            return self._blocked_report(request, ReconciliationReasonCode.ENGINE_LOCKED, "Execution reconciliation engine is locked.")
+            report = self._blocked_report(request, ReconciliationReasonCode.ENGINE_LOCKED, "Execution reconciliation engine is locked.")
+            return self._finalize_report(report, request_id=request.request_id, request_fingerprint=request_fp, store_idempotency=True)
         if self._state is ReconciliationLifecycleState.CREATED:
             self._state = ReconciliationLifecycleState.READY
 
-        request_fp = request.fingerprint()
-        existing_fp = self._request_fingerprints.get(request.request_id)
-        if existing_fp is not None and existing_fp != request_fp:
-            return self._duplicate_conflict_report(request, request_fp, existing_fp)
-        existing_report_id = self._request_reports.get(request.request_id)
-        if existing_report_id is not None:
-            return self._reports[existing_report_id]
-
         self._publish(events.EXECUTION_RECONCILIATION_STARTED, request)
+        read_baseline = self._read_baseline()
         try:
-            report = self._reconcile(request, active_policy, request_fp)
+            report = self._reconcile(request, active_policy, request_fp, read_baseline)
         except Exception as exc:
             self._state = ReconciliationLifecycleState.FAILED
-            report = self._failed_report(request, request_fp, exc)
+            report = self._failed_report(request, request_fp, exc, read_baseline)
 
-        self._store_report(request, report, request_fp)
-        self._publish_report(report)
-        return report
+        if report.report_id in self._reports:
+            self._request_fingerprints.setdefault(request.request_id, request_fp)
+            self._request_reports.setdefault(request.request_id, report.report_id)
+            return report
+        return self._finalize_report(report, request_id=request.request_id, request_fingerprint=request_fp, store_idempotency=True)
 
     def snapshot(self) -> ExecutionReconciliationSnapshot:
         return ExecutionReconciliationSnapshot(
@@ -260,6 +287,7 @@ class ExecutionReconciliationEngine(BaseEngine):
             consistent_count=self._consistent_count,
             warning_count=self._warning_count,
             inconsistent_count=self._inconsistent_count,
+            incomplete_count=self._incomplete_count,
             invalid_count=self._invalid_count,
             failed_count=self._failed_count,
             active_report_ids=tuple(sorted(self._reports)),
@@ -271,7 +299,7 @@ class ExecutionReconciliationEngine(BaseEngine):
             mutation_calls=0,
         )
 
-    def _reconcile(self, request: ExecutionReconciliationRequest, policy: ExecutionReconciliationPolicy, request_fp: str) -> ExecutionReconciliationReport:
+    def _reconcile(self, request: ExecutionReconciliationRequest, policy: ExecutionReconciliationPolicy, request_fp: str, read_baseline) -> ExecutionReconciliationReport:
         plan = request.execution_plan
         receipt = request.execution_receipt
         findings: list[ReconciliationFinding] = []
@@ -367,9 +395,9 @@ class ExecutionReconciliationEngine(BaseEngine):
             checked_boundaries=tuple(sorted(checked, key=lambda item: item.value)),
             request_fingerprint=request_fp,
             input_fingerprint=input_fp,
-            order_management_read_count=self._order_reads,
-            paper_trading_read_count=self._paper_reads,
-            position_read_count=self._position_reads,
+            order_management_read_count=self._read_delta(read_baseline)[0],
+            paper_trading_read_count=self._read_delta(read_baseline)[1],
+            position_read_count=self._read_delta(read_baseline)[2],
             broker_order_calls=0,
             mutation_calls=0,
             risk_decision_id=plan.risk_decision_id,
@@ -577,11 +605,35 @@ class ExecutionReconciliationEngine(BaseEngine):
             return None
         return self._coordinator.get_receipt_for_plan(plan_id)
 
-    def _store_report(self, request, report, request_fp) -> None:
+    def _read_baseline(self) -> tuple[int, int, int]:
+        return self._order_reads, self._paper_reads, self._position_reads
+
+    def _read_delta(self, baseline: tuple[int, int, int]) -> tuple[int, int, int]:
+        return self._order_reads - baseline[0], self._paper_reads - baseline[1], self._position_reads - baseline[2]
+
+    def _finalize_report(
+        self,
+        report: ExecutionReconciliationReport,
+        *,
+        request_id: str | None,
+        request_fingerprint: str | None,
+        store_idempotency: bool,
+    ) -> ExecutionReconciliationReport:
+        if not isinstance(report, ExecutionReconciliationReport):
+            raise TypeError("report must be ExecutionReconciliationReport")
+        if report.report_id in self._reports:
+            return self._reports[report.report_id]
+        self._store_report(report, request_id=request_id, request_fingerprint=request_fingerprint, store_idempotency=store_idempotency)
+        self._publish_report(report)
+        return report
+
+    def _store_report(self, report, *, request_id, request_fingerprint, store_idempotency) -> None:
         self._reports[report.report_id] = report
-        self._request_fingerprints[request.request_id] = request_fp
-        self._request_reports[request.request_id] = report.report_id
-        self._input_reports[report.input_fingerprint] = report.report_id
+        if store_idempotency:
+            self._input_reports.setdefault(report.input_fingerprint, report.report_id)
+        if request_id is not None and request_fingerprint is not None:
+            self._request_fingerprints.setdefault(request_id, request_fingerprint)
+            self._request_reports.setdefault(request_id, report.report_id)
         self._last_report = report
         self._data = report
         self._reconciliation_count += 1
@@ -589,8 +641,10 @@ class ExecutionReconciliationEngine(BaseEngine):
             self._consistent_count += 1
         elif report.reconciliation_status is ReconciliationStatus.CONSISTENT_WITH_WARNINGS:
             self._warning_count += 1
-        elif report.reconciliation_status in {ReconciliationStatus.INCONSISTENT, ReconciliationStatus.INCOMPLETE}:
+        elif report.reconciliation_status is ReconciliationStatus.INCONSISTENT:
             self._inconsistent_count += 1
+        elif report.reconciliation_status is ReconciliationStatus.INCOMPLETE:
+            self._incomplete_count += 1
         elif report.reconciliation_status is ReconciliationStatus.INVALID:
             self._invalid_count += 1
         elif report.reconciliation_status is ReconciliationStatus.FAILED:
@@ -614,7 +668,7 @@ class ExecutionReconciliationEngine(BaseEngine):
             expected=existing_fp,
         )
 
-    def _failed_report(self, request, request_fp, exc) -> ExecutionReconciliationReport:
+    def _failed_report(self, request, request_fp, exc, read_baseline) -> ExecutionReconciliationReport:
         return self._minimal_request_report(
             request,
             ReconciliationReasonCode.INTERNAL_RECONCILIATION_ERROR,
@@ -623,9 +677,10 @@ class ExecutionReconciliationEngine(BaseEngine):
             ReconciliationStatus.FAILED,
             severity=ReconciliationSeverity.CRITICAL,
             input_fingerprint=f"failed:{request_fp}:{exc.__class__.__name__}",
+            read_baseline=read_baseline,
         )
 
-    def _minimal_request_report(self, request, reason, message, boundary, status, *, severity=ReconciliationSeverity.ERROR, field_name=None, observed=None, expected=None, input_fingerprint=None) -> ExecutionReconciliationReport:
+    def _minimal_request_report(self, request, reason, message, boundary, status, *, severity=ReconciliationSeverity.ERROR, field_name=None, observed=None, expected=None, input_fingerprint=None, read_baseline=None) -> ExecutionReconciliationReport:
         return self._minimal_report(
             request.timestamp,
             instrument=request.instrument,
@@ -645,11 +700,13 @@ class ExecutionReconciliationEngine(BaseEngine):
             input_fingerprint=input_fingerprint,
             correlation_id=request.correlation_id,
             session_id=request.session_id,
+            read_baseline=read_baseline,
         )
 
-    def _minimal_report(self, timestamp, *, instrument, plan_id, plan_fingerprint, receipt_id, receipt_status, request_fingerprint, reason, message, boundary, status, severity=ReconciliationSeverity.ERROR, field_name=None, observed=None, expected=None, input_fingerprint=None, correlation_id=None, session_id=None) -> ExecutionReconciliationReport:
+    def _minimal_report(self, timestamp, *, instrument, plan_id, plan_fingerprint, receipt_id, receipt_status, request_fingerprint, reason, message, boundary, status, severity=ReconciliationSeverity.ERROR, field_name=None, observed=None, expected=None, input_fingerprint=None, correlation_id=None, session_id=None, read_baseline=None) -> ExecutionReconciliationReport:
         finding = self._finding(timestamp, severity, reason, message, boundary, field_name, observed, expected, receipt_id)
         input_fp = input_fingerprint or model_fingerprint({"reason": reason.value, "receipt": receipt_id, "request": request_fingerprint, "observed": observed, "expected": expected})
+        read_counts = self._read_delta(read_baseline or self._read_baseline())
         return ExecutionReconciliationReport(
             report_id=model_fingerprint({"minimal": request_fingerprint, "input": input_fp}),
             created_at=timestamp,
@@ -670,9 +727,9 @@ class ExecutionReconciliationEngine(BaseEngine):
             checked_boundaries=(boundary,),
             request_fingerprint=request_fingerprint,
             input_fingerprint=input_fp,
-            order_management_read_count=self._order_reads,
-            paper_trading_read_count=self._paper_reads,
-            position_read_count=self._position_reads,
+            order_management_read_count=read_counts[0],
+            paper_trading_read_count=read_counts[1],
+            position_read_count=read_counts[2],
             broker_order_calls=0,
             mutation_calls=0,
             correlation_id=correlation_id,
@@ -753,7 +810,7 @@ def _status_for(findings: tuple[ReconciliationFinding, ...]) -> ReconciliationSt
         return ReconciliationStatus.FAILED
     if any(item.reason_code in {ReconciliationReasonCode.INVALID_REQUEST, ReconciliationReasonCode.INVALID_EXECUTION_PLAN, ReconciliationReasonCode.INVALID_RECEIPT} for item in findings):
         return ReconciliationStatus.INVALID
-    if any(item.reason_code in INCOMPLETE_REASONS for item in findings):
+    if all(item.reason_code in INCOMPLETE_REASONS for item in findings):
         return ReconciliationStatus.INCOMPLETE
     if any(item.severity in {ReconciliationSeverity.ERROR, ReconciliationSeverity.CRITICAL} for item in findings):
         return ReconciliationStatus.INCONSISTENT
