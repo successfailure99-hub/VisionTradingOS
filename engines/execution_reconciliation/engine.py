@@ -257,10 +257,11 @@ class ExecutionReconciliationEngine(BaseEngine):
             return self._finalize_report(conflict, request_id=None, request_fingerprint=None, store_idempotency=True)
         if self._state is ReconciliationLifecycleState.STOPPED:
             report = self._blocked_report(request, ReconciliationReasonCode.ENGINE_STOPPED, "Execution reconciliation engine is stopped.")
-            return self._finalize_report(report, request_id=request.request_id, request_fingerprint=request_fp, store_idempotency=True)
+            return self._finalize_report(report, request_id=request.request_id, request_fingerprint=request_fp, store_idempotency=True, resulting_lifecycle=self._state)
         if self._state is ReconciliationLifecycleState.LOCKED or not active_policy.enabled:
             report = self._blocked_report(request, ReconciliationReasonCode.ENGINE_LOCKED, "Execution reconciliation engine is locked.")
-            return self._finalize_report(report, request_id=request.request_id, request_fingerprint=request_fp, store_idempotency=True)
+            resulting_lifecycle = self._state if self._state is ReconciliationLifecycleState.LOCKED else None
+            return self._finalize_report(report, request_id=request.request_id, request_fingerprint=request_fp, store_idempotency=True, resulting_lifecycle=resulting_lifecycle)
         if self._state is ReconciliationLifecycleState.CREATED:
             self._state = ReconciliationLifecycleState.READY
 
@@ -276,7 +277,8 @@ class ExecutionReconciliationEngine(BaseEngine):
             self._request_fingerprints.setdefault(request.request_id, request_fp)
             self._request_reports.setdefault(request.request_id, report.report_id)
             return report
-        return self._finalize_report(report, request_id=request.request_id, request_fingerprint=request_fp, store_idempotency=True)
+        resulting_lifecycle = ReconciliationLifecycleState.FAILED if report.reconciliation_status is ReconciliationStatus.FAILED else None
+        return self._finalize_report(report, request_id=request.request_id, request_fingerprint=request_fp, store_idempotency=True, resulting_lifecycle=resulting_lifecycle)
 
     def snapshot(self) -> ExecutionReconciliationSnapshot:
         return ExecutionReconciliationSnapshot(
@@ -618,16 +620,17 @@ class ExecutionReconciliationEngine(BaseEngine):
         request_id: str | None,
         request_fingerprint: str | None,
         store_idempotency: bool,
+        resulting_lifecycle: ReconciliationLifecycleState | None = None,
     ) -> ExecutionReconciliationReport:
         if not isinstance(report, ExecutionReconciliationReport):
             raise TypeError("report must be ExecutionReconciliationReport")
         if report.report_id in self._reports:
             return self._reports[report.report_id]
-        self._store_report(report, request_id=request_id, request_fingerprint=request_fingerprint, store_idempotency=store_idempotency)
+        self._store_report(report, request_id=request_id, request_fingerprint=request_fingerprint, store_idempotency=store_idempotency, resulting_lifecycle=resulting_lifecycle)
         self._publish_report(report)
         return report
 
-    def _store_report(self, report, *, request_id, request_fingerprint, store_idempotency) -> None:
+    def _store_report(self, report, *, request_id, request_fingerprint, store_idempotency, resulting_lifecycle) -> None:
         self._reports[report.report_id] = report
         if store_idempotency:
             self._input_reports.setdefault(report.input_fingerprint, report.report_id)
@@ -650,7 +653,11 @@ class ExecutionReconciliationEngine(BaseEngine):
         elif report.reconciliation_status is ReconciliationStatus.FAILED:
             self._failed_count += 1
         self._findings = tuple((self._findings + report.findings)[-self._policy.maximum_findings :])
-        if self._state is not ReconciliationLifecycleState.FAILED:
+        if resulting_lifecycle is not None:
+            self._state = resulting_lifecycle
+        elif report.reconciliation_status is ReconciliationStatus.FAILED:
+            self._state = ReconciliationLifecycleState.FAILED
+        elif self._state is not ReconciliationLifecycleState.FAILED:
             self._state = ReconciliationLifecycleState.ACTIVE
 
     def _blocked_report(self, request, reason, message) -> ExecutionReconciliationReport:

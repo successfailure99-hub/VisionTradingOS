@@ -228,6 +228,7 @@ def test_start_stop_reset_and_stopped_reconciliation_zero_boundary_reads():
     assert report.order_management_read_count == 0
     assert report.paper_trading_read_count == 0
     assert report.position_read_count == 0
+    assert engine.snapshot().lifecycle_state is ReconciliationLifecycleState.STOPPED
     engine.reset_session()
     snap = engine.snapshot()
     assert snap.last_report is None
@@ -251,8 +252,12 @@ def test_submitted_entry_reconciles_as_consistent_and_publishes_events():
     assert report.order_management_read_count > 0
     assert report.paper_trading_read_count > 0
     assert report.position_read_count > 0
+    assert engine.snapshot().lifecycle_state is ReconciliationLifecycleState.ACTIVE
     assert events.EXECUTION_RECONCILIATION_STARTED in seen
     assert events.EXECUTION_RECONCILIATION_COMPLETED in seen
+    active = engine.reconcile(request_for(plan, receipt, request_id="active-remains-active"))
+    assert active.reconciliation_status is ReconciliationStatus.CONSISTENT
+    assert engine.snapshot().lifecycle_state is ReconciliationLifecycleState.ACTIVE
 
 
 def test_full_entry_with_protection_and_position_reconciles_as_consistent():
@@ -499,8 +504,22 @@ def test_blocked_reports_are_finalized_published_stored_and_zero_read():
     assert engine.get_report(stopped.report_id) == stopped
     assert engine.snapshot().last_report == stopped
     assert stopped.order_management_read_count == stopped.paper_trading_read_count == stopped.position_read_count == 0
+    assert stopped.mutation_calls == 0
+    assert stopped.broker_order_calls == 0
     assert stopped.reconciliation_status is ReconciliationStatus.INVALID
+    assert stopped.primary_reason is ReconciliationReasonCode.ENGINE_STOPPED
+    assert engine.snapshot().lifecycle_state is ReconciliationLifecycleState.STOPPED
     assert events.EXECUTION_RECONCILIATION_INVALID in seen
+    stopped_events = len(seen)
+    stopped_retry = engine.reconcile(request_for(plan, receipt, request_id="stopped-finalized"))
+    assert stopped_retry is stopped
+    assert len(seen) == stopped_events
+    second_stopped = engine.reconcile(request_for(plan, receipt, request_id="stopped-again"))
+    assert second_stopped.primary_reason is ReconciliationReasonCode.ENGINE_STOPPED
+    assert second_stopped.order_management_read_count == second_stopped.paper_trading_read_count == second_stopped.position_read_count == 0
+    assert second_stopped.mutation_calls == 0
+    assert second_stopped.broker_order_calls == 0
+    assert engine.snapshot().lifecycle_state is ReconciliationLifecycleState.STOPPED
 
     _, _, _, _, _, locked_engine = runtime_parts()
     locked_engine.start()
@@ -508,11 +527,40 @@ def test_blocked_reports_are_finalized_published_stored_and_zero_read():
     locked = locked_engine.reconcile(request_for(plan, receipt, request_id="locked-finalized"))
     assert locked_engine.get_report(locked.report_id) == locked
     assert locked.order_management_read_count == locked.paper_trading_read_count == locked.position_read_count == 0
+    assert locked.mutation_calls == 0
+    assert locked.broker_order_calls == 0
+    assert locked.primary_reason is ReconciliationReasonCode.ENGINE_LOCKED
+    assert locked_engine.snapshot().lifecycle_state is ReconciliationLifecycleState.LOCKED
+    locked_retry = locked_engine.reconcile(request_for(plan, receipt, request_id="locked-finalized"))
+    assert locked_retry is locked
+    second_locked = locked_engine.reconcile(request_for(plan, receipt, request_id="locked-again"))
+    assert second_locked.primary_reason is ReconciliationReasonCode.ENGINE_LOCKED
+    assert second_locked.order_management_read_count == second_locked.paper_trading_read_count == second_locked.position_read_count == 0
+    assert second_locked.mutation_calls == 0
+    assert second_locked.broker_order_calls == 0
+    assert locked_engine.snapshot().lifecycle_state is ReconciliationLifecycleState.LOCKED
 
     _, _, _, _, _, disabled_engine = runtime_parts()
     disabled = disabled_engine.reconcile(request_for(plan, receipt, request_id="disabled-finalized"), policy=ExecutionReconciliationPolicy(enabled=False))
     assert disabled_engine.get_report(disabled.report_id) == disabled
     assert disabled.order_management_read_count == disabled.paper_trading_read_count == disabled.position_read_count == 0
+    assert disabled_engine.snapshot().lifecycle_state is ReconciliationLifecycleState.ACTIVE
+
+    _, _, _, _, _, stopped_disabled_engine = runtime_parts()
+    stopped_disabled_engine.start()
+    stopped_disabled_engine.stop()
+    stopped_disabled = stopped_disabled_engine.reconcile(request_for(plan, receipt, request_id="stopped-disabled"), policy=ExecutionReconciliationPolicy(enabled=False))
+    assert stopped_disabled.primary_reason is ReconciliationReasonCode.ENGINE_STOPPED
+    assert stopped_disabled.order_management_read_count == stopped_disabled.paper_trading_read_count == stopped_disabled.position_read_count == 0
+    assert stopped_disabled_engine.snapshot().lifecycle_state is ReconciliationLifecycleState.STOPPED
+
+    _, _, _, _, _, locked_disabled_engine = runtime_parts()
+    locked_disabled_engine.start()
+    locked_disabled_engine._state = ReconciliationLifecycleState.LOCKED
+    locked_disabled = locked_disabled_engine.reconcile(request_for(plan, receipt, request_id="locked-disabled"), policy=ExecutionReconciliationPolicy(enabled=False))
+    assert locked_disabled.primary_reason is ReconciliationReasonCode.ENGINE_LOCKED
+    assert locked_disabled.order_management_read_count == locked_disabled.paper_trading_read_count == locked_disabled.position_read_count == 0
+    assert locked_disabled_engine.snapshot().lifecycle_state is ReconciliationLifecycleState.LOCKED
 
 
 def test_status_precedence_for_contradictions_missing_state_warnings_and_failure():
