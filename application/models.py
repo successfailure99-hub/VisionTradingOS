@@ -28,6 +28,7 @@ from engines.price_action.models import PriceActionState
 from engines.risk.models import RiskConfiguration, RiskDecisionState
 from engines.strategy.models import StrategyDecisionState
 from engines.trade_journal.models import TradeJournalRecord
+from engines.trade_execution_policy.models import ExecutionEngineSnapshot
 from engines.vwap.levels import VWAPLevels
 
 
@@ -190,6 +191,7 @@ class RuntimeSnapshot:
     vwap_source: RuntimeVWAPSource | None = None
     paper_trading: PaperTradingSnapshot | None = None
     performance_analytics: AnalyticsSnapshot | None = None
+    execution_policy: ExecutionEngineSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)

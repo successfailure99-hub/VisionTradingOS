@@ -18,6 +18,7 @@ from engines.market_context.market_context_engine import MarketContextEngine
 from engines.market_context.models import MarketContextSnapshot, MarketContextState
 from engines.option_chain.models import OptionChainSnapshot, OptionChainState
 from engines.option_chain.option_chain_engine import OptionChainEngine
+from engines.order_management.enums import ProductType
 from engines.order_management.models import OrderCommand, OrderRequest, OrderSnapshot, OrderState
 from engines.order_management.order_management_engine import OrderManagementEngine
 from engines.paper_trading.engine import PaperTradingEngine
@@ -29,6 +30,9 @@ from engines.risk.risk_engine import RiskEngine
 from engines.risk.trade_plan_engine import RiskTradePlanEngine
 from engines.strategy.models import StrategyDecisionState, StrategySnapshot
 from engines.strategy.strategy_engine import StrategyEngine
+from engines.trade_execution_policy.engine import TradeExecutionPolicyEngine
+from engines.trade_execution_policy.enums import ExecutionMode, ExecutionPlanStatus
+from engines.trade_execution_policy.models import ExecutionRequest, TradeExecutionPlan
 from engines.vwap.vwap_engine import VWAPEngine
 
 from application.enums import RuntimeInstrument, RuntimeStatus
@@ -80,6 +84,11 @@ class SymbolRuntime:
         self.ai_reasoning_engine = AIReasoningEngine(event_bus, instrument.value, configuration.timeframe)
         self.strategy_engine = StrategyEngine(event_bus, instrument.value, configuration.timeframe)
         self.risk_engine = RiskEngine(event_bus, instrument.value, configuration.timeframe)
+        self.execution_policy_engine = TradeExecutionPolicyEngine(
+            event_bus,
+            instrument=instrument.value,
+            timeframe=configuration.timeframe,
+        )
         self.trade_plan_engine = RiskTradePlanEngine()
         self.paper_trading_engine = PaperTradingEngine(
             event_bus,
@@ -419,6 +428,44 @@ class SymbolRuntime:
         self._updated_at = state.updated_at
         return state
 
+    def evaluate_execution_policy(self, request: ExecutionRequest) -> TradeExecutionPlan:
+        self._require_running()
+        if request.instrument != self._instrument.value:
+            raise ValueError("ExecutionRequest instrument does not match SymbolRuntime.")
+        plan = self.execution_policy_engine.evaluate(request)
+        self._updated_at = plan.created_at
+        return plan
+
+    def create_order_from_execution_plan(self, plan: TradeExecutionPlan) -> OrderState | None:
+        self._require_running()
+        if not isinstance(plan, TradeExecutionPlan):
+            raise TypeError("plan must be TradeExecutionPlan")
+        if plan.instrument != self._instrument.value:
+            raise ValueError("Execution plan instrument does not match SymbolRuntime.")
+        if plan.execution_mode is not ExecutionMode.PAPER:
+            return None
+        if plan.status is not ExecutionPlanStatus.READY_FOR_PAPER:
+            return None
+        if plan.broker_submission_allowed or plan.broker_order_calls != 0:
+            raise ValueError("Trade Execution Policy V1 plans cannot permit broker submission.")
+        risk = self.risk_engine.state
+        if risk is None:
+            raise ValueError("Risk state is required for order creation.")
+        request = OrderRequest(
+            client_order_id=plan.execution_plan_id,
+            symbol=plan.instrument,
+            exchange=self._configuration.exchange,
+            timeframe=self._configuration.timeframe,
+            timestamp=plan.created_at,
+            side=plan.entry_side,
+            order_type=plan.entry_order_type,
+            product_type=ProductType.INTRADAY,
+            quantity=plan.entry_quantity,
+            limit_price=plan.entry_limit_price,
+            trigger_price=plan.entry_trigger_price,
+        )
+        return self.create_order(request)
+
     def apply_order_command(self, command: OrderCommand) -> OrderState:
         self._require_running()
         state = self.order_engine.apply(command)
@@ -448,6 +495,7 @@ class SymbolRuntime:
         self.ai_reasoning_engine.reset()
         self.strategy_engine.reset()
         self.risk_engine.reset()
+        self.execution_policy_engine.reset_session()
         self.trade_plan_engine.reset()
         self.paper_trading_engine.reset()
         self.order_engine.reset()
@@ -504,6 +552,7 @@ class SymbolRuntime:
             vwap_source=self._vwap_source_snapshot(),
             paper_trading=self.paper_trading_engine.snapshot(),
             performance_analytics=performance_analytics,
+            execution_policy=self.execution_policy_engine.snapshot(),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:

@@ -105,6 +105,19 @@ EXECUTION_DRY_RUN_CANCELLED = "execution_dry_run_cancelled"
 EXECUTION_DRY_RUN_REJECTED = "execution_dry_run_rejected"
 
 # ==================================================
+# Trade Execution Policy Events
+# ==================================================
+
+EXECUTION_POLICY_EVALUATED = "execution_policy_evaluated"
+EXECUTION_PLAN_PREPARED = "execution_plan_prepared"
+EXECUTION_PLAN_REJECTED = "execution_plan_rejected"
+EXECUTION_PLAN_LOCKED = "execution_plan_locked"
+EXECUTION_PLAN_APPROVED = "execution_plan_approved"
+EXECUTION_PLAN_CANCELLED = "execution_plan_cancelled"
+EXECUTION_PLAN_EXPIRED = "execution_plan_expired"
+EXECUTION_POLICY_STATE_UPDATED = "execution_policy_state_updated"
+
+# ==================================================
 # Order Management Events
 # ==================================================
 
