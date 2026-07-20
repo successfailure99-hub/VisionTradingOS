@@ -136,6 +136,18 @@ PAPER_EXECUTION_COMPLETED = "paper_execution_completed"
 PAPER_EXECUTION_FAILED = "paper_execution_failed"
 
 # ==================================================
+# Execution Reconciliation Events
+# ==================================================
+
+EXECUTION_RECONCILIATION_STATE_UPDATED = "execution_reconciliation_state_updated"
+EXECUTION_RECONCILIATION_STARTED = "execution_reconciliation_started"
+EXECUTION_RECONCILIATION_COMPLETED = "execution_reconciliation_completed"
+EXECUTION_RECONCILIATION_WARNING = "execution_reconciliation_warning"
+EXECUTION_RECONCILIATION_INCONSISTENT = "execution_reconciliation_inconsistent"
+EXECUTION_RECONCILIATION_INVALID = "execution_reconciliation_invalid"
+EXECUTION_RECONCILIATION_FAILED = "execution_reconciliation_failed"
+
+# ==================================================
 # Order Management Events
 # ==================================================
 

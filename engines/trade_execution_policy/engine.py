@@ -81,6 +81,11 @@ class TradeExecutionPolicyEngine(BaseEngine):
     def last_plan(self) -> TradeExecutionPlan | None:
         return self._last_plan
 
+    def get_plan(self, execution_plan_id: str) -> TradeExecutionPlan | None:
+        if not isinstance(execution_plan_id, str):
+            return None
+        return self._plans.get(execution_plan_id.strip())
+
     def start(self) -> ExecutionEngineSnapshot:
         if self._state is not ExecutionLifecycleState.STOPPED:
             self._state = ExecutionLifecycleState.READY

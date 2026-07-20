@@ -16,6 +16,7 @@ from engines.order_management.models import OrderCommand, OrderRequest, OrderSta
 from engines.position.models import PositionFill, PositionMark
 from engines.risk.models import AccountRiskState, RiskPolicy, TradeRiskPlan
 from engines.paper_execution_coordinator.models import PaperExecutionReceipt, PaperExecutionRequest
+from engines.execution_reconciliation.models import ExecutionReconciliationRequest, ExecutionReconciliationReport
 from engines.trade_execution_policy.models import ExecutionRequest, TradeExecutionPlan
 from engines.performance_analytics.engine import PerformanceAnalyticsEngine
 from engines.deterministic_backtest.engine import DeterministicBacktestEngine
@@ -220,6 +221,15 @@ class ApplicationOrchestrator:
     def cancel_paper_execution(self, instrument: str | RuntimeInstrument, receipt_id: str, *, timestamp, reason: str = "cancelled") -> PaperExecutionReceipt:
         self._require_running()
         return self.get_runtime(instrument).cancel_paper_execution(receipt_id, timestamp=timestamp, reason=reason)
+
+    def reconcile_paper_execution(self, instrument: str | RuntimeInstrument, request: ExecutionReconciliationRequest) -> ExecutionReconciliationReport:
+        self._require_running()
+        runtime = self.get_runtime(instrument)
+        return runtime.reconcile_paper_execution(request)
+
+    def reconcile_paper_execution_receipt(self, instrument: str | RuntimeInstrument, receipt_id: str, *, timestamp) -> ExecutionReconciliationReport:
+        self._require_running()
+        return self.get_runtime(instrument).reconcile_paper_execution_receipt(receipt_id, timestamp=timestamp)
 
     def submit_order(self, order: OrderState):
         self._require_running()

@@ -119,6 +119,22 @@ class PaperExecutionCoordinator(BaseEngine):
     def last_receipt(self) -> PaperExecutionReceipt | None:
         return self._last_receipt
 
+    def get_receipt(self, receipt_id: str) -> PaperExecutionReceipt | None:
+        if not isinstance(receipt_id, str):
+            return None
+        return self._receipts.get(receipt_id.strip())
+
+    def get_receipt_for_plan(self, execution_plan_id: str) -> PaperExecutionReceipt | None:
+        if not isinstance(execution_plan_id, str):
+            return None
+        receipt_id = self._by_plan_id.get(execution_plan_id.strip())
+        return None if receipt_id is None else self._receipts.get(receipt_id)
+
+    def get_execution_plan_for_receipt(self, receipt_id: str) -> TradeExecutionPlan | None:
+        if not isinstance(receipt_id, str):
+            return None
+        return self._latest_plan_by_receipt.get(receipt_id.strip())
+
     def start(self) -> PaperExecutionCoordinatorSnapshot:
         if self._state is not CoordinatorLifecycleState.STOPPED:
             self._state = CoordinatorLifecycleState.READY
