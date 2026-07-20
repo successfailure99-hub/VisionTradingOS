@@ -21,6 +21,8 @@ from engines.option_chain.option_chain_engine import OptionChainEngine
 from engines.order_management.enums import ProductType
 from engines.order_management.models import OrderCommand, OrderRequest, OrderSnapshot, OrderState
 from engines.order_management.order_management_engine import OrderManagementEngine
+from engines.paper_execution_coordinator.engine import PaperExecutionCoordinator
+from engines.paper_execution_coordinator.models import PaperExecutionReceipt, PaperExecutionRequest
 from engines.paper_trading.engine import PaperTradingEngine
 from engines.position.models import PositionFill, PositionMark, PositionState
 from engines.position.position_engine import PositionEngine
@@ -98,6 +100,14 @@ class SymbolRuntime:
             configuration=configuration.paper_trading_configuration,
         )
         self.order_engine = OrderManagementEngine(event_bus, instrument.value, configuration.timeframe)
+        self.paper_execution_coordinator = PaperExecutionCoordinator(
+            event_bus,
+            instrument=instrument.value,
+            timeframe=configuration.timeframe,
+            order_management_engine=self.order_engine,
+            paper_trading_engine=self.paper_trading_engine,
+            exchange=configuration.exchange,
+        )
         self.position_engine = PositionEngine(event_bus, instrument.value, configuration.exchange, configuration.timeframe)
         self.candle_engine = CandleEngine(event_bus, TimeFrame.from_value(configuration.timeframe))
         self.vwap_engine = VWAPEngine(event_bus)
@@ -129,9 +139,13 @@ class SymbolRuntime:
 
     def start(self) -> None:
         self._status = RuntimeStatus.RUNNING
+        self.execution_policy_engine.start()
+        self.paper_execution_coordinator.start()
 
     def stop(self) -> None:
         self._shutdown_paper_trading()
+        self.paper_execution_coordinator.stop()
+        self.execution_policy_engine.stop()
         self._status = RuntimeStatus.STOPPED
 
     def mark_error(self) -> None:
@@ -466,6 +480,22 @@ class SymbolRuntime:
         )
         return self.create_order(request)
 
+    def execute_paper_plan(self, request: PaperExecutionRequest) -> PaperExecutionReceipt:
+        self._require_running()
+        if not isinstance(request, PaperExecutionRequest):
+            raise TypeError("request must be PaperExecutionRequest")
+        if request.instrument != self._instrument.value:
+            raise ValueError("PaperExecutionRequest instrument does not match SymbolRuntime.")
+        receipt = self.paper_execution_coordinator.execute(request)
+        self._updated_at = receipt.updated_at
+        return receipt
+
+    def cancel_paper_execution(self, receipt_id: str, *, timestamp, reason: str = "cancelled") -> PaperExecutionReceipt:
+        self._require_running()
+        receipt = self.paper_execution_coordinator.cancel(receipt_id, timestamp=timestamp, reason=reason)
+        self._updated_at = receipt.updated_at
+        return receipt
+
     def apply_order_command(self, command: OrderCommand) -> OrderState:
         self._require_running()
         state = self.order_engine.apply(command)
@@ -496,6 +526,7 @@ class SymbolRuntime:
         self.strategy_engine.reset()
         self.risk_engine.reset()
         self.execution_policy_engine.reset_session()
+        self.paper_execution_coordinator.reset_session()
         self.trade_plan_engine.reset()
         self.paper_trading_engine.reset()
         self.order_engine.reset()
@@ -553,6 +584,7 @@ class SymbolRuntime:
             paper_trading=self.paper_trading_engine.snapshot(),
             performance_analytics=performance_analytics,
             execution_policy=self.execution_policy_engine.snapshot(),
+            paper_execution=self.paper_execution_coordinator.snapshot(),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:

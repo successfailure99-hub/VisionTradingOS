@@ -15,6 +15,7 @@ from engines.market_data.market_data_engine import MarketDataEngine
 from engines.order_management.models import OrderCommand, OrderRequest, OrderState
 from engines.position.models import PositionFill, PositionMark
 from engines.risk.models import AccountRiskState, RiskPolicy, TradeRiskPlan
+from engines.paper_execution_coordinator.models import PaperExecutionReceipt, PaperExecutionRequest
 from engines.trade_execution_policy.models import ExecutionRequest, TradeExecutionPlan
 from engines.performance_analytics.engine import PerformanceAnalyticsEngine
 from engines.deterministic_backtest.engine import DeterministicBacktestEngine
@@ -211,6 +212,14 @@ class ApplicationOrchestrator:
     def create_order_from_execution_plan(self, instrument: str | RuntimeInstrument, plan: TradeExecutionPlan) -> OrderState | None:
         self._require_running()
         return self.get_runtime(instrument).create_order_from_execution_plan(plan)
+
+    def execute_paper_plan(self, instrument: str | RuntimeInstrument, request: PaperExecutionRequest) -> PaperExecutionReceipt:
+        self._require_running()
+        return self.get_runtime(instrument).execute_paper_plan(request)
+
+    def cancel_paper_execution(self, instrument: str | RuntimeInstrument, receipt_id: str, *, timestamp, reason: str = "cancelled") -> PaperExecutionReceipt:
+        self._require_running()
+        return self.get_runtime(instrument).cancel_paper_execution(receipt_id, timestamp=timestamp, reason=reason)
 
     def submit_order(self, order: OrderState):
         self._require_running()

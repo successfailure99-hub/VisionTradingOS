@@ -7,7 +7,7 @@ from datetime import date, datetime
 from math import isfinite
 from numbers import Real
 
-from engines.paper_trading.enums import PaperExitType, PaperOrderState, PaperPositionState
+from engines.paper_trading.enums import ManagedPaperSubmissionStatus, PaperExitType, PaperOrderState, PaperPositionState
 from engines.strategy.enums import TradeDirection
 
 
@@ -250,6 +250,47 @@ class PaperTradingDiagnostics:
 
 
 @dataclass(frozen=True, slots=True)
+class ManagedPaperSubmission:
+    submission_id: str
+    order_id: str
+    execution_plan_id: str
+    purpose: str
+    instrument: str
+    submission_timestamp: datetime
+    updated_at: datetime
+    status: ManagedPaperSubmissionStatus
+    filled_quantity: int
+    order_quantity: int
+    order_fingerprint: str
+    cancelled_at: datetime | None = None
+    cancellation_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        _text(self.submission_id, "submission_id")
+        _text(self.order_id, "order_id")
+        _text(self.execution_plan_id, "execution_plan_id")
+        object.__setattr__(self, "purpose", _purpose(self.purpose))
+        object.__setattr__(self, "instrument", _text(self.instrument, "instrument").upper())
+        _aware(self.submission_timestamp, "submission_timestamp")
+        _aware(self.updated_at, "updated_at")
+        if self.updated_at < self.submission_timestamp:
+            raise ValueError("updated_at cannot be before submission_timestamp")
+        if not isinstance(self.status, ManagedPaperSubmissionStatus):
+            raise TypeError("status must be ManagedPaperSubmissionStatus")
+        object.__setattr__(self, "filled_quantity", _non_negative_int(self.filled_quantity, "filled_quantity"))
+        object.__setattr__(self, "order_quantity", _positive_int(self.order_quantity, "order_quantity"))
+        if self.filled_quantity > self.order_quantity:
+            raise ValueError("filled_quantity cannot exceed order_quantity")
+        _text(self.order_fingerprint, "order_fingerprint")
+        if self.cancelled_at is not None:
+            _aware(self.cancelled_at, "cancelled_at")
+            if self.cancelled_at < self.submission_timestamp:
+                raise ValueError("cancelled_at cannot be before submission_timestamp")
+        if self.cancellation_reason is not None:
+            _text(self.cancellation_reason, "cancellation_reason")
+
+
+@dataclass(frozen=True, slots=True)
 class PaperTradingSnapshot:
     enabled: bool
     safe_mode_confirmed: bool
@@ -260,12 +301,25 @@ class PaperTradingSnapshot:
     last_event: str
     last_error: str | None
     diagnostics: PaperTradingDiagnostics
+    managed_submissions: tuple[ManagedPaperSubmission, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "managed_submissions", tuple(self.managed_submissions))
+        if any(not isinstance(item, ManagedPaperSubmission) for item in self.managed_submissions):
+            raise TypeError("managed_submissions must contain ManagedPaperSubmission values")
 
 
 def _text(value: str | None, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be non-empty text")
     return value.strip()
+
+
+def _purpose(value: str) -> str:
+    purpose = _text(value, "purpose").lower()
+    if purpose not in {"entry", "stop_loss", "target"}:
+        raise ValueError("purpose must be entry, stop_loss or target")
+    return purpose
 
 
 def _aware(value: datetime | None, name: str) -> None:
@@ -299,6 +353,12 @@ def _non_negative_real(value: Real | None, name: str) -> float:
 def _positive_int(value: int, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{name} must be positive integer")
+    return value
+
+
+def _non_negative_int(value: int, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be non-negative integer")
     return value
 
 

@@ -37,3 +37,10 @@ class PaperEntryMode(str, Enum):
 class PaperIntrabarPolicy(str, Enum):
     STOP_FIRST = "stop_first"
 
+
+class ManagedPaperSubmissionStatus(str, Enum):
+    SUBMITTED = "submitted"
+    PARTIALLY_FILLED = "partially_filled"
+    FILLED = "filled"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
