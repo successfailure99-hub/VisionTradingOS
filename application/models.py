@@ -25,6 +25,7 @@ from engines.performance_analytics.models import AnalyticsSnapshot
 from engines.historical_market_replay.models import ReplayConfiguration, ReplaySessionSnapshot
 from engines.deterministic_backtest.models import BacktestConfiguration, BacktestSnapshot
 from engines.live_market_validation.models import LiveMarketValidationConfiguration, ValidationSessionSnapshot
+from application.live_shadow_session.models import LiveShadowSessionSnapshot
 from engines.position.models import PositionState
 from engines.price_action.models import PriceActionState
 from engines.risk.models import RiskConfiguration, RiskDecisionState
@@ -215,3 +216,4 @@ class OrchestratorSnapshot:
     historical_replay: ReplaySessionSnapshot | None = None
     deterministic_backtest: BacktestSnapshot | None = None
     zerodha_connection: ZerodhaConnectionSnapshot | None = None
+    live_shadow_session: LiveShadowSessionSnapshot | None = None
