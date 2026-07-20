@@ -146,6 +146,34 @@ def test_processing_while_stopped_or_failed_performs_zero_reads():
     assert observe(engine, seconds=2).lifecycle_state is ShadowSessionLifecycleState.FAILED
 
 
+def test_start_session_from_stopped_raises_and_changes_no_counters():
+    _, engine, _, _, _ = running_shadow()
+    engine.stop()
+    before = engine.snapshot()
+    with pytest.raises(RuntimeError):
+        engine.start_session(request(session_id="shadow-2"))
+    after = engine.snapshot()
+    assert after.lifecycle_state is ShadowSessionLifecycleState.STOPPED
+    assert after.session_count == before.session_count
+    assert after.completed_session_count == before.completed_session_count
+    assert after.failed_session_count == before.failed_session_count
+    assert after.market_event_count == before.market_event_count
+
+
+def test_start_session_from_failed_raises_and_changes_no_counters():
+    _, engine, _, _, _ = running_shadow()
+    engine._state = ShadowSessionLifecycleState.FAILED
+    before = engine.snapshot()
+    with pytest.raises(RuntimeError):
+        engine.start_session(request(session_id="shadow-2"))
+    after = engine.snapshot()
+    assert after.lifecycle_state is ShadowSessionLifecycleState.FAILED
+    assert after.session_count == before.session_count
+    assert after.completed_session_count == before.completed_session_count
+    assert after.failed_session_count == before.failed_session_count
+    assert after.market_event_count == before.market_event_count
+
+
 def test_plan_receipt_report_and_position_identities_are_counted_once():
     _, engine, coordinator, reconciliation, policy = running_shadow()
     plan = approved_plan()
@@ -253,14 +281,57 @@ def test_reconciliation_problem_states_make_session_degraded_without_failed_life
 
 
 def test_internal_exception_sets_failed_lifecycle_and_summary_status():
-    _, engine, _, _, _ = running_shadow()
+    bus, engine, _, _, _ = running_shadow()
+    failed_events = []
+    completed_events = []
+    bus.subscribe(events.SHADOW_SESSION_FAILED, failed_events.append)
+    bus.subscribe(events.SHADOW_SESSION_COMPLETED, completed_events.append)
+
     class Bad:
         @property
         def last_plan(self):
             raise RuntimeError("unexpected")
+
     engine._execution_policy_engine = Bad()
     snapshot = observe(engine)
     assert snapshot.lifecycle_state is ShadowSessionLifecycleState.FAILED
+    assert snapshot.failed_session_count == 1
+    assert snapshot.mutation_calls == 0
+    assert snapshot.broker_order_calls == 0
+
+    summary = engine.stop_session(timestamp=TS + timedelta(minutes=1))
+    finalized = engine.snapshot()
+    assert summary.session_status is ShadowSessionStatus.FAILED
+    assert summary.lifecycle_state is ShadowSessionLifecycleState.FAILED
+    assert finalized.lifecycle_state is ShadowSessionLifecycleState.FAILED
+    assert finalized.failed_session_count == 1
+    assert engine.get_summary("shadow-1") is summary
+    assert failed_events == [snapshot, summary]
+    assert completed_events == [summary]
+
+    retry = engine.stop_session(timestamp=TS + timedelta(minutes=1))
+    assert retry is summary
+    assert engine.snapshot().failed_session_count == 1
+    assert failed_events == [snapshot, summary]
+    assert completed_events == [summary]
+
+
+def test_reset_from_failed_returns_ready_and_allows_new_session():
+    _, engine, _, _, _ = running_shadow()
+
+    class Bad:
+        @property
+        def last_plan(self):
+            raise RuntimeError("unexpected")
+
+    engine._execution_policy_engine = Bad()
+    observe(engine)
+    assert engine.snapshot().lifecycle_state is ShadowSessionLifecycleState.FAILED
+    reset = engine.reset_session()
+    assert reset.lifecycle_state is ShadowSessionLifecycleState.READY
+    engine._execution_policy_engine = shadow_engine()[4]
+    started = engine.start_session(request(session_id="shadow-2"))
+    assert started.lifecycle_state is ShadowSessionLifecycleState.RUNNING
 
 
 def test_summary_identity_is_deterministic_and_lookup_is_read_only():

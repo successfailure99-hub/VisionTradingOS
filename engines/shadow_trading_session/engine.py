@@ -109,6 +109,8 @@ class ShadowTradingSessionEngine(BaseEngine):
             raise TypeError("request must be ShadowTradingSessionRequest")
         if request.instrument != self._instrument:
             raise ValueError("Shadow session instrument does not match runtime instrument.")
+        if self._state in {ShadowSessionLifecycleState.STOPPED, ShadowSessionLifecycleState.FAILED}:
+            raise RuntimeError("Reset the shadow session before starting a new session.")
         if self._state is ShadowSessionLifecycleState.RUNNING:
             if self._active_request is not None and self._active_request.session_id == request.session_id:
                 return self.snapshot()
@@ -161,7 +163,10 @@ class ShadowTradingSessionEngine(BaseEngine):
     def stop_session(self, *, timestamp: datetime, reason: str = "session_completed") -> ShadowTradingSessionSummary:
         timestamp = _aware(timestamp, "timestamp")
         reason = _text(reason, "reason")
-        if self._last_summary is not None and self._state is ShadowSessionLifecycleState.COMPLETED:
+        if self._last_summary is not None and self._state in {
+            ShadowSessionLifecycleState.COMPLETED,
+            ShadowSessionLifecycleState.FAILED,
+        }:
             return self._last_summary
         if self._active_request is None:
             if self._last_summary is not None:
@@ -169,14 +174,18 @@ class ShadowTradingSessionEngine(BaseEngine):
             raise RuntimeError("No active shadow session.")
         status = self._classify_status()
         primary_reason = "internal_failure" if status is ShadowSessionStatus.FAILED else reason
-        summary = self._summary(timestamp, status, primary_reason)
+        lifecycle_state = (
+            ShadowSessionLifecycleState.FAILED
+            if status is ShadowSessionStatus.FAILED
+            else ShadowSessionLifecycleState.COMPLETED
+        )
+        summary = self._summary(timestamp, status, primary_reason, lifecycle_state)
         self._summaries[summary.session_id] = summary
         self._last_summary = summary
         self._data = summary
         self._active_request = None
-        self._state = ShadowSessionLifecycleState.COMPLETED
+        self._state = lifecycle_state
         if status is ShadowSessionStatus.FAILED:
-            self._failed_session_count += 1
             self._event_bus.publish(events.SHADOW_SESSION_FAILED, summary)
         else:
             self._completed_session_count += 1
@@ -370,14 +379,14 @@ class ShadowTradingSessionEngine(BaseEngine):
             correlation_id=correlation_id,
         )
 
-    def _summary(self, ended_at, status, primary_reason) -> ShadowTradingSessionSummary:
+    def _summary(self, ended_at, status, primary_reason, lifecycle_state) -> ShadowTradingSessionSummary:
         request = self._active_request
         return ShadowTradingSessionSummary(
             session_id=request.session_id,
             started_at=request.started_at,
             ended_at=ended_at,
             instrument=self._instrument,
-            lifecycle_state=ShadowSessionLifecycleState.COMPLETED,
+            lifecycle_state=lifecycle_state,
             session_status=status,
             primary_reason=primary_reason,
             market_event_count=self._market_event_count,
