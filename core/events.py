@@ -152,6 +152,17 @@ PAPER_EXECUTION_COMPLETED = "paper_execution_completed"
 PAPER_EXECUTION_FAILED = "paper_execution_failed"
 
 # ==================================================
+# Authorized Paper Execution Handoff Events
+# ==================================================
+
+AUTHORIZED_PAPER_HANDOFF_COMPLETED = "authorized_paper_handoff_completed"
+AUTHORIZED_PAPER_HANDOFF_EXECUTED = "authorized_paper_handoff_executed"
+AUTHORIZED_PAPER_HANDOFF_HELD = "authorized_paper_handoff_held"
+AUTHORIZED_PAPER_HANDOFF_REJECTED = "authorized_paper_handoff_rejected"
+AUTHORIZED_PAPER_HANDOFF_STATE_UPDATED = "authorized_paper_handoff_state_updated"
+AUTHORIZED_PAPER_HANDOFF_FAILED = "authorized_paper_handoff_failed"
+
+# ==================================================
 # Execution Reconciliation Events
 # ==================================================
 

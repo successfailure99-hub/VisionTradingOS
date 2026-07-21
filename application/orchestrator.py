@@ -4,6 +4,7 @@ Application Orchestrator V1.
 
 from application.enums import ExecutionSafetyMode, RuntimeInstrument, RuntimeStatus
 from application.models import OrchestratorSnapshot, RuntimeConfiguration, RuntimeSnapshot
+from application.authorized_paper_execution import AuthorizedPaperExecutionCoordinator, AuthorizedPaperHandoffRequest
 from application.symbol_runtime import SymbolRuntime
 from application.live_shadow_session import LiveShadowMarketSessionCoordinator, LiveShadowSessionRequest
 from adapters.zerodha import ZerodhaCredentials, ZerodhaReadOnlyAdapter
@@ -95,6 +96,7 @@ class ApplicationOrchestrator:
             for instrument in self._configuration.instruments
         }
         self.live_shadow_session_coordinator = LiveShadowMarketSessionCoordinator(event_bus, orchestrator=self)
+        self.authorized_paper_execution_coordinator = AuthorizedPaperExecutionCoordinator(event_bus, orchestrator=self)
         self.zerodha_adapter = zerodha_adapter or ZerodhaReadOnlyAdapter(event_bus, tick_consumer=self.process_live_zerodha_tick)
         self.deterministic_backtest_engine = DeterministicBacktestEngine(
             event_bus,
@@ -122,6 +124,7 @@ class ApplicationOrchestrator:
     def start(self) -> OrchestratorSnapshot:
         for runtime in self._runtimes.values():
             runtime.start()
+        self.authorized_paper_execution_coordinator.start()
         self._status = RuntimeStatus.RUNNING
         return self.snapshot()
 
@@ -131,6 +134,7 @@ class ApplicationOrchestrator:
             self.historical_replay_engine.stop("Application shutdown stopped historical replay.")
         for runtime in self._runtimes.values():
             runtime.stop()
+        self.authorized_paper_execution_coordinator.stop()
         self._status = RuntimeStatus.STOPPED
         return self.snapshot()
 
@@ -266,6 +270,22 @@ class ApplicationOrchestrator:
         self._require_running()
         return self.get_runtime(instrument).execute_paper_plan(request)
 
+    def handoff_authorized_paper_execution(self, request: AuthorizedPaperHandoffRequest):
+        self._require_running()
+        if not isinstance(request, AuthorizedPaperHandoffRequest):
+            raise TypeError("request must be AuthorizedPaperHandoffRequest")
+        self._validate_runtime_instrument(request.instrument)
+        return self.authorized_paper_execution_coordinator.handoff(request)
+
+    def get_authorized_paper_handoff_result(self, handoff_id: str):
+        return self.authorized_paper_execution_coordinator.get_result(handoff_id)
+
+    def get_authorized_paper_handoff_snapshot(self):
+        return self.authorized_paper_execution_coordinator.snapshot()
+
+    def reset_authorized_paper_handoff(self):
+        return self.authorized_paper_execution_coordinator.reset()
+
     def cancel_paper_execution(self, instrument: str | RuntimeInstrument, receipt_id: str, *, timestamp, reason: str = "cancelled") -> PaperExecutionReceipt:
         self._require_running()
         return self.get_runtime(instrument).cancel_paper_execution(receipt_id, timestamp=timestamp, reason=reason)
@@ -387,6 +407,7 @@ class ApplicationOrchestrator:
         self.deterministic_backtest_engine.reset()
         self.zerodha_adapter.reset()
         self.live_shadow_session_coordinator.reset()
+        self.authorized_paper_execution_coordinator.reset()
         for runtime in self._runtimes.values():
             runtime.reset()
             if previous_status is RuntimeStatus.RUNNING:
@@ -458,6 +479,7 @@ class ApplicationOrchestrator:
             deterministic_backtest=self.deterministic_backtest_engine.snapshot(),
             zerodha_connection=self.zerodha_adapter.snapshot(),
             live_shadow_session=self.live_shadow_session_coordinator.snapshot(),
+            authorized_paper_handoff=self.authorized_paper_execution_coordinator.snapshot(),
         )
 
     def _runtime_for_core_instrument(self, instrument: Instrument) -> SymbolRuntime:
