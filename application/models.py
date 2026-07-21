@@ -12,6 +12,7 @@ from core.models.building_candle import BuildingCandle
 from core.models.candle import Candle
 from core.models.tick import Tick
 from engines.ai_reasoning.models import AIReasoningState
+from engines.ai_confidence_calibration.models import ConfidenceCalibrationSnapshot
 from engines.camarilla.levels import CamarillaLevels
 from engines.cpr.levels import CPRLevels
 from engines.market_context.models import MarketContextState
@@ -200,6 +201,7 @@ class RuntimeSnapshot:
     paper_execution: PaperExecutionCoordinatorSnapshot | None = None
     execution_reconciliation: ExecutionReconciliationSnapshot | None = None
     shadow_trading_session: ShadowTradingSessionSnapshot | None = None
+    confidence_calibration: ConfidenceCalibrationSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)

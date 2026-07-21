@@ -66,6 +66,11 @@ OPTION_CHAIN_READY = "option_chain_ready"
 AI_DECISION_READY = "ai_decision_ready"
 AI_REASONING_V2_UPDATED = "ai_reasoning_v2_updated"
 AI_REASONING_V2_READY = "ai_reasoning_v2_ready"
+AI_CONFIDENCE_CALIBRATED = "ai_confidence_calibrated"
+AI_CONFIDENCE_BLOCKED = "ai_confidence_blocked"
+AI_CONFIDENCE_REDUCED = "ai_confidence_reduced"
+AI_CONFIDENCE_STATE_UPDATED = "ai_confidence_state_updated"
+AI_CONFIDENCE_FAILED = "ai_confidence_failed"
 
 # ==================================================
 # Strategy Events

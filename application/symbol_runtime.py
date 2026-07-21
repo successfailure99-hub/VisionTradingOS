@@ -9,6 +9,8 @@ from core.models.candle import Candle
 from core.models.daily_ohlc import DailyOHLC
 from core.models.tick import Tick
 from engines.ai_reasoning.ai_reasoning_engine import AIReasoningEngine
+from engines.ai_confidence_calibration.engine import AIConfidenceCalibrationEngine
+from engines.ai_confidence_calibration.models import ConfidenceCalibrationRequest
 from engines.camarilla.camarilla_engine import CamarillaEngine
 from engines.camarilla.levels import CamarillaLevels
 from engines.candle.candle_engine import CandleEngine
@@ -89,6 +91,7 @@ class SymbolRuntime:
         self.market_context_engine = MarketContextEngine(event_bus, instrument.value, configuration.timeframe)
         self.ai_reasoning_engine = AIReasoningEngine(event_bus, instrument.value, configuration.timeframe)
         self.strategy_engine = StrategyEngine(event_bus, instrument.value, configuration.timeframe)
+        self.confidence_calibration_engine = AIConfidenceCalibrationEngine(event_bus, instrument.value, configuration.timeframe)
         self.risk_engine = RiskEngine(event_bus, instrument.value, configuration.timeframe)
         self.execution_policy_engine = TradeExecutionPolicyEngine(
             event_bus,
@@ -162,6 +165,7 @@ class SymbolRuntime:
 
     def start(self) -> None:
         self._status = RuntimeStatus.RUNNING
+        self.confidence_calibration_engine.start()
         self.execution_policy_engine.start()
         self.paper_execution_coordinator.start()
         self.execution_reconciliation_engine.start()
@@ -173,6 +177,7 @@ class SymbolRuntime:
         self.execution_reconciliation_engine.stop()
         self.paper_execution_coordinator.stop()
         self.execution_policy_engine.stop()
+        self.confidence_calibration_engine.stop()
         self._status = RuntimeStatus.STOPPED
 
     def mark_error(self) -> None:
@@ -431,6 +436,25 @@ class SymbolRuntime:
         self._updated_at = state.timestamp
         return state
 
+    def calibrate_ai_confidence(self, request: ConfidenceCalibrationRequest):
+        self._require_running()
+        if not isinstance(request, ConfidenceCalibrationRequest):
+            raise TypeError("request must be ConfidenceCalibrationRequest")
+        if request.instrument != self._instrument:
+            raise ValueError("Confidence calibration request instrument does not match SymbolRuntime.")
+        result = self.confidence_calibration_engine.calibrate(request)
+        self._updated_at = result.timestamp
+        return result
+
+    def get_confidence_result(self, calibration_id: str):
+        return self.confidence_calibration_engine.get_result(calibration_id)
+
+    def get_confidence_snapshot(self):
+        return self.confidence_calibration_engine.snapshot()
+
+    def reset_confidence_calibration(self):
+        return self.confidence_calibration_engine.reset()
+
     def run_risk(
         self,
         *,
@@ -589,6 +613,7 @@ class SymbolRuntime:
         self.market_context_engine.reset()
         self.ai_reasoning_engine.reset()
         self.strategy_engine.reset()
+        self.confidence_calibration_engine.reset()
         self.risk_engine.reset()
         self.execution_policy_engine.reset_session()
         self.paper_execution_coordinator.reset_session()
@@ -654,6 +679,7 @@ class SymbolRuntime:
             paper_execution=self.paper_execution_coordinator.snapshot(),
             execution_reconciliation=self.execution_reconciliation_engine.snapshot(),
             shadow_trading_session=self.shadow_trading_session_engine.snapshot(),
+            confidence_calibration=self.confidence_calibration_engine.snapshot(),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:

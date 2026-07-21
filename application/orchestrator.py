@@ -13,6 +13,7 @@ from core.enums.instrument import Instrument
 from core.models.candle import Candle
 from core.models.daily_ohlc import DailyOHLC
 from core.models.tick import Tick
+from engines.ai_confidence_calibration.models import ConfidenceCalibrationRequest
 from engines.market_data.market_data_engine import MarketDataEngine
 from engines.order_management.models import OrderCommand, OrderRequest, OrderState
 from engines.position.models import PositionFill, PositionMark
@@ -201,6 +202,19 @@ class ApplicationOrchestrator:
     def run_strategy(self, instrument: str | RuntimeInstrument, context=None, reasoning=None):
         self._require_running()
         return self.get_runtime(instrument).run_strategy(context, reasoning)
+
+    def calibrate_ai_confidence(self, instrument: str | RuntimeInstrument, request: ConfidenceCalibrationRequest):
+        self._require_running()
+        return self.get_runtime(instrument).calibrate_ai_confidence(request)
+
+    def get_confidence_result(self, instrument: str | RuntimeInstrument, calibration_id: str):
+        return self.get_runtime(instrument).get_confidence_result(calibration_id)
+
+    def get_confidence_snapshot(self, instrument: str | RuntimeInstrument):
+        return self.get_runtime(instrument).get_confidence_snapshot()
+
+    def reset_confidence_calibration(self, instrument: str | RuntimeInstrument):
+        return self.get_runtime(instrument).reset_confidence_calibration()
 
     def run_risk(
         self,
