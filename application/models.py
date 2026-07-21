@@ -27,6 +27,7 @@ from engines.historical_market_replay.models import ReplayConfiguration, ReplayS
 from engines.deterministic_backtest.models import BacktestConfiguration, BacktestSnapshot
 from engines.live_market_validation.models import LiveMarketValidationConfiguration, ValidationSessionSnapshot
 from application.live_shadow_session.models import LiveShadowSessionSnapshot
+from application.authorized_paper_execution.models import AuthorizedPaperHandoffSnapshot
 from engines.position.models import PositionState
 from engines.price_action.models import PriceActionState
 from engines.risk.models import RiskConfiguration, RiskDecisionState
@@ -221,3 +222,4 @@ class OrchestratorSnapshot:
     deterministic_backtest: BacktestSnapshot | None = None
     zerodha_connection: ZerodhaConnectionSnapshot | None = None
     live_shadow_session: LiveShadowSessionSnapshot | None = None
+    authorized_paper_handoff: AuthorizedPaperHandoffSnapshot | None = None
