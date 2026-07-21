@@ -123,6 +123,17 @@ EXECUTION_PLAN_EXPIRED = "execution_plan_expired"
 EXECUTION_POLICY_STATE_UPDATED = "execution_policy_state_updated"
 
 # ==================================================
+# Trade Decision Authorization Events
+# ==================================================
+
+TRADE_AUTHORIZATION_COMPLETED = "trade_authorization_completed"
+TRADE_AUTHORIZATION_APPROVED = "trade_authorization_approved"
+TRADE_AUTHORIZATION_REDUCED = "trade_authorization_reduced"
+TRADE_AUTHORIZATION_BLOCKED = "trade_authorization_blocked"
+TRADE_AUTHORIZATION_STATE_UPDATED = "trade_authorization_state_updated"
+TRADE_AUTHORIZATION_FAILED = "trade_authorization_failed"
+
+# ==================================================
 # Paper Execution Coordinator Events
 # ==================================================
 

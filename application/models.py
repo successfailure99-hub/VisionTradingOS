@@ -31,6 +31,7 @@ from engines.position.models import PositionState
 from engines.price_action.models import PriceActionState
 from engines.risk.models import RiskConfiguration, RiskDecisionState
 from engines.strategy.models import StrategyDecisionState
+from engines.trade_decision_authorization.models import TradeAuthorizationSnapshot
 from engines.trade_journal.models import TradeJournalRecord
 from engines.trade_execution_policy.models import ExecutionEngineSnapshot
 from engines.execution_reconciliation.models import ExecutionReconciliationSnapshot
@@ -202,6 +203,7 @@ class RuntimeSnapshot:
     execution_reconciliation: ExecutionReconciliationSnapshot | None = None
     shadow_trading_session: ShadowTradingSessionSnapshot | None = None
     confidence_calibration: ConfidenceCalibrationSnapshot | None = None
+    trade_authorization: TradeAuthorizationSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
