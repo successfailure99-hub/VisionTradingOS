@@ -259,8 +259,6 @@ class TradeDecisionAuthorizationEngine(BaseEngine):
         return ()
 
     def _policy_reasons(self, plan: TradeExecutionPlan) -> tuple[TradeAuthorizationReason, ...]:
-        if plan.status is ExecutionPlanStatus.AWAITING_MANUAL_APPROVAL:
-            return (TradeAuthorizationReason.POLICY_REDUCED,)
         if plan.decision_status in {
             ExecutionDecisionStatus.REJECTED,
             ExecutionDecisionStatus.LOCKED,
@@ -273,6 +271,8 @@ class TradeDecisionAuthorizationEngine(BaseEngine):
             ExecutionPlanStatus.CANCELLED,
         }:
             return (TradeAuthorizationReason.POLICY_BLOCKED,)
+        if plan.status is ExecutionPlanStatus.AWAITING_MANUAL_APPROVAL:
+            return (TradeAuthorizationReason.POLICY_REDUCED,)
         return ()
 
     def _publish_state(self) -> None:

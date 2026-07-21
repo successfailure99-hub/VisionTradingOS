@@ -251,7 +251,7 @@ def test_authorization_reduce_block_priority_reasons_and_multipliers():
         request(risk_result=risk(risk_tier=RiskTier.REDUCED, reduction_reason=RiskReductionReason.RECENT_LOSSES))
     )
     policy_reduced = started_engine().authorize(
-        request(execution_policy_result=policy(status=ExecutionPlanStatus.AWAITING_MANUAL_APPROVAL, decision_status=ExecutionDecisionStatus.LOCKED))
+        request(execution_policy_result=policy(status=ExecutionPlanStatus.AWAITING_MANUAL_APPROVAL, decision_status=ExecutionDecisionStatus.APPROVED))
     )
     confidence_blocked = started_engine().authorize(
         request(confidence_result=confidence(calibration_decision=CalibrationDecision.BLOCK, confidence_band=ConfidenceBand.BLOCKED))
@@ -283,9 +283,92 @@ def test_authorization_reduce_block_priority_reasons_and_multipliers():
     assert mixed.primary_reason is TradeAuthorizationReason.RISK_BLOCKED
     assert mixed.reasons == (
         TradeAuthorizationReason.RISK_BLOCKED,
+        TradeAuthorizationReason.POLICY_BLOCKED,
         TradeAuthorizationReason.CONFIDENCE_REDUCED,
-        TradeAuthorizationReason.POLICY_REDUCED,
     )
+
+
+@pytest.mark.parametrize(
+    "blocking_decision",
+    (
+        ExecutionDecisionStatus.REJECTED,
+        ExecutionDecisionStatus.LOCKED,
+        ExecutionDecisionStatus.INVALID,
+        ExecutionDecisionStatus.EXPIRED,
+    ),
+)
+def test_policy_blocking_decision_overrides_manual_approval_reduction(blocking_decision):
+    engine = started_engine()
+
+    blocked = engine.authorize(
+        request(
+            authorization_id=f"policy-block-{blocking_decision.value}",
+            execution_policy_result=policy(
+                status=ExecutionPlanStatus.AWAITING_MANUAL_APPROVAL,
+                decision_status=blocking_decision,
+            ),
+        )
+    )
+    ordinary_manual_approval = started_engine().authorize(
+        request(
+            execution_policy_result=policy(
+                status=ExecutionPlanStatus.AWAITING_MANUAL_APPROVAL,
+                decision_status=ExecutionDecisionStatus.APPROVED,
+            )
+        )
+    )
+    blocking_plan = started_engine().authorize(
+        request(
+            execution_policy_result=policy(
+                status=ExecutionPlanStatus.LOCKED,
+                decision_status=ExecutionDecisionStatus.APPROVED,
+            )
+        )
+    )
+
+    assert blocked.decision is TradeAuthorizationDecision.BLOCK
+    assert blocked.authorization_multiplier == 0.0
+    assert blocked.primary_reason is TradeAuthorizationReason.POLICY_BLOCKED
+    assert blocked.reasons == (TradeAuthorizationReason.POLICY_BLOCKED,)
+    assert ordinary_manual_approval.decision is TradeAuthorizationDecision.REDUCE
+    assert ordinary_manual_approval.primary_reason is TradeAuthorizationReason.POLICY_REDUCED
+    assert blocking_plan.primary_reason is TradeAuthorizationReason.POLICY_BLOCKED
+    assert engine.snapshot().lifecycle_state is TradeAuthorizationLifecycle.ACTIVE
+
+
+def test_policy_block_overrides_reductions_preserves_lower_reasons_and_is_idempotent():
+    bus = EventBus()
+    completed = []
+    bus.subscribe(events.TRADE_AUTHORIZATION_COMPLETED, completed.append)
+    engine = started_engine(bus)
+    blocked_request = request(
+        authorization_id="policy-block-over-reductions",
+        confidence_result=confidence(calibration_decision=CalibrationDecision.REDUCE, final_score=40.0, confidence_band=ConfidenceBand.LOW),
+        risk_result=risk(risk_tier=RiskTier.REDUCED, reduction_reason=RiskReductionReason.RECENT_LOSSES),
+        execution_policy_result=policy(status=ExecutionPlanStatus.AWAITING_MANUAL_APPROVAL, decision_status=ExecutionDecisionStatus.REJECTED),
+    )
+
+    first = engine.authorize(blocked_request)
+    second = engine.authorize(blocked_request)
+    snapshot = engine.snapshot()
+
+    assert first is second
+    assert first.decision is TradeAuthorizationDecision.BLOCK
+    assert first.authorization_multiplier == 0.0
+    assert first.primary_reason is TradeAuthorizationReason.POLICY_BLOCKED
+    assert first.reasons == (
+        TradeAuthorizationReason.POLICY_BLOCKED,
+        TradeAuthorizationReason.CONFIDENCE_REDUCED,
+        TradeAuthorizationReason.RISK_REDUCED,
+    )
+    assert first.direction is TradeDirection.BULLISH
+    assert snapshot.authorization_count == 1
+    assert snapshot.blocked_count == 1
+    assert snapshot.lifecycle_state is TradeAuthorizationLifecycle.ACTIVE
+    assert snapshot.broker_order_calls == 0
+    assert snapshot.mutation_calls == 0
+    assert snapshot.live_order_submission_enabled is False
+    assert len(completed) == 1
 
 
 def test_consistency_direction_mismatch_and_orchestrator_cross_instrument_rejection():
