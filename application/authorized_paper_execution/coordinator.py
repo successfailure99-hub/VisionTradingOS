@@ -77,18 +77,10 @@ class AuthorizedPaperExecutionCoordinator(BaseEngine):
         return self.snapshot()
 
     def handoff(self, request: AuthorizedPaperHandoffRequest) -> AuthorizedPaperHandoffResult:
-        if self._lifecycle_state in {
-            AuthorizedPaperHandoffLifecycle.STOPPED,
-            AuthorizedPaperHandoffLifecycle.FAILED,
-        }:
-            if not isinstance(request, AuthorizedPaperHandoffRequest):
-                raise TypeError("request must be AuthorizedPaperHandoffRequest")
-            reason = (
-                AuthorizedPaperHandoffReason.INVALID_INPUT
-                if self._lifecycle_state is AuthorizedPaperHandoffLifecycle.FAILED
-                else AuthorizedPaperHandoffReason.PLAN_NOT_EXECUTABLE
-            )
-            return self._store_result(request, self._rejected_result(request, (reason,)))
+        if self._lifecycle_state is AuthorizedPaperHandoffLifecycle.STOPPED:
+            raise RuntimeError("authorized paper handoff coordinator is stopped")
+        if self._lifecycle_state is AuthorizedPaperHandoffLifecycle.FAILED:
+            raise RuntimeError("authorized paper handoff coordinator is failed")
         if not isinstance(request, AuthorizedPaperHandoffRequest):
             raise TypeError("request must be AuthorizedPaperHandoffRequest")
         if self._lifecycle_state is AuthorizedPaperHandoffLifecycle.CREATED:

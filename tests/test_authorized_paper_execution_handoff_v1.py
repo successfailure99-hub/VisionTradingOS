@@ -271,8 +271,8 @@ def test_lifecycle_transitions_and_expected_outcomes_do_not_fail_lifecycle():
     item.handoff(request(handoff_id="handoff-2", execution_plan=second_plan, authorization_result=authorization(second_plan, authorization_id="auth-2")))
     assert item.snapshot().lifecycle_state is AuthorizedPaperHandoffLifecycle.ACTIVE
     assert item.stop().lifecycle_state is AuthorizedPaperHandoffLifecycle.STOPPED
-    stopped = item.handoff(request(handoff_id="handoff-stopped"))
-    assert stopped.decision is AuthorizedPaperHandoffDecision.REJECT
+    with pytest.raises(RuntimeError, match="authorized paper handoff coordinator is stopped"):
+        item.handoff(request(handoff_id="handoff-stopped"))
     assert item.snapshot().lifecycle_state is AuthorizedPaperHandoffLifecycle.STOPPED
     assert item.reset().lifecycle_state is AuthorizedPaperHandoffLifecycle.READY
 
@@ -280,10 +280,73 @@ def test_lifecycle_transitions_and_expected_outcomes_do_not_fail_lifecycle():
     assert reduced.decision is AuthorizedPaperHandoffDecision.HOLD_REDUCTION_REQUIRED
     assert item.snapshot().lifecycle_state is AuthorizedPaperHandoffLifecycle.ACTIVE
     item._lifecycle_state = AuthorizedPaperHandoffLifecycle.FAILED
-    failed = item.handoff(request(handoff_id="failed-state"))
-    assert failed.decision is AuthorizedPaperHandoffDecision.REJECT
+    with pytest.raises(RuntimeError, match="authorized paper handoff coordinator is failed"):
+        item.handoff(request(handoff_id="failed-state"))
     assert item.snapshot().lifecycle_state is AuthorizedPaperHandoffLifecycle.FAILED
     assert item.reset().lifecycle_state is AuthorizedPaperHandoffLifecycle.READY
+
+
+def test_terminal_lifecycle_handoff_raises_without_state_counters_events_or_paper_calls():
+    bus = EventBus()
+    business_events = []
+    for event_name in (
+        events.AUTHORIZED_PAPER_HANDOFF_COMPLETED,
+        events.AUTHORIZED_PAPER_HANDOFF_EXECUTED,
+        events.AUTHORIZED_PAPER_HANDOFF_HELD,
+        events.AUTHORIZED_PAPER_HANDOFF_REJECTED,
+        events.AUTHORIZED_PAPER_HANDOFF_FAILED,
+        events.AUTHORIZED_PAPER_HANDOFF_STATE_UPDATED,
+    ):
+        bus.subscribe(event_name, lambda payload, event_name=event_name: business_events.append((event_name, payload)))
+    item, fake = coordinator(bus=bus)
+    item.stop()
+    business_events.clear()
+    before = item.snapshot()
+
+    with pytest.raises(RuntimeError, match="authorized paper handoff coordinator is stopped"):
+        item.handoff(request(handoff_id="stopped-handoff"))
+
+    stopped = item.snapshot()
+    assert stopped.lifecycle_state is AuthorizedPaperHandoffLifecycle.STOPPED
+    assert stopped.handoff_count == before.handoff_count
+    assert stopped.rejected_count == before.rejected_count
+    assert stopped.paper_execution_call_count == before.paper_execution_call_count
+    assert item.get_result("stopped-handoff") is None
+    assert business_events == []
+    assert fake.calls == 0
+    assert item.reset().lifecycle_state is AuthorizedPaperHandoffLifecycle.READY
+    valid_after_stopped_reset = item.handoff(request(handoff_id="valid-after-stopped-reset"))
+    assert valid_after_stopped_reset.decision is AuthorizedPaperHandoffDecision.EXECUTE
+
+    item._lifecycle_state = AuthorizedPaperHandoffLifecycle.FAILED
+    business_events.clear()
+    fake.calls = 0
+    before_failed = item.snapshot()
+    with pytest.raises(RuntimeError, match="authorized paper handoff coordinator is failed"):
+        item.handoff(request(handoff_id="failed-handoff"))
+
+    failed = item.snapshot()
+    assert failed.lifecycle_state is AuthorizedPaperHandoffLifecycle.FAILED
+    assert failed.handoff_count == before_failed.handoff_count
+    assert failed.executed_count == before_failed.executed_count
+    assert failed.held_count == before_failed.held_count
+    assert failed.rejected_count == before_failed.rejected_count
+    assert failed.paper_execution_call_count == before_failed.paper_execution_call_count
+    assert item.get_result("failed-handoff") is None
+    assert business_events == []
+    assert fake.calls == 0
+    assert item.reset().lifecycle_state is AuthorizedPaperHandoffLifecycle.READY
+    next_plan = plan(execution_plan_id="plan-after-failed-reset", risk_decision_id="risk-after-failed-reset")
+    valid_after_failed_reset = item.handoff(
+        request(
+            handoff_id="valid-after-failed-reset",
+            execution_plan=next_plan,
+            authorization_result=authorization(next_plan, authorization_id="auth-after-failed-reset"),
+        )
+    )
+    assert valid_after_failed_reset.decision is AuthorizedPaperHandoffDecision.EXECUTE
+    assert item.snapshot().broker_order_calls == 0
+    assert item.snapshot().live_order_submission_enabled is False
 
 
 def test_authorize_invokes_public_paper_facade_once_and_preserves_plan_identity_and_values():
