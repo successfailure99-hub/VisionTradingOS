@@ -485,6 +485,59 @@ def test_secondary_evidence_staleness_is_reported_without_primary_block():
     assert EvidenceCategory.SUPPORTING_INDICATORS in result.stale_categories
 
 
+def test_invalid_vwap_is_invalid_non_blocking_stored_idempotent_and_lifecycle_safe():
+    engine = started_engine()
+    req = request(calibration_id="invalid-vwap", vwap=object())
+
+    result = engine.calibrate(req)
+    vwap_evidence = evidence(result, EvidenceCategory.VWAP)
+    snapshot = engine.snapshot()
+
+    assert vwap_evidence.alignment is EvidenceAlignment.INVALID
+    assert vwap_evidence.maximum_weight == 8
+    assert vwap_evidence.contribution == -8.0
+    assert vwap_evidence.reason_code == "invalid_vwap"
+    assert vwap_evidence.explanation == "VWAP result is invalid."
+    assert EvidenceCategory.VWAP in result.invalid_categories
+    assert "vwap_invalid" not in result.blocked_reasons
+    assert result.calibration_decision is not CalibrationDecision.BLOCK
+    assert result.confidence_band is not ConfidenceBand.BLOCKED
+    assert result.direction is TradeDirection.BULLISH
+    assert snapshot.lifecycle_state is ConfidenceCalibrationLifecycle.ACTIVE
+    assert snapshot.calibration_count == 1
+    assert snapshot.broker_order_calls == 0
+    assert snapshot.mutation_calls == 0
+    assert snapshot.live_order_submission_enabled is False
+    assert engine.get_result("invalid-vwap") is result
+
+    duplicate = engine.calibrate(req)
+    duplicate_snapshot = engine.snapshot()
+
+    assert duplicate is result
+    assert duplicate_snapshot.calibration_count == 1
+    assert duplicate_snapshot.lifecycle_state is ConfidenceCalibrationLifecycle.ACTIVE
+
+
+def test_valid_missing_and_stale_vwap_classification_remain_unchanged():
+    valid = started_engine().calibrate(request(calibration_id="valid-vwap"))
+    missing = started_engine().calibrate(request(calibration_id="missing-vwap", vwap=None))
+    stale = started_engine().calibrate(
+        request(
+            calibration_id="stale-vwap",
+            vwap=vwap_levels(timestamp=NOW - timedelta(seconds=301)),
+        )
+    )
+
+    assert evidence(valid, EvidenceCategory.VWAP).alignment is EvidenceAlignment.SUPPORTS
+    assert evidence(valid, EvidenceCategory.VWAP).contribution == 8.0
+    assert evidence(missing, EvidenceCategory.VWAP).alignment is EvidenceAlignment.MISSING
+    assert evidence(missing, EvidenceCategory.VWAP).contribution == 0.0
+    assert EvidenceCategory.VWAP in missing.missing_categories
+    assert evidence(stale, EvidenceCategory.VWAP).alignment is EvidenceAlignment.STALE
+    assert evidence(stale, EvidenceCategory.VWAP).contribution == -4.0
+    assert EvidenceCategory.VWAP in stale.stale_categories
+
+
 def test_daily_cpr_camarilla_future_dates_are_rejected():
     with pytest.raises(ValueError, match="cpr trading date cannot be in the future"):
         request(cpr=cpr_levels(NOW.date() + timedelta(days=1)))

@@ -38,6 +38,7 @@ from engines.option_chain.models import OptionChainState
 from engines.price_action.enums import BreakDirection, MarketStructure, Trend
 from engines.price_action.models import PriceActionState
 from engines.strategy.enums import TradeDirection
+from engines.vwap.levels import VWAPLevels
 
 
 CATEGORY_WEIGHTS = {
@@ -321,6 +322,8 @@ class AIConfidenceCalibrationEngine(BaseEngine):
         category = EvidenceCategory.VWAP
         if state is None:
             return self._missing(category, request)
+        if not isinstance(state, VWAPLevels):
+            return self._invalid(category, request, "invalid_vwap", "VWAP result is invalid.")
         stale = self._stale(category, state, request)
         if stale is not None:
             return stale
