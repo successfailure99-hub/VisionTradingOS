@@ -4,7 +4,7 @@ Immutable TradingView Evidence Mapping Engine V1 models.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime
 import json
 import math
@@ -270,13 +270,21 @@ def evidence_timestamp(source: object | None) -> datetime | None:
         return None
     for name in ("timestamp", "updated_at", "end_time"):
         value = getattr(source, name, None)
-        if isinstance(value, datetime):
+        if _aware_timestamp_or_none(value) is not None:
             return value
     last_candle = getattr(source, "last_candle", None)
     value = getattr(last_candle, "end_time", None)
-    if isinstance(value, datetime):
+    if _aware_timestamp_or_none(value) is not None:
         return value
     return None
+
+
+def _aware_timestamp_or_none(value: object) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        return None
+    return value
 
 
 def _validate_aware(value: datetime, field_name: str) -> None:
@@ -316,7 +324,7 @@ def _stable(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
     if is_dataclass(value):
-        return {key: _stable(item) for key, item in asdict(value).items()}
+        return {field.name: _stable(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, tuple):
         return [_stable(item) for item in value]
     if isinstance(value, list):

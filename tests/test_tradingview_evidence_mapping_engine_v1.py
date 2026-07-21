@@ -55,6 +55,12 @@ from engines.vwap.levels import VWAPLevels
 NOW = datetime(2026, 7, 21, 9, 30, tzinfo=timezone.utc)
 
 
+class WrongEvidence:
+    def __init__(self, **attributes):
+        for name, value in attributes.items():
+            setattr(self, name, value)
+
+
 def candle(*, end_time=NOW, close=100.0) -> Candle:
     return Candle(
         symbol="NIFTY",
@@ -257,6 +263,70 @@ def test_models_are_immutable_validate_timestamp_instrument_price_tuple_and_safe
 def test_future_source_timestamp_is_rejected():
     with pytest.raises(ValueError, match="source timestamp"):
         request(vwap=vwap(timestamp=NOW + timedelta(seconds=1)))
+
+
+def test_naive_timestamps_on_invalid_evidence_are_ignored_and_map_normally():
+    bus = EventBus()
+    invalid_events = []
+    bus.subscribe(TRADINGVIEW_EVIDENCE_INVALID, lambda payload: invalid_events.append(payload))
+    item = engine(bus)
+    naive = datetime(2026, 7, 21, 9, 29)
+    invalid_moving_average = WrongEvidence(last_candle=WrongEvidence(end_time=naive))
+    req = request(
+        evidence_id="invalid-naive-timestamps",
+        camarilla=WrongEvidence(timestamp=naive),
+        cpr=WrongEvidence(updated_at=naive),
+        vwap=WrongEvidence(end_time=naive),
+        moving_averages=(invalid_moving_average,),
+    )
+
+    result = item.map_evidence(req)
+    duplicate = item.map_evidence(req)
+    snapshot = item.snapshot()
+
+    assert result is duplicate
+    assert result.camarilla_status.availability is EvidenceAvailability.INVALID
+    assert result.cpr_status.availability is EvidenceAvailability.INVALID
+    assert result.vwap_status.availability is EvidenceAvailability.INVALID
+    assert result.moving_average_status.availability is EvidenceAvailability.INVALID
+    for status in (
+        result.camarilla_status,
+        result.cpr_status,
+        result.vwap_status,
+        result.moving_average_status,
+    ):
+        assert status.source_timestamp is None
+        assert status.age_seconds is None
+    assert isinstance(result, TradingViewEvidenceSnapshot)
+    assert set(result.invalid_evidence) >= {"camarilla", "cpr", "vwap", "moving_averages"}
+    assert snapshot.invalid_mapping_count == 1
+    assert snapshot.mapping_count == 1
+    assert len(invalid_events) == 1
+    assert snapshot.lifecycle_state is TradingViewEvidenceLifecycle.ACTIVE
+    assert result.broker_order_calls == 0
+    assert result.trade_decision_generated is False
+    assert result.live_order_submission_enabled is False
+
+
+def test_aware_source_timestamp_validation_and_freshness_remain_unchanged():
+    with pytest.raises(ValueError, match="source timestamp"):
+        request(evidence_id="future-aware", camarilla=WrongEvidence(timestamp=NOW + timedelta(seconds=1)))
+
+    stale = map_request(
+        evidence_id="stale-aware",
+        vwap=vwap(timestamp=NOW - timedelta(seconds=301)),
+    )
+    fresh = map_request(
+        evidence_id="fresh-aware",
+        vwap=vwap(timestamp=NOW - timedelta(seconds=299)),
+    )
+
+    assert stale.vwap_status.availability is EvidenceAvailability.STALE
+    assert stale.vwap_status.source_timestamp == NOW - timedelta(seconds=301)
+    assert stale.vwap_status.age_seconds == pytest.approx(301.0)
+    assert fresh.vwap_status.availability is EvidenceAvailability.AVAILABLE
+    assert fresh.vwap_status.source_timestamp == NOW - timedelta(seconds=299)
+    assert fresh.vwap_status.age_seconds == pytest.approx(299.0)
 
 
 def test_lifecycle_stop_failed_reset_and_expected_mapping_outcomes_are_safe():
