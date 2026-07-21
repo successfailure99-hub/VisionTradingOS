@@ -38,6 +38,8 @@ from engines.risk.risk_engine import RiskEngine
 from engines.risk.trade_plan_engine import RiskTradePlanEngine
 from engines.strategy.models import StrategyDecisionState, StrategySnapshot
 from engines.strategy.strategy_engine import StrategyEngine
+from engines.trade_decision_authorization.engine import TradeDecisionAuthorizationEngine
+from engines.trade_decision_authorization.models import TradeAuthorizationRequest
 from engines.trade_execution_policy.engine import TradeExecutionPolicyEngine
 from engines.trade_execution_policy.enums import ExecutionMode, ExecutionPlanStatus
 from engines.trade_execution_policy.models import ExecutionRequest, TradeExecutionPlan
@@ -94,6 +96,11 @@ class SymbolRuntime:
         self.confidence_calibration_engine = AIConfidenceCalibrationEngine(event_bus, instrument.value, configuration.timeframe)
         self.risk_engine = RiskEngine(event_bus, instrument.value, configuration.timeframe)
         self.execution_policy_engine = TradeExecutionPolicyEngine(
+            event_bus,
+            instrument=instrument.value,
+            timeframe=configuration.timeframe,
+        )
+        self.trade_authorization_engine = TradeDecisionAuthorizationEngine(
             event_bus,
             instrument=instrument.value,
             timeframe=configuration.timeframe,
@@ -167,6 +174,7 @@ class SymbolRuntime:
         self._status = RuntimeStatus.RUNNING
         self.confidence_calibration_engine.start()
         self.execution_policy_engine.start()
+        self.trade_authorization_engine.start()
         self.paper_execution_coordinator.start()
         self.execution_reconciliation_engine.start()
         self.shadow_trading_session_engine.start()
@@ -176,6 +184,7 @@ class SymbolRuntime:
         self.shadow_trading_session_engine.stop()
         self.execution_reconciliation_engine.stop()
         self.paper_execution_coordinator.stop()
+        self.trade_authorization_engine.stop()
         self.execution_policy_engine.stop()
         self.confidence_calibration_engine.stop()
         self._status = RuntimeStatus.STOPPED
@@ -503,6 +512,25 @@ class SymbolRuntime:
         self._updated_at = plan.created_at
         return plan
 
+    def authorize_trade_decision(self, request: TradeAuthorizationRequest):
+        self._require_running()
+        if not isinstance(request, TradeAuthorizationRequest):
+            raise TypeError("request must be TradeAuthorizationRequest")
+        if request.instrument != self._instrument:
+            raise ValueError("Trade authorization request instrument does not match SymbolRuntime.")
+        result = self.trade_authorization_engine.authorize(request)
+        self._updated_at = result.timestamp
+        return result
+
+    def get_trade_authorization_result(self, authorization_id: str):
+        return self.trade_authorization_engine.get_result(authorization_id)
+
+    def get_trade_authorization_snapshot(self):
+        return self.trade_authorization_engine.snapshot()
+
+    def reset_trade_authorization(self):
+        return self.trade_authorization_engine.reset()
+
     def create_order_from_execution_plan(self, plan: TradeExecutionPlan) -> OrderState | None:
         self._require_running()
         if not isinstance(plan, TradeExecutionPlan):
@@ -616,6 +644,7 @@ class SymbolRuntime:
         self.confidence_calibration_engine.reset()
         self.risk_engine.reset()
         self.execution_policy_engine.reset_session()
+        self.trade_authorization_engine.reset()
         self.paper_execution_coordinator.reset_session()
         self.execution_reconciliation_engine.reset_session()
         self.shadow_trading_session_engine.reset_session()
@@ -680,6 +709,7 @@ class SymbolRuntime:
             execution_reconciliation=self.execution_reconciliation_engine.snapshot(),
             shadow_trading_session=self.shadow_trading_session_engine.snapshot(),
             confidence_calibration=self.confidence_calibration_engine.snapshot(),
+            trade_authorization=self.trade_authorization_engine.snapshot(),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:

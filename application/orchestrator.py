@@ -21,6 +21,7 @@ from engines.risk.models import AccountRiskState, RiskPolicy, TradeRiskPlan
 from engines.paper_execution_coordinator.models import PaperExecutionReceipt, PaperExecutionRequest
 from engines.execution_reconciliation.models import ExecutionReconciliationRequest, ExecutionReconciliationReport
 from engines.shadow_trading_session.models import ShadowTradingSessionRequest
+from engines.trade_decision_authorization.models import TradeAuthorizationRequest
 from engines.trade_execution_policy.models import ExecutionRequest, TradeExecutionPlan
 from engines.performance_analytics.engine import PerformanceAnalyticsEngine
 from engines.deterministic_backtest.engine import DeterministicBacktestEngine
@@ -238,6 +239,24 @@ class ApplicationOrchestrator:
     def evaluate_execution_policy(self, instrument: str | RuntimeInstrument, request: ExecutionRequest) -> TradeExecutionPlan:
         self._require_running()
         return self.get_runtime(instrument).evaluate_execution_policy(request)
+
+    def authorize_trade_decision(self, instrument: str | RuntimeInstrument, request: TradeAuthorizationRequest):
+        self._require_running()
+        runtime = self.get_runtime(instrument)
+        if not isinstance(request, TradeAuthorizationRequest):
+            raise TypeError("request must be TradeAuthorizationRequest")
+        if request.instrument != runtime.instrument:
+            raise ValueError("Trade authorization request instrument does not match runtime.")
+        return runtime.authorize_trade_decision(request)
+
+    def get_trade_authorization_result(self, instrument: str | RuntimeInstrument, authorization_id: str):
+        return self.get_runtime(instrument).get_trade_authorization_result(authorization_id)
+
+    def get_trade_authorization_snapshot(self, instrument: str | RuntimeInstrument):
+        return self.get_runtime(instrument).get_trade_authorization_snapshot()
+
+    def reset_trade_authorization(self, instrument: str | RuntimeInstrument):
+        return self.get_runtime(instrument).reset_trade_authorization()
 
     def create_order_from_execution_plan(self, instrument: str | RuntimeInstrument, plan: TradeExecutionPlan) -> OrderState | None:
         self._require_running()
