@@ -24,6 +24,7 @@ from engines.execution_reconciliation.models import ExecutionReconciliationReque
 from engines.shadow_trading_session.models import ShadowTradingSessionRequest
 from engines.trade_decision_authorization.models import TradeAuthorizationRequest
 from engines.trade_execution_policy.models import ExecutionRequest, TradeExecutionPlan
+from engines.tradingview_evidence.models import TradingViewEvidenceRequest
 from engines.performance_analytics.engine import PerformanceAnalyticsEngine
 from engines.deterministic_backtest.engine import DeterministicBacktestEngine
 from engines.historical_market_replay import ReplayConfiguration, ReplayMode
@@ -261,6 +262,24 @@ class ApplicationOrchestrator:
 
     def reset_trade_authorization(self, instrument: str | RuntimeInstrument):
         return self.get_runtime(instrument).reset_trade_authorization()
+
+    def map_tradingview_evidence(self, instrument: str | RuntimeInstrument, request: TradingViewEvidenceRequest):
+        self._require_running()
+        runtime = self.get_runtime(instrument)
+        if not isinstance(request, TradingViewEvidenceRequest):
+            raise TypeError("request must be TradingViewEvidenceRequest")
+        if request.instrument != runtime.instrument:
+            raise ValueError("TradingView evidence request instrument does not match runtime.")
+        return runtime.map_tradingview_evidence(request)
+
+    def get_tradingview_evidence(self, instrument: str | RuntimeInstrument, evidence_id: str):
+        return self.get_runtime(instrument).get_tradingview_evidence(evidence_id)
+
+    def get_tradingview_evidence_snapshot(self, instrument: str | RuntimeInstrument):
+        return self.get_runtime(instrument).tradingview_evidence_snapshot()
+
+    def reset_tradingview_evidence(self, instrument: str | RuntimeInstrument):
+        return self.get_runtime(instrument).reset_tradingview_evidence()
 
     def create_order_from_execution_plan(self, instrument: str | RuntimeInstrument, plan: TradeExecutionPlan) -> OrderState | None:
         self._require_running()

@@ -73,6 +73,16 @@ AI_CONFIDENCE_STATE_UPDATED = "ai_confidence_state_updated"
 AI_CONFIDENCE_FAILED = "ai_confidence_failed"
 
 # ==================================================
+# TradingView Evidence Mapping Events
+# ==================================================
+
+TRADINGVIEW_EVIDENCE_MAPPED = "tradingview_evidence_mapped"
+TRADINGVIEW_EVIDENCE_PARTIAL = "tradingview_evidence_partial"
+TRADINGVIEW_EVIDENCE_INVALID = "tradingview_evidence_invalid"
+TRADINGVIEW_EVIDENCE_STATE_UPDATED = "tradingview_evidence_state_updated"
+TRADINGVIEW_EVIDENCE_FAILED = "tradingview_evidence_failed"
+
+# ==================================================
 # Strategy Events
 # ==================================================
 
