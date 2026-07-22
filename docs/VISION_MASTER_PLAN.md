@@ -38,6 +38,33 @@ tests/ docs/
 -   Exchange
 -   Camarilla Engine
 -   CPR Engine
+-   TradingView Evidence Mapping Engine
+-   TradingView Evidence Assembly Coordinator
+
+## TradingView Evidence Assembly Coordinator V1
+
+The TradingView Evidence Assembly Coordinator is an application-layer
+coordinator, not a calculation engine. It is owned by `SymbolRuntime` and
+collects the canonical outputs already produced by Candle, Price Action,
+Camarilla, CPR, VWAP, Option Chain, and Market Context.
+
+Event flow:
+
+Tick -> Market Data Engine -> Candle Engine -> existing analysis engines ->
+TradingView Evidence Assembly Coordinator -> TradingView Evidence Mapping Engine
+-> `TRADINGVIEW_EVIDENCE_MAPPED` or `TRADINGVIEW_EVIDENCE_PARTIAL`.
+
+Snapshot lifecycle:
+
+- Wait until a latest price and latest closed candle exist.
+- Build one deterministic immutable TradingView evidence request from existing
+  runtime state.
+- Delegate mapping and EventBus publishing to the existing TradingView Evidence
+  Mapping Engine.
+- Publish partial evidence when required upstream analytical snapshots are
+  missing, stale, or invalid.
+- Never calculate CPR, Camarilla, VWAP, Price Action, Option Chain, or Market
+  Context inside the coordinator.
 
 ## Current Milestone
 

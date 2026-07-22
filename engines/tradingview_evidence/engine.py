@@ -35,7 +35,16 @@ from .models import (
 )
 
 
-FOUNDATIONAL_EVIDENCE = ("latest_price", "latest_candle", "camarilla", "cpr", "vwap")
+FOUNDATIONAL_EVIDENCE = (
+    "latest_price",
+    "latest_candle",
+    "price_action",
+    "camarilla",
+    "cpr",
+    "vwap",
+    "option_chain",
+    "market_context",
+)
 EVIDENCE_ORDER = (
     "latest_price",
     "latest_candle",

@@ -476,8 +476,8 @@ def test_availability_missing_invalid_stale_ordering_and_partial_complete_counts
     )
     snapshot = item.snapshot()
     assert snapshot.mapping_count == 5
-    assert snapshot.available_mapping_count == 2
-    assert snapshot.partial_mapping_count == 3
+    assert snapshot.available_mapping_count == 1
+    assert snapshot.partial_mapping_count == 4
     assert snapshot.invalid_mapping_count == 1
 
 
@@ -560,7 +560,7 @@ def test_symbol_runtime_and_orchestrator_facades_reuse_instrument_timeframe_even
     assert orchestrator.stop().status.value == "stopped"
 
 
-def test_tick_and_candle_processing_do_not_automatically_invoke_evidence_mapping():
+def test_bare_tick_without_closed_candle_does_not_automatically_invoke_evidence_mapping():
     bus = EventBus()
     orchestrator = ApplicationOrchestrator(bus, RuntimeConfiguration(instruments=(RuntimeInstrument.NIFTY,)))
     orchestrator.start()
@@ -575,7 +575,6 @@ def test_tick_and_candle_processing_do_not_automatically_invoke_evidence_mapping
         open_interest=0,
     )
     runtime = orchestrator.get_runtime(RuntimeInstrument.NIFTY)
-    orchestrator.warm_up_candles(RuntimeInstrument.NIFTY, (candle(end_time=NOW - timedelta(minutes=1)),))
     assert runtime.tradingview_evidence_snapshot().mapping_count == 0
     orchestrator.process_tick(tick)
     assert runtime.tradingview_evidence_snapshot().mapping_count == 0

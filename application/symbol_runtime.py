@@ -49,6 +49,10 @@ from engines.vwap.vwap_engine import VWAPEngine
 
 from application.enums import RuntimeInstrument, RuntimeStatus
 from application.models import RuntimeConfiguration, RuntimeSnapshot, RuntimeVWAPSource
+from application.tradingview_evidence_assembly import (
+    TradingViewEvidenceAssemblyCoordinator,
+    TradingViewEvidenceAssemblyInput,
+)
 
 
 class SymbolRuntime:
@@ -159,6 +163,11 @@ class SymbolRuntime:
             event_bus,
             instrument=instrument.value,
             timeframe=configuration.timeframe,
+        )
+        self.tradingview_evidence_assembly_coordinator = TradingViewEvidenceAssemblyCoordinator(
+            instrument=instrument,
+            timeframe=configuration.timeframe,
+            mapping_engine=self.tradingview_evidence_engine,
         )
 
     @property
@@ -670,6 +679,7 @@ class SymbolRuntime:
         self.strategy_engine.reset()
         self.confidence_calibration_engine.reset()
         self.tradingview_evidence_engine.reset()
+        self.tradingview_evidence_assembly_coordinator.reset()
         self.risk_engine.reset()
         self.execution_policy_engine.reset_session()
         self.trade_authorization_engine.reset()
@@ -775,12 +785,42 @@ class SymbolRuntime:
                 session_high=session_high,
                 session_low=session_low,
             )
+        except Exception:
+            # Downstream dashboard analysis must never reject an otherwise valid
+            # market-data tick; engines keep their previous deterministic state.
+            return
+
+        try:
+            self._assemble_tradingview_evidence(timestamp, current_price)
+        except Exception:
+            pass
+
+        try:
             reasoning = self.run_ai_reasoning(context)
             self.run_strategy(context, reasoning)
         except Exception:
             # Downstream dashboard analysis must never reject an otherwise valid
             # market-data tick; engines keep their previous deterministic state.
             return
+
+    def _assemble_tradingview_evidence(self, timestamp, current_price: float):
+        history = self.candle_engine.get_history(self._core_instrument)
+        latest_closed_candle = history[-1] if history else None
+        source = TradingViewEvidenceAssemblyInput(
+            timestamp=timestamp,
+            instrument=self._instrument,
+            timeframe=self._configuration.timeframe,
+            latest_price=current_price,
+            latest_candle=latest_closed_candle,
+            price_action=self.price_action_engine.state,
+            camarilla=self.camarilla_engine.levels,
+            cpr=self.cpr_engine.levels,
+            vwap=self.vwap_engine.get_latest(self._core_instrument),
+            option_chain=self.option_chain_engine.state,
+            market_context=self.market_context_engine.state,
+            correlation_id=f"{self._instrument.value}:{self._configuration.timeframe}:{timestamp.isoformat()}",
+        )
+        return self.tradingview_evidence_assembly_coordinator.assemble(source)
 
     def _session_high_low(self, current_price: float) -> tuple[float, float]:
         highs = [current_price]
