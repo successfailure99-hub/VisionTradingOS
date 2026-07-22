@@ -40,13 +40,16 @@ tests/ docs/
 -   CPR Engine
 -   TradingView Evidence Mapping Engine
 -   TradingView Evidence Assembly Coordinator
+-   ADR Engine
+-   Moving Average Context Engine
 
 ## TradingView Evidence Assembly Coordinator V1
 
 The TradingView Evidence Assembly Coordinator is an application-layer
 coordinator, not a calculation engine. It is owned by `SymbolRuntime` and
 collects the canonical outputs already produced by Candle, Price Action,
-Camarilla, CPR, VWAP, Option Chain, and Market Context.
+Camarilla, CPR, VWAP, ADR, Moving Average Context, Option Chain, and Market
+Context.
 
 Event flow:
 
@@ -63,8 +66,30 @@ Snapshot lifecycle:
   Mapping Engine.
 - Publish partial evidence when required upstream analytical snapshots are
   missing, stale, or invalid.
-- Never calculate CPR, Camarilla, VWAP, Price Action, Option Chain, or Market
-  Context inside the coordinator.
+- Never calculate CPR, Camarilla, VWAP, ADR, Moving Average Context, Price
+  Action, Option Chain, or Market Context inside the coordinator.
+
+## Moving Average Context Engine V1
+
+Moving Average Context is an evidence engine, not a strategy or risk engine. It
+consumes closed candles for a single `Instrument` and `TimeFrame` lane and
+publishes immutable EMA context through `MA_CONTEXT_UPDATED`,
+`MA_CONTEXT_PARTIAL`, `MA_CONTEXT_INVALID`, `MA_CONTEXT_FAILED`, and
+`MA_CONTEXT_STATE_UPDATED`.
+
+Runtime ownership:
+
+- One `MovingAverageContextEngine` per configured instrument/timeframe lane.
+- No market-data ownership, tick processing, historical downloads, order
+  execution, confidence scoring, or position sizing.
+- EMA 20, EMA 50, and EMA 200 are the default profile; future profile periods
+  are configured centrally without changing runtime ownership.
+
+Event flow:
+
+Tick -> Market Data Engine -> Candle Engine -> closed Candle -> Moving Average
+Context Engine -> TradingView Evidence Assembly Coordinator -> TradingView
+Evidence Mapping Engine.
 
 ## Current Milestone
 

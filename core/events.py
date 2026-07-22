@@ -42,6 +42,11 @@ ADR_PARTIAL = "adr_partial"
 ADR_INVALID = "adr_invalid"
 ADR_FAILED = "adr_failed"
 ADR_STATE_UPDATED = "adr_state_updated"
+MA_CONTEXT_UPDATED = "ma_context_updated"
+MA_CONTEXT_PARTIAL = "ma_context_partial"
+MA_CONTEXT_INVALID = "ma_context_invalid"
+MA_CONTEXT_FAILED = "ma_context_failed"
+MA_CONTEXT_STATE_UPDATED = "ma_context_state_updated"
 
 # ==================================================
 # Market Context Events

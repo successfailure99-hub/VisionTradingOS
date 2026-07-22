@@ -14,6 +14,7 @@ from engines.camarilla.levels import CamarillaLevels
 from engines.cpr.levels import CPRLevels
 from engines.adr.models import ADRSnapshot
 from engines.market_context.models import MarketContextState
+from engines.moving_average_context.models import MovingAverageContextSnapshot
 from engines.option_chain.models import OptionChainState
 from engines.price_action.models import PriceActionState
 from engines.vwap.levels import VWAPLevels
@@ -265,6 +266,12 @@ class TradingViewEvidenceMappingEngine(BaseEngine):
             paper_execution_calls=0,
             broker_order_calls=0,
             live_order_submission_enabled=False,
+            moving_average_context_observation=(
+                request.moving_average_context
+                if statuses["moving_averages"].availability is EvidenceAvailability.AVAILABLE
+                and isinstance(request.moving_average_context, MovingAverageContextSnapshot)
+                else None
+            ),
         )
 
     def _latest_price_status(self, request: TradingViewEvidenceRequest) -> EvidenceStatus:
@@ -289,6 +296,23 @@ class TradingViewEvidenceMappingEngine(BaseEngine):
         return EvidenceStatus(name, availability, source_timestamp, age_seconds, None)
 
     def _moving_average_status(self, request: TradingViewEvidenceRequest) -> EvidenceStatus:
+        if request.moving_average_context is not None:
+            if not isinstance(request.moving_average_context, MovingAverageContextSnapshot):
+                return EvidenceStatus(
+                    "moving_averages",
+                    EvidenceAvailability.INVALID,
+                    evidence_timestamp(request.moving_average_context),
+                    None,
+                    "moving average context type is invalid",
+                )
+            source_timestamp = evidence_timestamp(request.moving_average_context)
+            age_seconds = None
+            availability = EvidenceAvailability.AVAILABLE
+            if source_timestamp is not None:
+                age_seconds = (request.timestamp - source_timestamp).total_seconds()
+                if age_seconds > self._maximum_source_age_seconds:
+                    availability = EvidenceAvailability.STALE
+            return EvidenceStatus("moving_averages", availability, source_timestamp, age_seconds, None)
         if not request.moving_averages:
             return EvidenceStatus("moving_averages", EvidenceAvailability.MISSING, None, None, "moving averages are unavailable")
         for item in request.moving_averages:
@@ -341,6 +365,18 @@ class TradingViewEvidenceMappingEngine(BaseEngine):
     def _map_moving_averages(self, request: TradingViewEvidenceRequest, status: EvidenceStatus) -> tuple[MovingAverageObservation, ...]:
         if status.availability is not EvidenceAvailability.AVAILABLE or request.latest_price is None:
             return ()
+        if isinstance(request.moving_average_context, MovingAverageContextSnapshot):
+            return tuple(
+                MovingAverageObservation(
+                    name=item.name,
+                    period=item.period,
+                    value=item.value,
+                    price_location=_price_location(request.latest_price, item.value),
+                    slope=None,
+                    availability=EvidenceAvailability.AVAILABLE,
+                )
+                for item in request.moving_average_context.ema_values
+            )
         observations = []
         for item in request.moving_averages:
             location = _price_location(request.latest_price, item.value) if item.value is not None else PriceLocation.UNKNOWN
