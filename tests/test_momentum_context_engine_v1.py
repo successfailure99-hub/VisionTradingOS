@@ -238,6 +238,106 @@ def test_same_end_time_correction_replaces_latest_candle_without_growing_history
     assert second.timestamp == corrected.end_time
 
 
+def test_same_end_time_correction_cannot_overlap_previous_finalized_candle():
+    bus = EventBus()
+    invalid = []
+    bus.subscribe(MOMENTUM_CONTEXT_INVALID, invalid.append)
+    engine = MomentumContextEngine(
+        bus,
+        instrument="NIFTY",
+        timeframe="5m",
+        profile=MomentumContextProfile(period=1),
+    )
+    previous = Candle(
+        symbol="NIFTY",
+        timeframe="5m",
+        start_time=NOW.replace(hour=9, minute=15, second=0, microsecond=0),
+        end_time=NOW.replace(hour=9, minute=20, second=0, microsecond=0),
+        open=100.0,
+        high=101.0,
+        low=99.0,
+        close=100.0,
+        volume=1000,
+    )
+    latest = Candle(
+        symbol="NIFTY",
+        timeframe="5m",
+        start_time=NOW.replace(hour=9, minute=20, second=0, microsecond=0),
+        end_time=NOW.replace(hour=9, minute=25, second=0, microsecond=0),
+        open=101.0,
+        high=102.0,
+        low=100.0,
+        close=101.0,
+        volume=1000,
+    )
+    malformed_replacement = Candle(
+        symbol="NIFTY",
+        timeframe="5m",
+        start_time=NOW.replace(hour=9, minute=18, second=0, microsecond=0),
+        end_time=latest.end_time,
+        open=102.0,
+        high=103.0,
+        low=101.0,
+        close=102.0,
+        volume=1000,
+    )
+    first = warm_engine(engine, (previous, latest))
+
+    with pytest.raises(ValueError, match="Overlapping momentum candle"):
+        engine.process(malformed_replacement)
+
+    assert invalid[-1] == engine.snapshot()
+    assert engine.candle_count == 2
+    assert engine.state is first
+    assert engine.snapshot().invalid_count == 1
+    assert engine.snapshot().calculation_count == 1
+
+
+@pytest.mark.parametrize(
+    ("momentum_delta", "expected"),
+    (
+        (0.009, MomentumDirection.FLAT),
+        (-0.009, MomentumDirection.FLAT),
+        (0.010, MomentumDirection.FLAT),
+        (-0.010, MomentumDirection.FLAT),
+        (0.011, MomentumDirection.RISING),
+        (-0.011, MomentumDirection.FALLING),
+    ),
+)
+def test_deadband_stability_thresholds_are_deterministic(momentum_delta, expected):
+    engine = MomentumContextEngine(
+        EventBus(),
+        instrument="NIFTY",
+        timeframe="1m",
+        profile=MomentumContextProfile(period=1),
+    )
+
+    result = warm_engine(engine, candles_from_closes([100.0, 100.0 + momentum_delta]))
+
+    assert result.momentum_direction is expected
+
+
+def test_repeated_values_inside_deadband_do_not_republish_identical_updates():
+    bus = EventBus()
+    updates = []
+    bus.subscribe(MOMENTUM_CONTEXT_UPDATED, updates.append)
+    engine = MomentumContextEngine(
+        bus,
+        instrument="NIFTY",
+        timeframe="1m",
+        profile=MomentumContextProfile(period=1),
+    )
+    first_candle, second_candle = candles_from_closes([100.0, 100.009])
+    first = warm_engine(engine, (first_candle, second_candle))
+
+    second = engine.process(second_candle)
+
+    assert first.momentum_direction is MomentumDirection.FLAT
+    assert second is first
+    assert updates == [first]
+    assert engine.snapshot().calculation_count == 1
+
+
 def test_unexpected_failure_publishes_failed_event(monkeypatch):
     bus = EventBus()
     failed = []

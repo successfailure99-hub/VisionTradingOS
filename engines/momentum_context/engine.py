@@ -25,6 +25,7 @@ from .models import (
 
 
 PRICE_PRECISION = 2
+FLOAT_TOLERANCE = 1e-12
 
 
 class MomentumContextEngine(BaseEngine):
@@ -157,6 +158,9 @@ class MomentumContextEngine(BaseEngine):
         if candle == latest:
             return list(self._candles)
         if candle.end_time == latest.end_time:
+            if len(self._candles) > 1 and candle.start_time < self._candles[-2].end_time:
+                self._record_invalid("Overlapping momentum candle received.")
+                raise ValueError(self._last_error)
             return [*self._candles[:-1], candle]
         if candle.end_time < latest.end_time:
             self._record_invalid("Stale momentum candle received.")
@@ -219,7 +223,7 @@ class MomentumContextEngine(BaseEngine):
 
 
 def _direction(momentum_value: float, flat_threshold: float) -> MomentumDirection:
-    if abs(momentum_value) <= flat_threshold:
+    if abs(momentum_value) <= flat_threshold + FLOAT_TOLERANCE:
         return MomentumDirection.FLAT
     if momentum_value > 0:
         return MomentumDirection.RISING
@@ -250,7 +254,7 @@ def _acceleration(
 ) -> MomentumAcceleration:
     if previous_momentum is None:
         return MomentumAcceleration.STABLE
-    if abs(abs(momentum_value) - abs(previous_momentum)) <= flat_threshold:
+    if abs(abs(momentum_value) - abs(previous_momentum)) <= flat_threshold + FLOAT_TOLERANCE:
         return MomentumAcceleration.STABLE
     if abs(momentum_value) > abs(previous_momentum):
         return MomentumAcceleration.ACCELERATING
