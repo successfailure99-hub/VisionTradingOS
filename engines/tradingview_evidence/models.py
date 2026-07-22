@@ -18,6 +18,7 @@ from engines.cpr.levels import CPRLevels
 from engines.adr.models import ADRSnapshot
 from engines.market_context.models import MarketContextState
 from engines.moving_average_context.models import MovingAverageContextSnapshot
+from engines.momentum_context.models import MomentumContextSnapshot
 from engines.option_chain.models import OptionChainState
 from engines.price_action.models import PriceActionState
 from engines.vwap.levels import VWAPLevels
@@ -129,7 +130,7 @@ class TradingViewEvidenceRequest:
     option_chain: OptionChainState | object | None
     moving_average_context: MovingAverageContextSnapshot | object | None = None
     moving_averages: tuple[object, ...] = ()
-    momentum: object | None = None
+    momentum: MomentumContextSnapshot | object | None = None
     volume: object | None = None
     correlation_id: str | None = None
 
@@ -212,7 +213,7 @@ class TradingViewEvidenceSnapshot:
     moving_average_status: EvidenceStatus
     moving_average_observations: tuple[MovingAverageObservation, ...]
     momentum_status: EvidenceStatus
-    momentum_observation: object | None
+    momentum_observation: MomentumContextSnapshot | object | None
     volume_status: EvidenceStatus
     volume_observation: object | None
     missing_evidence: tuple[str, ...]
@@ -229,6 +230,7 @@ class TradingViewEvidenceSnapshot:
     broker_order_calls: int = 0
     live_order_submission_enabled: bool = False
     moving_average_context_observation: MovingAverageContextSnapshot | object | None = None
+    momentum_context_observation: MomentumContextSnapshot | object | None = None
 
     def __post_init__(self) -> None:
         _validate_aware(self.timestamp, "timestamp")

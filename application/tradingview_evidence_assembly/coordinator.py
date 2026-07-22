@@ -116,7 +116,7 @@ class TradingViewEvidenceAssemblyCoordinator:
             option_chain=source.option_chain,
             moving_average_context=source.moving_average_context,
             moving_averages=(),
-            momentum=None,
+            momentum=source.momentum_context,
             volume=None,
             correlation_id=source.correlation_id,
         )
@@ -137,7 +137,7 @@ class TradingViewEvidenceAssemblyCoordinator:
             option_chain=source.option_chain,
             moving_average_context=source.moving_average_context,
             moving_averages=(),
-            momentum=None,
+            momentum=source.momentum_context,
             volume=None,
             correlation_id=source.correlation_id,
         )

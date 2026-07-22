@@ -47,6 +47,11 @@ MA_CONTEXT_PARTIAL = "ma_context_partial"
 MA_CONTEXT_INVALID = "ma_context_invalid"
 MA_CONTEXT_FAILED = "ma_context_failed"
 MA_CONTEXT_STATE_UPDATED = "ma_context_state_updated"
+MOMENTUM_CONTEXT_UPDATED = "momentum_context_updated"
+MOMENTUM_CONTEXT_PARTIAL = "momentum_context_partial"
+MOMENTUM_CONTEXT_INVALID = "momentum_context_invalid"
+MOMENTUM_CONTEXT_FAILED = "momentum_context_failed"
+MOMENTUM_CONTEXT_STATE_UPDATED = "momentum_context_state_updated"
 
 # ==================================================
 # Market Context Events
