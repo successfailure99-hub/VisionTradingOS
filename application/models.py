@@ -28,6 +28,7 @@ from engines.momentum_context.models import (
     MomentumContextProfile,
     MomentumContextSnapshot,
 )
+from engines.multi_timeframe_evidence_fusion.models import MultiTimeframeEvidenceFusionSnapshot
 from engines.volume_context.models import (
     VolumeContextDiagnosticSnapshot,
     VolumeContextProfile,
@@ -274,6 +275,7 @@ class RuntimeSnapshot:
     momentum_context_diagnostics: MomentumContextDiagnosticSnapshot | None = None
     volume_context: VolumeContextSnapshot | None = None
     volume_context_diagnostics: VolumeContextDiagnosticSnapshot | None = None
+    multi_timeframe_evidence: MultiTimeframeEvidenceFusionSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
