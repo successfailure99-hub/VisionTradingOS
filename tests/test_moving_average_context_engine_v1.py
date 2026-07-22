@@ -1,4 +1,4 @@
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -185,6 +185,135 @@ def test_invalid_and_insufficient_history_publish_contract_events():
         engine.process(make_candle(1, -1.0))
     assert invalid[-1] == engine.snapshot()
     assert engine.state is None
+
+
+@pytest.mark.parametrize("count", (20, 50, 199))
+def test_warm_up_boundary_remains_partial_until_maximum_period(count):
+    bus = EventBus()
+    partial = []
+    updates = []
+    bus.subscribe(MA_CONTEXT_PARTIAL, partial.append)
+    bus.subscribe(MA_CONTEXT_UPDATED, updates.append)
+    engine = MovingAverageContextEngine(bus, instrument="NIFTY", timeframe="1m")
+
+    for candle in candles_from_closes([100.0 + index for index in range(count)]):
+        with pytest.raises(ValueError, match="Insufficient candle history"):
+            engine.process(candle)
+
+    assert engine.state is None
+    assert engine.candle_count == count
+    assert engine.snapshot().partial_count == count
+    assert len(partial) == count
+    assert updates == []
+
+
+def test_warm_up_boundary_exactly_200_candles_creates_first_immutable_snapshot():
+    bus = EventBus()
+    partial = []
+    updates = []
+    bus.subscribe(MA_CONTEXT_PARTIAL, partial.append)
+    bus.subscribe(MA_CONTEXT_UPDATED, updates.append)
+    engine = MovingAverageContextEngine(bus, instrument="NIFTY", timeframe="1m")
+    history = candles_from_closes([100.0 + index for index in range(200)])
+
+    result = warm_engine(engine, history)
+
+    assert isinstance(result, MovingAverageContextSnapshot)
+    assert engine.state is result
+    assert engine.candle_count == 200
+    assert engine.snapshot().partial_count == 199
+    assert engine.snapshot().calculation_count == 1
+    assert len(partial) == 199
+    assert updates == [result]
+    with pytest.raises(FrozenInstanceError):
+        result.ema200 = 1.0
+
+
+def test_duplicate_boundary_candle_reuses_existing_snapshot_without_second_publication():
+    bus = EventBus()
+    updates = []
+    bus.subscribe(MA_CONTEXT_UPDATED, updates.append)
+    engine = MovingAverageContextEngine(bus, instrument="NIFTY", timeframe="1m")
+    history = candles_from_closes([100.0 + index for index in range(200)])
+    first = warm_engine(engine, history)
+
+    second = engine.process(history[-1])
+
+    assert second is first
+    assert updates == [first]
+    assert engine.snapshot().calculation_count == 1
+    assert engine.candle_count == 200
+
+
+def test_gap_candle_history_is_accepted_without_calendar_continuity_requirement():
+    engine = MovingAverageContextEngine(EventBus(), instrument="NIFTY", timeframe="1m")
+    closes = [100.0 + index for index in range(200)]
+    history = list(candles_from_closes(closes[:199]))
+    gap_candle = replace(make_candle(240, closes[-1]), volume=2000)
+    history.append(gap_candle)
+
+    result = warm_engine(engine, tuple(history))
+
+    assert result.timestamp == gap_candle.end_time
+    assert result.ema200 == pytest.approx(expected_ema(closes, 200))
+    assert engine.candle_count == 200
+
+
+def test_overlapping_candle_is_rejected_as_invalid_history_rewrite():
+    bus = EventBus()
+    invalid = []
+    bus.subscribe(MA_CONTEXT_INVALID, invalid.append)
+    engine = MovingAverageContextEngine(bus, instrument="NIFTY", timeframe="1m")
+    history = candles_from_closes([100.0 + index for index in range(200)])
+    warm_engine(engine, history)
+    latest = history[-1]
+    overlapping = replace(
+        make_candle(200, 310.0),
+        start_time=latest.end_time - timedelta(seconds=30),
+        end_time=latest.end_time + timedelta(seconds=30),
+    )
+
+    with pytest.raises(ValueError, match="Overlapping moving average candle"):
+        engine.process(overlapping)
+
+    assert invalid[-1] == engine.snapshot()
+    assert engine.snapshot().invalid_count == 1
+    assert engine.candle_count == 200
+
+
+def test_stale_candle_is_rejected_as_invalid_history_rewrite():
+    bus = EventBus()
+    invalid = []
+    bus.subscribe(MA_CONTEXT_INVALID, invalid.append)
+    engine = MovingAverageContextEngine(bus, instrument="NIFTY", timeframe="1m")
+    history = candles_from_closes([100.0 + index for index in range(200)])
+    warm_engine(engine, history)
+
+    with pytest.raises(ValueError, match="Stale moving average candle"):
+        engine.process(history[-2])
+
+    assert invalid[-1] == engine.snapshot()
+    assert engine.snapshot().invalid_count == 1
+    assert engine.candle_count == 200
+
+
+def test_same_end_time_correction_replaces_latest_candle_without_growing_history():
+    bus = EventBus()
+    updates = []
+    bus.subscribe(MA_CONTEXT_UPDATED, updates.append)
+    engine = MovingAverageContextEngine(bus, instrument="NIFTY", timeframe="1m")
+    history = candles_from_closes([100.0 + index for index in range(200)])
+    first = warm_engine(engine, history)
+    corrected = replace(history[-1], open=350.0, high=351.0, low=349.0, close=350.0, volume=9999)
+
+    second = engine.process(corrected)
+
+    assert second is not first
+    assert engine.state is second
+    assert engine.candle_count == 200
+    assert engine.snapshot().calculation_count == 2
+    assert updates == [first, second]
+    assert second.timestamp == corrected.end_time
 
 
 def test_unexpected_failure_publishes_failed_event(monkeypatch):

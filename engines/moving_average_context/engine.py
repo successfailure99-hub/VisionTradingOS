@@ -148,6 +148,12 @@ class MovingAverageContextEngine(BaseEngine):
         self.reset()
 
     def _normalized_history(self, candle: Candle) -> list[Candle]:
+        """
+        Maintain append-only EMA history.
+
+        The only permitted rewrite is a same end-time correction, used when an
+        incomplete candle is replaced by its finalized canonical candle.
+        """
         if not self._candles:
             return [candle]
         latest = self._candles[-1]
@@ -157,6 +163,9 @@ class MovingAverageContextEngine(BaseEngine):
             return [*self._candles[:-1], candle]
         if candle.end_time < latest.end_time:
             self._record_invalid("Stale moving average candle received.")
+            raise ValueError(self._last_error)
+        if candle.start_time < latest.end_time:
+            self._record_invalid("Overlapping moving average candle received.")
             raise ValueError(self._last_error)
         return [*self._candles, candle]
 
