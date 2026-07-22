@@ -15,6 +15,7 @@ from engines.cpr.levels import CPRLevels
 from engines.adr.models import ADRSnapshot
 from engines.market_context.models import MarketContextState
 from engines.moving_average_context.models import MovingAverageContextSnapshot
+from engines.momentum_context.models import MomentumContextSnapshot
 from engines.option_chain.models import OptionChainState
 from engines.price_action.models import PriceActionState
 from engines.tradingview_evidence.models import TradingViewEvidenceSnapshot
@@ -36,6 +37,7 @@ class TradingViewEvidenceAssemblyInput:
     market_context: MarketContextState | None
     adr: ADRSnapshot | None = None
     moving_average_context: MovingAverageContextSnapshot | None = None
+    momentum_context: MomentumContextSnapshot | None = None
     correlation_id: str | None = None
 
     def __post_init__(self) -> None:

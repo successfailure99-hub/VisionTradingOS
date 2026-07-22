@@ -15,6 +15,7 @@ from engines.cpr.levels import CPRLevels
 from engines.adr.models import ADRSnapshot
 from engines.market_context.models import MarketContextState
 from engines.moving_average_context.models import MovingAverageContextSnapshot
+from engines.momentum_context.models import MomentumContextSnapshot
 from engines.option_chain.models import OptionChainState
 from engines.price_action.models import PriceActionState
 from engines.vwap.levels import VWAPLevels
@@ -210,7 +211,7 @@ class TradingViewEvidenceMappingEngine(BaseEngine):
             "market_context": self._status("market_context", request.market_context, MarketContextState, request),
             "option_chain": self._status("option_chain", request.option_chain, OptionChainState, request),
             "moving_averages": self._moving_average_status(request),
-            "momentum": self._status("momentum", request.momentum, (), request),
+            "momentum": self._status("momentum", request.momentum, MomentumContextSnapshot, request),
             "volume": self._status("volume", request.volume, (), request),
         }
         camarilla_distances, nearest_level, camarilla_region = self._map_camarilla(request, statuses["camarilla"])
@@ -270,6 +271,12 @@ class TradingViewEvidenceMappingEngine(BaseEngine):
                 request.moving_average_context
                 if statuses["moving_averages"].availability is EvidenceAvailability.AVAILABLE
                 and isinstance(request.moving_average_context, MovingAverageContextSnapshot)
+                else None
+            ),
+            momentum_context_observation=(
+                request.momentum
+                if statuses["momentum"].availability is EvidenceAvailability.AVAILABLE
+                and isinstance(request.momentum, MomentumContextSnapshot)
                 else None
             ),
         )

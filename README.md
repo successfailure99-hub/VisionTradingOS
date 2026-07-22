@@ -20,6 +20,10 @@ ADR Engine V1 calculates Average Daily Range from externally supplied daily OHLC
 
 Moving Average Context Engine V1 calculates EMA-only context from closed candles already owned by the runtime. The default profile is EMA 20, EMA 50, and EMA 200, with profile periods centralized in `RuntimeConfiguration` for future extension. One MA context engine is owned per instrument/timeframe lane, so `1m`, `3m`, `5m`, `15m`, and `30m` evidence remains isolated. TradingView Evidence Assembly consumes the immutable MA context snapshot and never calculates moving averages inside the evidence mapper.
 
+## Momentum Evidence
+
+Momentum Context Engine V1 calculates generic period-based momentum from closed candles already owned by the runtime. The default period is 14 and is centralized in `RuntimeConfiguration` for future extension. One Momentum context engine is owned per instrument/timeframe lane, so each runtime lane remains isolated. TradingView Evidence Assembly consumes the immutable Momentum context snapshot and never calculates momentum inside the evidence mapper.
+
 ## Execution Modes
 
 - Safety mode: `ANALYSIS_ONLY` by default.

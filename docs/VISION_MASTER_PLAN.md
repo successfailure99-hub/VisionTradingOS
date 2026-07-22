@@ -42,14 +42,15 @@ tests/ docs/
 -   TradingView Evidence Assembly Coordinator
 -   ADR Engine
 -   Moving Average Context Engine
+-   Momentum Context Engine
 
 ## TradingView Evidence Assembly Coordinator V1
 
 The TradingView Evidence Assembly Coordinator is an application-layer
 coordinator, not a calculation engine. It is owned by `SymbolRuntime` and
 collects the canonical outputs already produced by Candle, Price Action,
-Camarilla, CPR, VWAP, ADR, Moving Average Context, Option Chain, and Market
-Context.
+Camarilla, CPR, VWAP, ADR, Moving Average Context, Momentum Context, Option
+Chain, and Market Context.
 
 Event flow:
 
@@ -66,8 +67,8 @@ Snapshot lifecycle:
   Mapping Engine.
 - Publish partial evidence when required upstream analytical snapshots are
   missing, stale, or invalid.
-- Never calculate CPR, Camarilla, VWAP, ADR, Moving Average Context, Price
-  Action, Option Chain, or Market Context inside the coordinator.
+- Never calculate CPR, Camarilla, VWAP, ADR, Moving Average Context, Momentum
+  Context, Price Action, Option Chain, or Market Context inside the coordinator.
 
 ## Moving Average Context Engine V1
 
@@ -88,6 +89,29 @@ Runtime ownership:
 Event flow:
 
 Tick -> Market Data Engine -> Candle Engine -> closed Candle -> Moving Average
+Context Engine -> TradingView Evidence Assembly Coordinator -> TradingView
+Evidence Mapping Engine.
+
+## Momentum Context Engine V1
+
+Momentum Context is an evidence engine, not a strategy, risk, confidence, or
+position-sizing engine. It consumes closed candles for a single `Instrument` and
+`TimeFrame` lane and publishes immutable momentum context through
+`MOMENTUM_CONTEXT_UPDATED`, `MOMENTUM_CONTEXT_PARTIAL`,
+`MOMENTUM_CONTEXT_INVALID`, `MOMENTUM_CONTEXT_FAILED`, and
+`MOMENTUM_CONTEXT_STATE_UPDATED`.
+
+Runtime ownership:
+
+- One `MomentumContextEngine` per configured instrument/timeframe lane.
+- No market-data ownership, tick processing, historical downloads, order
+  execution, confidence scoring, or position sizing.
+- The default period is 14; future period configuration is centralized without
+  changing runtime ownership.
+
+Event flow:
+
+Tick -> Market Data Engine -> Candle Engine -> closed Candle -> Momentum
 Context Engine -> TradingView Evidence Assembly Coordinator -> TradingView
 Evidence Mapping Engine.
 
