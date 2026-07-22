@@ -28,6 +28,11 @@ from engines.momentum_context.models import (
     MomentumContextProfile,
     MomentumContextSnapshot,
 )
+from engines.volume_context.models import (
+    VolumeContextDiagnosticSnapshot,
+    VolumeContextProfile,
+    VolumeContextSnapshot,
+)
 from engines.option_chain.models import OptionChainState
 from engines.order_management.models import OrderState
 from engines.paper_trading.configuration import PaperTradingConfiguration
@@ -154,6 +159,7 @@ class RuntimeConfiguration:
     adr_period: int = 20
     moving_average_periods: tuple[int, ...] = (20, 50, 200)
     momentum_period: int = 14
+    volume_lookback: int = 20
 
     def __post_init__(self) -> None:
         if not isinstance(self.instruments, tuple) or not self.instruments:
@@ -189,12 +195,14 @@ class RuntimeConfiguration:
             raise ValueError("RuntimeConfiguration adr_period must be one of 5, 10, 20 or 50.")
         moving_average_profile = MovingAverageContextProfile(self.moving_average_periods)
         momentum_profile = MomentumContextProfile(self.momentum_period)
+        volume_profile = VolumeContextProfile(self.volume_lookback)
         object.__setattr__(self, "instruments", tuple(normalized))
         object.__setattr__(self, "exchange", self.exchange.strip().upper())
         object.__setattr__(self, "timeframe", timeframe)
         object.__setattr__(self, "timeframes", timeframes)
         object.__setattr__(self, "moving_average_periods", moving_average_profile.periods)
         object.__setattr__(self, "momentum_period", momentum_profile.period)
+        object.__setattr__(self, "volume_lookback", volume_profile.lookback)
 
 
 def _normalize_runtime_timeframes(
@@ -264,6 +272,8 @@ class RuntimeSnapshot:
     moving_average_context_diagnostics: MovingAverageContextDiagnosticSnapshot | None = None
     momentum_context: MomentumContextSnapshot | None = None
     momentum_context_diagnostics: MomentumContextDiagnosticSnapshot | None = None
+    volume_context: VolumeContextSnapshot | None = None
+    volume_context_diagnostics: VolumeContextDiagnosticSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)

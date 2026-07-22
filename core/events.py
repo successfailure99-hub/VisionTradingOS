@@ -52,6 +52,11 @@ MOMENTUM_CONTEXT_PARTIAL = "momentum_context_partial"
 MOMENTUM_CONTEXT_INVALID = "momentum_context_invalid"
 MOMENTUM_CONTEXT_FAILED = "momentum_context_failed"
 MOMENTUM_CONTEXT_STATE_UPDATED = "momentum_context_state_updated"
+VOLUME_CONTEXT_UPDATED = "volume_context_updated"
+VOLUME_CONTEXT_PARTIAL = "volume_context_partial"
+VOLUME_CONTEXT_INVALID = "volume_context_invalid"
+VOLUME_CONTEXT_FAILED = "volume_context_failed"
+VOLUME_CONTEXT_STATE_UPDATED = "volume_context_state_updated"
 
 # ==================================================
 # Market Context Events

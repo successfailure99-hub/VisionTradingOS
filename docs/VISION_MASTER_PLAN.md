@@ -43,14 +43,15 @@ tests/ docs/
 -   ADR Engine
 -   Moving Average Context Engine
 -   Momentum Context Engine
+-   Volume Context Engine
 
 ## TradingView Evidence Assembly Coordinator V1
 
 The TradingView Evidence Assembly Coordinator is an application-layer
 coordinator, not a calculation engine. It is owned by `SymbolRuntime` and
 collects the canonical outputs already produced by Candle, Price Action,
-Camarilla, CPR, VWAP, ADR, Moving Average Context, Momentum Context, Option
-Chain, and Market Context.
+Camarilla, CPR, VWAP, ADR, Moving Average Context, Momentum Context, Volume
+Context, Option Chain, and Market Context.
 
 Event flow:
 
@@ -68,7 +69,8 @@ Snapshot lifecycle:
 - Publish partial evidence when required upstream analytical snapshots are
   missing, stale, or invalid.
 - Never calculate CPR, Camarilla, VWAP, ADR, Moving Average Context, Momentum
-  Context, Price Action, Option Chain, or Market Context inside the coordinator.
+  Context, Volume Context, Price Action, Option Chain, or Market Context inside
+  the coordinator.
 
 ## Moving Average Context Engine V1
 
@@ -114,6 +116,31 @@ Event flow:
 Tick -> Market Data Engine -> Candle Engine -> closed Candle -> Momentum
 Context Engine -> TradingView Evidence Assembly Coordinator -> TradingView
 Evidence Mapping Engine.
+
+## Volume Context Engine V1
+
+Volume Context is an evidence engine, not a strategy, risk, confidence,
+execution, or position-sizing engine. It consumes closed candles for a single
+`Instrument` and `TimeFrame` lane and publishes immutable volume context through
+`VOLUME_CONTEXT_UPDATED`, `VOLUME_CONTEXT_PARTIAL`,
+`VOLUME_CONTEXT_INVALID`, `VOLUME_CONTEXT_FAILED`, and
+`VOLUME_CONTEXT_STATE_UPDATED`.
+
+Runtime ownership:
+
+- One `VolumeContextEngine` per configured instrument/timeframe lane.
+- No market-data ownership, tick processing, historical downloads, order
+  execution, confidence scoring, or position sizing.
+- The default lookback is 20 periods; future lookback configuration is
+  centralized without changing runtime ownership.
+- Volume history is append-only. Gap candles are allowed, and same end-time
+  correction is allowed only when it cannot rewrite finalized history.
+
+Event flow:
+
+Tick -> Market Data Engine -> Candle Engine -> closed Candle -> Volume Context
+Engine -> TradingView Evidence Assembly Coordinator -> TradingView Evidence
+Mapping Engine.
 
 ## Current Milestone
 
