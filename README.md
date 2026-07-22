@@ -24,6 +24,10 @@ Moving Average Context Engine V1 calculates EMA-only context from closed candles
 
 Momentum Context Engine V1 calculates generic period-based momentum from closed candles already owned by the runtime. The default period is 14 and is centralized in `RuntimeConfiguration` for future extension. One Momentum context engine is owned per instrument/timeframe lane, so each runtime lane remains isolated. TradingView Evidence Assembly consumes the immutable Momentum context snapshot and never calculates momentum inside the evidence mapper.
 
+## Volume Evidence
+
+Volume Context Engine V1 calculates average volume and relative volume from closed candles already owned by the runtime. The default lookback is 20 periods and is centralized in `RuntimeConfiguration` for future extension. One Volume context engine is owned per instrument/timeframe lane, so each runtime lane remains isolated. TradingView Evidence Assembly consumes the immutable Volume context snapshot and never calculates volume context inside the evidence mapper.
+
 ## Execution Modes
 
 - Safety mode: `ANALYSIS_ONLY` by default.

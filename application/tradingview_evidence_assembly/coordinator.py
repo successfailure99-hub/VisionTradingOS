@@ -117,7 +117,7 @@ class TradingViewEvidenceAssemblyCoordinator:
             moving_average_context=source.moving_average_context,
             moving_averages=(),
             momentum=source.momentum_context,
-            volume=None,
+            volume=source.volume_context,
             correlation_id=source.correlation_id,
         )
         digest = hashlib.sha256(pending.fingerprint().encode("utf-8")).hexdigest()[:24]
@@ -138,6 +138,6 @@ class TradingViewEvidenceAssemblyCoordinator:
             moving_average_context=source.moving_average_context,
             moving_averages=(),
             momentum=source.momentum_context,
-            volume=None,
+            volume=source.volume_context,
             correlation_id=source.correlation_id,
         )

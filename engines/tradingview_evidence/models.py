@@ -19,6 +19,7 @@ from engines.adr.models import ADRSnapshot
 from engines.market_context.models import MarketContextState
 from engines.moving_average_context.models import MovingAverageContextSnapshot
 from engines.momentum_context.models import MomentumContextSnapshot
+from engines.volume_context.models import VolumeContextSnapshot
 from engines.option_chain.models import OptionChainState
 from engines.price_action.models import PriceActionState
 from engines.vwap.levels import VWAPLevels
@@ -131,7 +132,7 @@ class TradingViewEvidenceRequest:
     moving_average_context: MovingAverageContextSnapshot | object | None = None
     moving_averages: tuple[object, ...] = ()
     momentum: MomentumContextSnapshot | object | None = None
-    volume: object | None = None
+    volume: VolumeContextSnapshot | object | None = None
     correlation_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -231,6 +232,7 @@ class TradingViewEvidenceSnapshot:
     live_order_submission_enabled: bool = False
     moving_average_context_observation: MovingAverageContextSnapshot | object | None = None
     momentum_context_observation: MomentumContextSnapshot | object | None = None
+    volume_context_observation: VolumeContextSnapshot | object | None = None
 
     def __post_init__(self) -> None:
         _validate_aware(self.timestamp, "timestamp")
