@@ -38,6 +38,7 @@ from engines.trade_execution_policy.models import ExecutionEngineSnapshot
 from engines.execution_reconciliation.models import ExecutionReconciliationSnapshot
 from engines.shadow_trading_session.models import ShadowTradingSessionSnapshot
 from engines.vwap.levels import VWAPLevels
+from engines.tradingview_evidence.models import TradingViewEvidenceEngineSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +206,7 @@ class RuntimeSnapshot:
     shadow_trading_session: ShadowTradingSessionSnapshot | None = None
     confidence_calibration: ConfidenceCalibrationSnapshot | None = None
     trade_authorization: TradeAuthorizationSnapshot | None = None
+    tradingview_evidence: TradingViewEvidenceEngineSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)

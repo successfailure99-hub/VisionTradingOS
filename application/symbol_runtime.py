@@ -43,10 +43,16 @@ from engines.trade_decision_authorization.models import TradeAuthorizationReques
 from engines.trade_execution_policy.engine import TradeExecutionPolicyEngine
 from engines.trade_execution_policy.enums import ExecutionMode, ExecutionPlanStatus
 from engines.trade_execution_policy.models import ExecutionRequest, TradeExecutionPlan
+from engines.tradingview_evidence.engine import TradingViewEvidenceMappingEngine
+from engines.tradingview_evidence.models import TradingViewEvidenceRequest
 from engines.vwap.vwap_engine import VWAPEngine
 
 from application.enums import RuntimeInstrument, RuntimeStatus
 from application.models import RuntimeConfiguration, RuntimeSnapshot, RuntimeVWAPSource
+from application.tradingview_evidence_assembly import (
+    TradingViewEvidenceAssemblyCoordinator,
+    TradingViewEvidenceAssemblyInput,
+)
 
 
 class SymbolRuntime:
@@ -153,6 +159,16 @@ class SymbolRuntime:
             configuration.exchange,
             configuration.option_expiry_date,
         )
+        self.tradingview_evidence_engine = TradingViewEvidenceMappingEngine(
+            event_bus,
+            instrument=instrument.value,
+            timeframe=configuration.timeframe,
+        )
+        self.tradingview_evidence_assembly_coordinator = TradingViewEvidenceAssemblyCoordinator(
+            instrument=instrument,
+            timeframe=configuration.timeframe,
+            mapping_engine=self.tradingview_evidence_engine,
+        )
 
     @property
     def instrument(self) -> RuntimeInstrument:
@@ -173,6 +189,7 @@ class SymbolRuntime:
     def start(self) -> None:
         self._status = RuntimeStatus.RUNNING
         self.confidence_calibration_engine.start()
+        self.tradingview_evidence_engine.start()
         self.execution_policy_engine.start()
         self.trade_authorization_engine.start()
         self.paper_execution_coordinator.start()
@@ -186,6 +203,7 @@ class SymbolRuntime:
         self.paper_execution_coordinator.stop()
         self.trade_authorization_engine.stop()
         self.execution_policy_engine.stop()
+        self.tradingview_evidence_engine.stop()
         self.confidence_calibration_engine.stop()
         self._status = RuntimeStatus.STOPPED
 
@@ -531,6 +549,24 @@ class SymbolRuntime:
     def reset_trade_authorization(self):
         return self.trade_authorization_engine.reset()
 
+    def map_tradingview_evidence(self, request: TradingViewEvidenceRequest):
+        if not isinstance(request, TradingViewEvidenceRequest):
+            raise TypeError("request must be TradingViewEvidenceRequest")
+        if request.instrument != self._instrument:
+            raise ValueError("TradingView evidence request instrument does not match SymbolRuntime.")
+        result = self.tradingview_evidence_engine.map_evidence(request)
+        self._updated_at = result.timestamp
+        return result
+
+    def get_tradingview_evidence(self, evidence_id: str):
+        return self.tradingview_evidence_engine.get_evidence(evidence_id)
+
+    def tradingview_evidence_snapshot(self):
+        return self.tradingview_evidence_engine.snapshot()
+
+    def reset_tradingview_evidence(self):
+        return self.tradingview_evidence_engine.reset()
+
     def create_order_from_execution_plan(self, plan: TradeExecutionPlan) -> OrderState | None:
         self._require_running()
         if not isinstance(plan, TradeExecutionPlan):
@@ -642,6 +678,8 @@ class SymbolRuntime:
         self.ai_reasoning_engine.reset()
         self.strategy_engine.reset()
         self.confidence_calibration_engine.reset()
+        self.tradingview_evidence_engine.reset()
+        self.tradingview_evidence_assembly_coordinator.reset()
         self.risk_engine.reset()
         self.execution_policy_engine.reset_session()
         self.trade_authorization_engine.reset()
@@ -710,6 +748,7 @@ class SymbolRuntime:
             shadow_trading_session=self.shadow_trading_session_engine.snapshot(),
             confidence_calibration=self.confidence_calibration_engine.snapshot(),
             trade_authorization=self.trade_authorization_engine.snapshot(),
+            tradingview_evidence=self.tradingview_evidence_engine.snapshot(),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
@@ -746,12 +785,42 @@ class SymbolRuntime:
                 session_high=session_high,
                 session_low=session_low,
             )
+        except Exception:
+            # Downstream dashboard analysis must never reject an otherwise valid
+            # market-data tick; engines keep their previous deterministic state.
+            return
+
+        try:
+            self._assemble_tradingview_evidence(timestamp, current_price)
+        except Exception:
+            pass
+
+        try:
             reasoning = self.run_ai_reasoning(context)
             self.run_strategy(context, reasoning)
         except Exception:
             # Downstream dashboard analysis must never reject an otherwise valid
             # market-data tick; engines keep their previous deterministic state.
             return
+
+    def _assemble_tradingview_evidence(self, timestamp, current_price: float):
+        history = self.candle_engine.get_history(self._core_instrument)
+        latest_closed_candle = history[-1] if history else None
+        source = TradingViewEvidenceAssemblyInput(
+            timestamp=timestamp,
+            instrument=self._instrument,
+            timeframe=self._configuration.timeframe,
+            latest_price=current_price,
+            latest_candle=latest_closed_candle,
+            price_action=self.price_action_engine.state,
+            camarilla=self.camarilla_engine.levels,
+            cpr=self.cpr_engine.levels,
+            vwap=self.vwap_engine.get_latest(self._core_instrument),
+            option_chain=self.option_chain_engine.state,
+            market_context=self.market_context_engine.state,
+            correlation_id=f"{self._instrument.value}:{self._configuration.timeframe}:{timestamp.isoformat()}",
+        )
+        return self.tradingview_evidence_assembly_coordinator.assemble(source)
 
     def _session_high_low(self, current_price: float) -> tuple[float, float]:
         highs = [current_price]
