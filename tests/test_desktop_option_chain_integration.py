@@ -3,7 +3,7 @@ Desktop live option-chain integration tests.
 """
 
 import os
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -245,6 +245,15 @@ def test_enabled_mode_resolves_expiry_atm_pairs_and_populates_dashboard_option_c
     assert option_view.max_pain_strike == 25000.0
     assert len(option_view.strikes) == 3
     assert option_view.runtime_status == "Receiving"
+    market_view = view.markets[0]
+    assert market_view.option_chain_direction == "-"
+    assert market_view.market_bias == "-"
+
+    ticker.callbacks["on_ticks"](
+        None,
+        (spot_tick_with_timestamp(101, 25060, NOW + timedelta(minutes=1)),),
+    )
+    view = dashboard.main_window.refresh()
     market_view = view.markets[0]
     assert market_view.option_chain_direction != "-"
     assert market_view.market_bias != "-"

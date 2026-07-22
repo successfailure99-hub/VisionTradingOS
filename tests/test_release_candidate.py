@@ -70,8 +70,8 @@ def test_invalid_configuration_is_rejected_before_startup_composition():
         RuntimeConfiguration(instruments=())
     with pytest.raises(ValueError, match="RuntimeConfiguration supports only RuntimeInstrument values\\."):
         RuntimeConfiguration(instruments=("NIFTY",))
-    with pytest.raises(ValueError, match="Application Orchestrator V1 supports only timeframe '1m'\\."):
-        RuntimeConfiguration(timeframe="5m")
+    with pytest.raises(ValueError, match="RuntimeConfiguration supports only 1m, 3m, 5m, 15m and 30m runtime lanes\\."):
+        RuntimeConfiguration(timeframe="10m")
     with pytest.raises(ValueError, match="RuntimeConfiguration safety_mode must be an ExecutionSafetyMode\\."):
         RuntimeConfiguration(safety_mode="analysis_only")
 

@@ -248,27 +248,34 @@ def test_cpr_and_camarilla_engines_are_owned_and_preserve_lifecycle():
     assert runtime.camarilla_engine.is_ready() is False
 
 
-def test_configuration_restricts_timeframe_to_one_minute_consistently():
+def test_configuration_preserves_primary_timeframe_backward_compatibility():
     config = RuntimeConfiguration(timeframe=" 1m ")
     orchestrator = ApplicationOrchestrator(EventBus(), config)
     runtime = orchestrator.get_runtime(RuntimeInstrument.NIFTY)
     assert config.timeframe == "1m"
     assert runtime.candle_engine.timeframe.value == "1m"
-    with pytest.raises(ValueError):
-        RuntimeConfiguration(timeframe="5m")
+
+    five_minute = RuntimeConfiguration(timeframe="5m")
+    assert five_minute.timeframe == "5m"
+    assert five_minute.timeframes == ("5m",)
 
 
 def test_process_tick_returns_immutable_runtime_snapshot_with_dashboard_state():
     orchestrator = ApplicationOrchestrator(EventBus())
     orchestrator.start()
-    snapshot = orchestrator.process_tick(tick(price=101.0))
+    live_snapshot = orchestrator.process_tick(tick(price=101.0))
+    assert live_snapshot.latest_tick.last_price == 101.0
+    assert live_snapshot.latest_candle is not None
+    assert live_snapshot.market_context is None
+
+    snapshot = orchestrator.process_tick(tick(timestamp=TS + timedelta(minutes=1), price=101.0))
     assert isinstance(snapshot, RuntimeSnapshot)
     assert snapshot.symbol is RuntimeInstrument.NIFTY
     assert snapshot.timeframe == "1m"
     assert snapshot.latest_tick.last_price == 101.0
     assert snapshot.latest_candle is not None
     assert snapshot.vwap is not None
-    assert snapshot.updated_at == TS
+    assert snapshot.updated_at == TS + timedelta(minutes=1)
     assert snapshot.cpr is None
     assert snapshot.market_context is not None
     assert snapshot.market_context.current_price == 101.0
@@ -281,7 +288,7 @@ def test_process_tick_returns_immutable_runtime_snapshot_with_dashboard_state():
     with pytest.raises(FrozenInstanceError):
         snapshot.updated_at = TS + timedelta(minutes=1)
 
-    duplicate = orchestrator.process_tick(tick(price=101.0))
+    duplicate = orchestrator.process_tick(tick(timestamp=TS + timedelta(minutes=1), price=101.0))
     assert isinstance(duplicate, RuntimeSnapshot)
     assert duplicate.latest_tick == snapshot.latest_tick
     assert duplicate.market_context == snapshot.market_context
@@ -292,10 +299,15 @@ def test_process_tick_returns_immutable_runtime_snapshot_with_dashboard_state():
 def test_option_chain_update_refreshes_dashboard_analysis_after_spot_tick():
     orchestrator = ApplicationOrchestrator(EventBus(), RuntimeConfiguration(option_expiry_date=date(2026, 7, 30)))
     orchestrator.start()
-    first = orchestrator.process_tick(tick(price=101.0))
+    orchestrator.process_tick(tick(price=101.0))
+    first = orchestrator.process_tick(tick(timestamp=TS + timedelta(minutes=1), price=101.0))
     first_context = first.market_context
 
     state = orchestrator.process_option_chain("NIFTY", option_snapshot())
+    snapshot_before_close = orchestrator.snapshot().runtime_snapshots[0]
+    assert snapshot_before_close.market_context == first_context
+
+    orchestrator.process_tick(tick(timestamp=TS + timedelta(minutes=2), price=102.0))
     snapshot = orchestrator.snapshot().runtime_snapshots[0]
 
     assert snapshot.option_chain == state
