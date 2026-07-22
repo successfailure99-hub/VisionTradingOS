@@ -16,6 +16,10 @@ Intraday runtime candles are session-anchored. For the supported Indian index ru
 
 ADR Engine V1 calculates Average Daily Range from externally supplied daily OHLC history and the current session high/low maintained by the runtime. ADR is an evidence source only: it publishes immutable range context, is owned once per instrument runtime, and is consumed by TradingView Evidence Assembly without recalculating ADR inside the evidence mapper.
 
+## Moving Average Evidence
+
+Moving Average Context Engine V1 calculates EMA-only context from closed candles already owned by the runtime. The default profile is EMA 20, EMA 50, and EMA 200, with profile periods centralized in `RuntimeConfiguration` for future extension. One MA context engine is owned per instrument/timeframe lane, so `1m`, `3m`, `5m`, `15m`, and `30m` evidence remains isolated. TradingView Evidence Assembly consumes the immutable MA context snapshot and never calculates moving averages inside the evidence mapper.
+
 ## Execution Modes
 
 - Safety mode: `ANALYSIS_ONLY` by default.

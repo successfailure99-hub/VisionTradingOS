@@ -17,6 +17,7 @@ from engines.camarilla.levels import CamarillaLevels
 from engines.cpr.levels import CPRLevels
 from engines.adr.models import ADRSnapshot
 from engines.market_context.models import MarketContextState
+from engines.moving_average_context.models import MovingAverageContextSnapshot
 from engines.option_chain.models import OptionChainState
 from engines.price_action.models import PriceActionState
 from engines.vwap.levels import VWAPLevels
@@ -126,6 +127,7 @@ class TradingViewEvidenceRequest:
     price_action: PriceActionState | object | None
     market_context: MarketContextState | object | None
     option_chain: OptionChainState | object | None
+    moving_average_context: MovingAverageContextSnapshot | object | None = None
     moving_averages: tuple[object, ...] = ()
     momentum: object | None = None
     volume: object | None = None
@@ -162,6 +164,7 @@ class TradingViewEvidenceRequest:
             self.price_action,
             self.market_context,
             self.option_chain,
+            self.moving_average_context,
             self.momentum,
             self.volume,
             *self.moving_averages,
@@ -225,6 +228,7 @@ class TradingViewEvidenceSnapshot:
     paper_execution_calls: int = 0
     broker_order_calls: int = 0
     live_order_submission_enabled: bool = False
+    moving_average_context_observation: MovingAverageContextSnapshot | object | None = None
 
     def __post_init__(self) -> None:
         _validate_aware(self.timestamp, "timestamp")

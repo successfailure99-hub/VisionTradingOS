@@ -18,6 +18,11 @@ from engines.adr.models import ADRDiagnosticSnapshot, ADRSnapshot
 from engines.camarilla.levels import CamarillaLevels
 from engines.cpr.levels import CPRLevels
 from engines.market_context.models import MarketContextState
+from engines.moving_average_context.models import (
+    MovingAverageContextDiagnosticSnapshot,
+    MovingAverageContextProfile,
+    MovingAverageContextSnapshot,
+)
 from engines.option_chain.models import OptionChainState
 from engines.order_management.models import OrderState
 from engines.paper_trading.configuration import PaperTradingConfiguration
@@ -142,6 +147,7 @@ class RuntimeConfiguration:
     historical_replay_configuration: ReplayConfiguration | None = None
     deterministic_backtest_configuration: BacktestConfiguration | None = None
     adr_period: int = 20
+    moving_average_periods: tuple[int, ...] = (20, 50, 200)
 
     def __post_init__(self) -> None:
         if not isinstance(self.instruments, tuple) or not self.instruments:
@@ -175,10 +181,12 @@ class RuntimeConfiguration:
             raise TypeError("RuntimeConfiguration deterministic_backtest_configuration must be BacktestConfiguration or None.")
         if isinstance(self.adr_period, bool) or not isinstance(self.adr_period, int) or self.adr_period not in {5, 10, 20, 50}:
             raise ValueError("RuntimeConfiguration adr_period must be one of 5, 10, 20 or 50.")
+        moving_average_profile = MovingAverageContextProfile(self.moving_average_periods)
         object.__setattr__(self, "instruments", tuple(normalized))
         object.__setattr__(self, "exchange", self.exchange.strip().upper())
         object.__setattr__(self, "timeframe", timeframe)
         object.__setattr__(self, "timeframes", timeframes)
+        object.__setattr__(self, "moving_average_periods", moving_average_profile.periods)
 
 
 def _normalize_runtime_timeframes(
@@ -244,6 +252,8 @@ class RuntimeSnapshot:
     tradingview_evidence: TradingViewEvidenceEngineSnapshot | None = None
     adr: ADRSnapshot | None = None
     adr_diagnostics: ADRDiagnosticSnapshot | None = None
+    moving_average_context: MovingAverageContextSnapshot | None = None
+    moving_average_context_diagnostics: MovingAverageContextDiagnosticSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)

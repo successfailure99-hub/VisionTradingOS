@@ -14,6 +14,7 @@ from engines.camarilla.levels import CamarillaLevels
 from engines.cpr.levels import CPRLevels
 from engines.adr.models import ADRSnapshot
 from engines.market_context.models import MarketContextState
+from engines.moving_average_context.models import MovingAverageContextSnapshot
 from engines.option_chain.models import OptionChainState
 from engines.price_action.models import PriceActionState
 from engines.tradingview_evidence.models import TradingViewEvidenceSnapshot
@@ -34,6 +35,7 @@ class TradingViewEvidenceAssemblyInput:
     option_chain: OptionChainState | None
     market_context: MarketContextState | None
     adr: ADRSnapshot | None = None
+    moving_average_context: MovingAverageContextSnapshot | None = None
     correlation_id: str | None = None
 
     def __post_init__(self) -> None:

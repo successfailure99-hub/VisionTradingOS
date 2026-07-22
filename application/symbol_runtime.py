@@ -19,6 +19,8 @@ from engines.cpr.cpr_engine import CPREngine
 from engines.cpr.levels import CPRLevels
 from engines.market_context.market_context_engine import MarketContextEngine
 from engines.market_context.models import MarketContextSnapshot, MarketContextState
+from engines.moving_average_context.engine import MovingAverageContextEngine
+from engines.moving_average_context.models import MovingAverageContextProfile
 from engines.option_chain.models import OptionChainSnapshot, OptionChainState
 from engines.option_chain.option_chain_engine import OptionChainEngine
 from engines.order_management.enums import ProductType
@@ -163,6 +165,17 @@ class SymbolRuntime:
         self.candle_engine = self.candle_engines[self._primary_timeframe]
         self.vwap_engine = VWAPEngine(event_bus)
         self.adr_engine = ADREngine(event_bus, instrument=instrument.value, period=configuration.adr_period)
+        moving_average_profile = MovingAverageContextProfile(configuration.moving_average_periods)
+        self.moving_average_context_engines = {
+            timeframe: MovingAverageContextEngine(
+                event_bus,
+                instrument=instrument.value,
+                timeframe=timeframe.value,
+                profile=moving_average_profile,
+            )
+            for timeframe in self._timeframes
+        }
+        self.moving_average_context_engine = self.moving_average_context_engines[self._primary_timeframe]
         self.cpr_engine = CPREngine(event_bus)
         self.camarilla_engine = CamarillaEngine(event_bus)
         self.price_action_engines = {
@@ -391,12 +404,21 @@ class SymbolRuntime:
 
         if replace and accepted:
             self.price_action_engine.reset()
+            self.moving_average_context_engine.reset()
             for candle in self.candle_engine.get_history(self._core_instrument):
                 self.price_action_engine.process(candle)
+                try:
+                    self.moving_average_context_engine.process(candle)
+                except Exception:
+                    pass
                 self._seed_vwap_from_candle(candle)
         else:
             for candle in accepted:
                 self.price_action_engine.process(candle)
+                try:
+                    self.moving_average_context_engine.process(candle)
+                except Exception:
+                    pass
                 self._seed_vwap_from_candle(candle)
 
         self._last_processed_history_counts[self._primary_timeframe] = len(
@@ -710,6 +732,8 @@ class SymbolRuntime:
         self.camarilla_engine.reset()
         for engine in self.price_action_engines.values():
             engine.reset()
+        for engine in self.moving_average_context_engines.values():
+            engine.reset()
         self.option_chain_engine.reset()
         for engine in self.market_context_engines.values():
             engine.reset()
@@ -774,6 +798,7 @@ class SymbolRuntime:
             price_action=self.price_action_engine.state,
             option_chain=self.option_chain_engine.state,
             market_context=self.market_context_engine.state,
+            moving_average_context=self.moving_average_context_engine.state,
             ai_reasoning=self.ai_reasoning_engine.state,
             strategy=self.strategy_engine.state,
             risk=self.risk_engine.state,
@@ -792,6 +817,7 @@ class SymbolRuntime:
             trade_authorization=self.trade_authorization_engine.snapshot(),
             tradingview_evidence=self.tradingview_evidence_engine.snapshot(),
             adr_diagnostics=self.adr_engine.snapshot(),
+            moving_average_context_diagnostics=self.moving_average_context_engine.snapshot(),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
@@ -821,6 +847,10 @@ class SymbolRuntime:
             new_candles = history[last_count:]
             for candle in new_candles:
                 self.price_action_engines[timeframe].process(candle)
+                try:
+                    self.moving_average_context_engines[timeframe].process(candle)
+                except Exception:
+                    pass
             self._last_processed_history_counts[timeframe] = len(history)
             if new_candles:
                 closed_timeframes.append(timeframe)
@@ -883,6 +913,7 @@ class SymbolRuntime:
             cpr=self.cpr_engine.levels,
             vwap=self.vwap_engine.get_latest(self._core_instrument),
             adr=self.adr_engine.state,
+            moving_average_context=self.moving_average_context_engines[lane].state,
             option_chain=self.option_chain_engine.state,
             market_context=self.market_context_engines[lane].state,
             correlation_id=f"{self._instrument.value}:{lane.value}:{timestamp.isoformat()}",
