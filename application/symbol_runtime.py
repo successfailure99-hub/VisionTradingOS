@@ -23,6 +23,7 @@ from engines.moving_average_context.engine import MovingAverageContextEngine
 from engines.moving_average_context.models import MovingAverageContextProfile
 from engines.momentum_context.engine import MomentumContextEngine
 from engines.momentum_context.models import MomentumContextProfile
+from engines.multi_timeframe_evidence_fusion.engine import MultiTimeframeEvidenceFusionEngine
 from engines.volume_context.engine import VolumeContextEngine
 from engines.volume_context.models import VolumeContextProfile
 from engines.option_chain.models import OptionChainSnapshot, OptionChainState
@@ -235,6 +236,11 @@ class SymbolRuntime:
         self.tradingview_evidence_assembly_coordinator = self.tradingview_evidence_assembly_coordinators[
             self._primary_timeframe
         ]
+        self.multi_timeframe_evidence_fusion_engine = MultiTimeframeEvidenceFusionEngine(
+            event_bus,
+            instrument=instrument,
+            expected_timeframes=self._timeframes,
+        )
 
     @property
     def instrument(self) -> RuntimeInstrument:
@@ -257,6 +263,7 @@ class SymbolRuntime:
         self.confidence_calibration_engine.start()
         for engine in self.tradingview_evidence_engines.values():
             engine.start()
+        self.multi_timeframe_evidence_fusion_engine.start()
         self.execution_policy_engine.start()
         self.trade_authorization_engine.start()
         self.paper_execution_coordinator.start()
@@ -270,6 +277,7 @@ class SymbolRuntime:
         self.paper_execution_coordinator.stop()
         self.trade_authorization_engine.stop()
         self.execution_policy_engine.stop()
+        self.multi_timeframe_evidence_fusion_engine.stop()
         for engine in self.tradingview_evidence_engines.values():
             engine.stop()
         self.confidence_calibration_engine.stop()
@@ -792,6 +800,7 @@ class SymbolRuntime:
             engine.reset()
         for coordinator in self.tradingview_evidence_assembly_coordinators.values():
             coordinator.reset()
+        self.multi_timeframe_evidence_fusion_engine.reset()
         self.risk_engine.reset()
         self.execution_policy_engine.reset_session()
         self.trade_authorization_engine.reset()
@@ -870,6 +879,7 @@ class SymbolRuntime:
             moving_average_context_diagnostics=self.moving_average_context_engine.snapshot(),
             momentum_context_diagnostics=self.momentum_context_engine.snapshot(),
             volume_context_diagnostics=self.volume_context_engine.snapshot(),
+            multi_timeframe_evidence=self.multi_timeframe_evidence_fusion_engine.snapshot(),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
@@ -942,6 +952,7 @@ class SymbolRuntime:
 
             if timeframe is self._primary_timeframe:
                 self._refresh_primary_closed_candle_analysis(context)
+        self._fuse_multi_timeframe_evidence(timestamp)
 
     def _refresh_primary_closed_candle_analysis(self, context: MarketContextState) -> None:
         try:
@@ -981,6 +992,19 @@ class SymbolRuntime:
             correlation_id=f"{self._instrument.value}:{lane.value}:{timestamp.isoformat()}",
         )
         return self.tradingview_evidence_assembly_coordinators[lane].assemble(source)
+
+    def _fuse_multi_timeframe_evidence(self, timestamp) -> None:
+        snapshots = tuple(
+            engine.snapshot().last_evidence
+            for engine in self.tradingview_evidence_engines.values()
+            if engine.snapshot().last_evidence is not None
+        )
+        if not snapshots:
+            return
+        try:
+            self.multi_timeframe_evidence_fusion_engine.fuse(snapshots, timestamp=timestamp)
+        except Exception:
+            return
 
     def _append_daily_ohlc(self, daily_ohlc: DailyOHLC) -> None:
         existing = {item.trading_date: item for item in self._daily_ohlc_history}

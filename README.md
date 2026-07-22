@@ -28,6 +28,10 @@ Momentum Context Engine V1 calculates generic period-based momentum from closed 
 
 Volume Context Engine V1 calculates average volume and relative volume from closed candles already owned by the runtime. The default lookback is 20 periods and is centralized in `RuntimeConfiguration` for future extension. One Volume context engine is owned per instrument/timeframe lane, so each runtime lane remains isolated. TradingView Evidence Assembly consumes the immutable Volume context snapshot and never calculates volume context inside the evidence mapper.
 
+## Multi-Timeframe Evidence Fusion
+
+Multi-Timeframe Evidence Fusion Engine V1 is the first deterministic intelligence layer. It is owned once per instrument runtime and consumes only immutable TradingView Evidence snapshots from configured timeframe lanes. It compares existing evidence agreement, conflict, dominance, and completeness, then publishes immutable fusion context without calculating indicators or producing trade decisions.
+
 ## Execution Modes
 
 - Safety mode: `ANALYSIS_ONLY` by default.

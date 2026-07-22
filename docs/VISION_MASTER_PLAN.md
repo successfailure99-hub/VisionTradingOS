@@ -44,6 +44,7 @@ tests/ docs/
 -   Moving Average Context Engine
 -   Momentum Context Engine
 -   Volume Context Engine
+-   Multi-Timeframe Evidence Fusion Engine
 
 ## TradingView Evidence Assembly Coordinator V1
 
@@ -141,6 +142,41 @@ Event flow:
 Tick -> Market Data Engine -> Candle Engine -> closed Candle -> Volume Context
 Engine -> TradingView Evidence Assembly Coordinator -> TradingView Evidence
 Mapping Engine.
+
+## Multi-Timeframe Evidence Fusion Engine V1
+
+Multi-Timeframe Evidence Fusion is a deterministic intelligence engine, not an
+indicator engine, strategy engine, confidence engine, or execution component. It
+is owned once per `SymbolRuntime` instrument and consumes only immutable
+`TradingViewEvidenceSnapshot` values already produced by the configured
+timeframe lanes.
+
+Runtime ownership:
+
+- One `MultiTimeframeEvidenceFusionEngine` per instrument runtime.
+- No market-data ownership, tick processing, historical downloads, indicator
+  calculations, trade decisions, confidence scoring, risk evaluation, or order
+  execution.
+- Timeframe lanes remain independent through Candle, Price Action, Market
+  Context, and TradingView Evidence. Fusion compares their completed evidence
+  snapshots and produces one immutable multi-timeframe understanding snapshot.
+
+Event flow:
+
+Tick -> Market Data Engine -> Candle Engine -> closed Candle -> per-timeframe
+analysis engines -> TradingView Evidence Assembly Coordinator -> TradingView
+Evidence Mapping Engine -> Multi-Timeframe Evidence Fusion Engine.
+
+Fusion lifecycle:
+
+- Publish `MULTI_TIMEFRAME_EVIDENCE_UPDATED` when all configured lanes have
+  complete evidence and observable agreement/conflict context changes.
+- Publish `MULTI_TIMEFRAME_EVIDENCE_PARTIAL` when a timeframe or evidence source
+  is missing, stale, or invalid.
+- Publish `MULTI_TIMEFRAME_EVIDENCE_INVALID` for malformed fusion input and
+  `MULTI_TIMEFRAME_EVIDENCE_FAILED` only for unexpected engine failures.
+- Suppress duplicate publication when the observable fusion snapshot is
+  unchanged.
 
 ## Current Milestone
 

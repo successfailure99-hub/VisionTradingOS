@@ -57,6 +57,11 @@ VOLUME_CONTEXT_PARTIAL = "volume_context_partial"
 VOLUME_CONTEXT_INVALID = "volume_context_invalid"
 VOLUME_CONTEXT_FAILED = "volume_context_failed"
 VOLUME_CONTEXT_STATE_UPDATED = "volume_context_state_updated"
+MULTI_TIMEFRAME_EVIDENCE_UPDATED = "multi_timeframe_evidence_updated"
+MULTI_TIMEFRAME_EVIDENCE_PARTIAL = "multi_timeframe_evidence_partial"
+MULTI_TIMEFRAME_EVIDENCE_INVALID = "multi_timeframe_evidence_invalid"
+MULTI_TIMEFRAME_EVIDENCE_FAILED = "multi_timeframe_evidence_failed"
+MULTI_TIMEFRAME_EVIDENCE_STATE_UPDATED = "multi_timeframe_evidence_state_updated"
 
 # ==================================================
 # Market Context Events
