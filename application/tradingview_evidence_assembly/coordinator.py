@@ -4,12 +4,11 @@ TradingView Evidence Assembly Coordinator V1.
 
 from __future__ import annotations
 
-from datetime import datetime
 import hashlib
 
 from application.enums import RuntimeInstrument
 from engines.tradingview_evidence.engine import TradingViewEvidenceMappingEngine
-from engines.tradingview_evidence.models import TradingViewEvidenceRequest, TradingViewEvidenceSnapshot, evidence_timestamp
+from engines.tradingview_evidence.models import TradingViewEvidenceRequest, TradingViewEvidenceSnapshot
 
 from .models import TradingViewEvidenceAssemblyInput, TradingViewEvidenceAssemblySnapshot
 
@@ -101,10 +100,9 @@ class TradingViewEvidenceAssemblyCoordinator:
         return None
 
     def _request(self, source: TradingViewEvidenceAssemblyInput) -> TradingViewEvidenceRequest:
-        timestamp = _latest_timestamp(source)
         pending = TradingViewEvidenceRequest(
             evidence_id="pending",
-            timestamp=timestamp,
+            timestamp=source.timestamp,
             instrument=source.instrument,
             timeframe=source.timeframe,
             latest_price=source.latest_price,
@@ -124,7 +122,7 @@ class TradingViewEvidenceAssemblyCoordinator:
         digest = hashlib.sha256(pending.fingerprint().encode("utf-8")).hexdigest()[:24]
         return TradingViewEvidenceRequest(
             evidence_id=f"tradingview-evidence-{source.instrument.value.lower()}-{source.timeframe}-{digest}",
-            timestamp=timestamp,
+            timestamp=source.timestamp,
             instrument=source.instrument,
             timeframe=source.timeframe,
             latest_price=source.latest_price,
@@ -141,20 +139,3 @@ class TradingViewEvidenceAssemblyCoordinator:
             volume=None,
             correlation_id=source.correlation_id,
         )
-
-
-def _latest_timestamp(source: TradingViewEvidenceAssemblyInput) -> datetime:
-    timestamps = [source.timestamp]
-    for item in (
-        source.latest_candle,
-        source.price_action,
-        source.camarilla,
-        source.cpr,
-        source.vwap,
-        source.option_chain,
-        source.market_context,
-    ):
-        timestamp = evidence_timestamp(item)
-        if timestamp is not None:
-            timestamps.append(timestamp)
-    return max(timestamps)

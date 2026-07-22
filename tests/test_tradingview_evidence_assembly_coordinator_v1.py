@@ -137,6 +137,24 @@ def test_stale_required_timestamp_publishes_partial():
     assert "option_chain" in result.stale_evidence
 
 
+def test_future_upstream_timestamp_is_rejected_by_request_validation_not_normalized():
+    bus = EventBus()
+    mapped = []
+    partial = []
+    bus.subscribe(TRADINGVIEW_EVIDENCE_MAPPED, lambda payload: mapped.append(payload))
+    bus.subscribe(TRADINGVIEW_EVIDENCE_PARTIAL, lambda payload: partial.append(payload))
+    item = coordinator(bus)
+
+    with pytest.raises(ValueError, match="source timestamp"):
+        item.assemble(source(option_chain=option_chain_with_timestamp(NOW + timedelta(seconds=5))))
+
+    snapshot = item.snapshot()
+    assert mapped == []
+    assert partial == []
+    assert snapshot.assembled_count == 0
+    assert snapshot.last_evidence is None
+
+
 def test_event_ordering_waits_for_price_and_closed_candle_before_publishing():
     bus = EventBus()
     events = []
