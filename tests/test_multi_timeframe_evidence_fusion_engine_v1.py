@@ -48,10 +48,12 @@ from engines.volume_context.models import VolumeContextSnapshot
 from tests.test_tradingview_evidence_assembly_coordinator_v1 import live_tick
 from tests.test_tradingview_evidence_mapping_engine_v1 import (
     NOW,
+    candle,
     market_context,
     option_chain,
     price_action,
     request,
+    vwap,
 )
 
 
@@ -79,6 +81,8 @@ def complete_evidence(
             evidence_id=f"evidence-{timeframe}",
             timestamp=timestamp,
             timeframe=timeframe,
+            latest_candle=candle(end_time=source_time),
+            vwap=vwap(timestamp=source_time),
             price_action=action,
             market_context=context,
             option_chain=chain,
@@ -278,6 +282,77 @@ def test_duplicate_publication_is_suppressed_and_output_is_deterministic():
     assert first.source_fingerprint == second.source_fingerprint
     assert updated == [first]
     assert item.snapshot().fusion_count == 1
+
+
+def test_permutation_invariance_forward_reverse_order_snapshot_fingerprint_and_publication():
+    timeframes = ("1m", "5m", "15m", "30m", "1D")
+    forward_evidence = tuple(complete_evidence(timeframe, bias=MarketBias.BULLISH) for timeframe in timeframes)
+    reverse_evidence = tuple(reversed(forward_evidence))
+    forward_bus = EventBus()
+    reverse_bus = EventBus()
+    forward_events = []
+    reverse_events = []
+    forward_bus.subscribe(MULTI_TIMEFRAME_EVIDENCE_UPDATED, lambda payload: forward_events.append(payload))
+    reverse_bus.subscribe(MULTI_TIMEFRAME_EVIDENCE_UPDATED, lambda payload: reverse_events.append(payload))
+    forward_engine = fusion_engine(forward_bus, timeframes=timeframes)
+    reverse_engine = fusion_engine(reverse_bus, timeframes=timeframes)
+
+    forward = forward_engine.fuse(forward_evidence, timestamp=NOW)
+    reverse = reverse_engine.fuse(reverse_evidence, timestamp=NOW)
+    duplicate = forward_engine.fuse(reverse_evidence, timestamp=NOW)
+
+    assert forward == reverse
+    assert forward.source_fingerprint == reverse.source_fingerprint
+    assert duplicate is forward
+    assert forward_events == [forward]
+    assert reverse_events == [reverse]
+    assert forward_engine.snapshot().fusion_count == 1
+    assert reverse_engine.snapshot().fusion_count == 1
+
+
+def test_five_lane_conflict_classification_is_reproducible():
+    item = fusion_engine(timeframes=("1m", "5m", "15m", "30m", "1D"))
+
+    result = item.fuse(
+        (
+            complete_evidence("1m", bias=MarketBias.BULLISH),
+            complete_evidence("5m", bias=MarketBias.BULLISH),
+            complete_evidence("15m", bias=MarketBias.BEARISH),
+            complete_evidence("30m", bias=MarketBias.BEARISH),
+            complete_evidence("1D", bias=MarketBias.BULLISH),
+        ),
+        timestamp=NOW,
+    )
+
+    assert result.evidence_agreement is EvidenceAgreement.PARTIAL_ALIGNMENT
+    assert result.evidence_conflict is EvidenceConflict.MINOR
+    assert result.dominant_timeframe == "1D"
+    assert result.aligned_timeframes == ("1m", "5m", "1D")
+    assert result.conflicting_timeframes == ("15m", "30m")
+    assert result.alignment_score == 60.0
+    assert result.conflict_score == 40.0
+
+
+def test_complete_lane_that_ages_before_fusion_degrades_to_partial_without_exception():
+    bus = EventBus()
+    partial = []
+    bus.subscribe(MULTI_TIMEFRAME_EVIDENCE_PARTIAL, lambda payload: partial.append(payload))
+    item = fusion_engine(bus, timeframes=("1m", "5m"))
+    old_complete = complete_evidence("1m", bias=MarketBias.BULLISH, timestamp=NOW)
+    current_complete = complete_evidence(
+        "5m",
+        bias=MarketBias.BULLISH,
+        timestamp=NOW + timedelta(minutes=6),
+    )
+
+    result = item.fuse((old_complete, current_complete), timestamp=NOW + timedelta(minutes=6))
+
+    assert result.evidence_completeness is EvidenceCompleteness.PARTIAL
+    assert result.stale_timeframes == ("1m",)
+    assert result.summaries[0].stale_evidence == ("tradingview_evidence",)
+    assert partial == [result]
+    assert item.snapshot().partial_count == 1
+    assert item.snapshot().invalid_count == 0
 
 
 def test_invalid_input_publishes_invalid_and_preserves_previous_state():

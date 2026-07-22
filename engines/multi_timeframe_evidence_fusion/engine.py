@@ -59,10 +59,18 @@ class MultiTimeframeEvidenceFusionEngine(BaseEngine):
         *,
         instrument: RuntimeInstrument | str,
         expected_timeframes: Iterable[str | TimeFrame],
+        maximum_source_age_seconds: int = 300,
     ) -> None:
         super().__init__(event_bus)
         self._instrument = _normalize_instrument(instrument)
         self._expected_timeframes = _normalize_timeframes(expected_timeframes)
+        if (
+            isinstance(maximum_source_age_seconds, bool)
+            or not isinstance(maximum_source_age_seconds, int)
+            or maximum_source_age_seconds < 0
+        ):
+            raise ValueError("maximum_source_age_seconds must be a non-negative integer.")
+        self._maximum_source_age_seconds = maximum_source_age_seconds
         self._lifecycle_state = FusionLifecycle.CREATED
         self._last_snapshot: MultiTimeframeEvidenceSnapshot | None = None
         self._last_fingerprint: str | None = None
@@ -101,7 +109,10 @@ class MultiTimeframeEvidenceFusionEngine(BaseEngine):
             snapshots = tuple(evidence)
             self._validate_synthetic_input(snapshots, timestamp)
             request_timestamp = timestamp or max(item.timestamp for item in snapshots)
-            summaries = tuple(_summary(item) for item in _sort_evidence(snapshots))
+            summaries = tuple(
+                _summary(item, request_timestamp, self._maximum_source_age_seconds)
+                for item in _sort_evidence(snapshots)
+            )
             missing_timeframes = tuple(timeframe for timeframe in self._expected_timeframes if timeframe not in {item.timeframe for item in summaries})
             snapshot = self._build_snapshot(summaries, missing_timeframes, request_timestamp)
             if snapshot.source_fingerprint == self._last_fingerprint and self._last_snapshot is not None:
@@ -298,9 +309,16 @@ def _sort_evidence(snapshots: tuple[TradingViewEvidenceSnapshot, ...]) -> tuple[
     return tuple(sorted(snapshots, key=lambda item: _TIMEFRAME_PRIORITY.get(item.timeframe, 0)))
 
 
-def _summary(snapshot: TradingViewEvidenceSnapshot) -> TimeframeEvidenceSummary:
+def _summary(
+    snapshot: TradingViewEvidenceSnapshot,
+    trigger_timestamp: datetime,
+    maximum_source_age_seconds: int,
+) -> TimeframeEvidenceSummary:
     completeness = EvidenceCompleteness.COMPLETE
-    if snapshot.invalid_evidence or snapshot.stale_evidence or snapshot.missing_evidence:
+    stale_evidence = snapshot.stale_evidence
+    if (trigger_timestamp - snapshot.timestamp).total_seconds() > maximum_source_age_seconds:
+        stale_evidence = tuple(dict.fromkeys((*stale_evidence, "tradingview_evidence")))
+    if snapshot.invalid_evidence or stale_evidence or snapshot.missing_evidence:
         completeness = EvidenceCompleteness.PARTIAL
     return TimeframeEvidenceSummary(
         timeframe=snapshot.timeframe,
@@ -308,7 +326,7 @@ def _summary(snapshot: TradingViewEvidenceSnapshot) -> TimeframeEvidenceSummary:
         completeness=completeness,
         missing_evidence=snapshot.missing_evidence,
         invalid_evidence=snapshot.invalid_evidence,
-        stale_evidence=snapshot.stale_evidence,
+        stale_evidence=stale_evidence,
         timestamp=snapshot.timestamp,
         source_fingerprint=snapshot.source_fingerprint,
     )
