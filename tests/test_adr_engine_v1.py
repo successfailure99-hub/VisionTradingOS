@@ -9,11 +9,12 @@ from application.orchestrator import ApplicationOrchestrator
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
 from core.event_bus import EventBus
-from core.events import ADR_PARTIAL, ADR_UPDATED
+from core.events import ADR_FAILED, ADR_INVALID, ADR_PARTIAL, ADR_UPDATED
 from core.models.candle import Candle
 from core.models.daily_ohlc import DailyOHLC
 from core.models.tick import Tick
 from engines.adr import ADREngine, ADRExpansionState, ADRExhaustionState, ADRRequest, ADRSnapshot
+import engines.adr.engine as adr_engine_module
 from engines.tradingview_evidence import EvidenceAvailability, TradingViewEvidenceMappingEngine
 from engines.tradingview_evidence.models import TradingViewEvidenceRequest
 
@@ -152,6 +153,56 @@ def test_invalid_and_insufficient_history_are_rejected_without_state_mutation():
         ))
 
 
+@pytest.mark.parametrize(
+    "daily_ohlc",
+    (
+        DailyOHLC(date(2026, 6, 1), open=1000.0, high=950.0, low=950.0, close=950.0),
+        DailyOHLC(date(2026, 6, 1), open=1000.0, high=float("nan"), low=950.0, close=1000.0),
+        DailyOHLC(date(2026, 6, 1), open=-1000.0, high=1050.0, low=950.0, close=1000.0),
+    ),
+)
+def test_invalid_daily_ohlc_values_publish_invalid_event(daily_ohlc):
+    bus = EventBus()
+    invalid = []
+    bus.subscribe(ADR_INVALID, invalid.append)
+    engine = ADREngine(bus, instrument="NIFTY", period=20)
+    history = (daily_ohlc, *daily_history(19, start=date(2026, 6, 2)))
+
+    with pytest.raises(ValueError):
+        engine.calculate(ADRRequest(
+            trading_date=NOW.date(),
+            instrument="NIFTY",
+            daily_history=history,
+            latest_price=1000.0,
+            session_high=1010.0,
+            session_low=990.0,
+            timestamp=NOW,
+        ))
+
+    assert engine.state is None
+    assert engine.snapshot().invalid_count == 1
+    assert invalid == [engine.snapshot()]
+
+
+def test_unexpected_calculation_failure_publishes_failed_event(monkeypatch):
+    bus = EventBus()
+    failed = []
+    bus.subscribe(ADR_FAILED, failed.append)
+    engine = ADREngine(bus, instrument="NIFTY", period=20)
+
+    def fail_snapshot(**kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(adr_engine_module, "ADRSnapshot", fail_snapshot)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        engine.calculate(adr_request(today_range=50.0))
+
+    assert engine.state is None
+    assert engine.snapshot().last_error == "ADR calculation failed."
+    assert failed == [engine.snapshot()]
+
+
 def test_snapshot_is_immutable_and_duplicate_request_is_idempotent():
     engine = ADREngine(EventBus(), instrument="NIFTY", period=20)
     request = adr_request(today_range=50.0)
@@ -163,6 +214,80 @@ def test_snapshot_is_immutable_and_duplicate_request_is_idempotent():
     assert engine.snapshot().calculation_count == 1
     with pytest.raises(FrozenInstanceError):
         first.adr_value = 1.0
+
+
+def test_same_observable_adr_snapshot_does_not_publish_duplicate_update():
+    bus = EventBus()
+    updates = []
+    bus.subscribe(ADR_UPDATED, updates.append)
+    engine = ADREngine(bus, instrument="NIFTY", period=20)
+    first = engine.calculate(adr_request(today_range=50.0))
+    second = engine.calculate(ADRRequest(
+        trading_date=NOW.date(),
+        instrument="NIFTY",
+        daily_history=daily_history(20),
+        latest_price=1020.0,
+        session_high=1050.0,
+        session_low=1000.0,
+        timestamp=NOW + timedelta(seconds=1),
+    ))
+
+    assert second is first
+    assert updates == [first]
+    assert engine.snapshot().calculation_count == 1
+
+
+def test_session_end_same_range_keeps_final_adr_state_stable():
+    engine = ADREngine(EventBus(), instrument="NIFTY", period=20)
+    session_end = datetime(2026, 7, 21, 15, 30, tzinfo=timezone.utc)
+    first = engine.calculate(ADRRequest(
+        trading_date=session_end.date(),
+        instrument="NIFTY",
+        daily_history=daily_history(20),
+        latest_price=1030.0,
+        session_high=1050.0,
+        session_low=1000.0,
+        timestamp=session_end,
+    ))
+    second = engine.calculate(ADRRequest(
+        trading_date=session_end.date(),
+        instrument="NIFTY",
+        daily_history=daily_history(20),
+        latest_price=1025.0,
+        session_high=1050.0,
+        session_low=1000.0,
+        timestamp=session_end + timedelta(seconds=10),
+    ))
+
+    assert second is first
+    assert second.range_consumed_pct == pytest.approx(50.0)
+    assert second.expansion_state is ADRExpansionState.NORMAL
+
+
+def test_gap_day_daily_history_is_valid_historical_input():
+    history = tuple(
+        DailyOHLC(
+            trading_date=date(2026, 6, 1) + timedelta(days=index * 2),
+            open=1000.0,
+            high=1050.0,
+            low=950.0,
+            close=1010.0,
+        )
+        for index in range(20)
+    )
+
+    result = ADREngine(EventBus(), instrument="NIFTY", period=20).calculate(ADRRequest(
+        trading_date=NOW.date(),
+        instrument="NIFTY",
+        daily_history=history,
+        latest_price=1025.0,
+        session_high=1050.0,
+        session_low=1000.0,
+        timestamp=NOW,
+    ))
+
+    assert result.adr_value == pytest.approx(100.0)
+    assert result.range_consumed_pct == pytest.approx(50.0)
 
 
 def test_runtime_updates_adr_automatically_from_existing_daily_history_and_ticks():
@@ -181,6 +306,26 @@ def test_runtime_updates_adr_automatically_from_existing_daily_history_and_ticks
     assert snapshot.adr is runtime.adr_engine.state
     assert snapshot.adr.adr_value == pytest.approx(100.0)
     assert snapshot.adr_diagnostics.last_snapshot is snapshot.adr
+
+
+def test_runtime_repeated_ticks_inside_unchanged_range_publish_one_adr_update():
+    bus = EventBus()
+    updates = []
+    bus.subscribe(ADR_UPDATED, updates.append)
+    orchestrator = ApplicationOrchestrator(
+        bus,
+        RuntimeConfiguration(instruments=(RuntimeInstrument.NIFTY,), adr_period=20),
+    )
+    orchestrator.start()
+    for item in daily_history(20):
+        orchestrator.process_daily_ohlc(RuntimeInstrument.NIFTY, item)
+
+    for offset in range(3):
+        orchestrator.process_tick(tick(NOW + timedelta(seconds=offset), price=1000.0))
+
+    runtime = orchestrator.get_runtime(RuntimeInstrument.NIFTY)
+    assert len(updates) == 1
+    assert runtime.adr_engine.snapshot().calculation_count == 1
 
 
 def test_tradingview_evidence_consumes_adr_snapshot_when_available():

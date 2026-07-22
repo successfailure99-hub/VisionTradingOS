@@ -51,14 +51,10 @@ class ADREngine(BaseEngine):
 
     def calculate(self, request: ADRRequest) -> ADRSnapshot:
         if not isinstance(request, ADRRequest):
-            self._invalid_count += 1
-            self._last_error = "ADR request is invalid."
-            self._event_bus.publish(events.ADR_INVALID, self.snapshot())
+            self._record_invalid("ADR request is invalid.")
             raise TypeError("request must be ADRRequest.")
         if request.instrument != self._instrument:
-            self._invalid_count += 1
-            self._last_error = "ADR request instrument does not match engine."
-            self._event_bus.publish(events.ADR_INVALID, self.snapshot())
+            self._record_invalid("ADR request instrument does not match engine.")
             raise ValueError(self._last_error)
 
         history = self._validated_history(request.daily_history)
@@ -72,10 +68,8 @@ class ADREngine(BaseEngine):
         fingerprint = (
             request.trading_date,
             request.instrument,
-            request.latest_price,
             request.session_high,
             request.session_low,
-            request.timestamp,
             tuple((item.trading_date, item.high, item.low) for item in selected),
         )
         if fingerprint == self._last_request_fingerprint and self._last_snapshot is not None:
@@ -87,22 +81,27 @@ class ADREngine(BaseEngine):
         remaining = round(max(0.0, 100.0 - consumed), PERCENT_PRECISION)
         expansion = _expansion_state(consumed, today_range)
         exhaustion = _exhaustion_state(consumed, today_range)
-        snapshot = ADRSnapshot(
-            trading_date=request.trading_date,
-            instrument=request.instrument,
-            adr_period=self._period,
-            adr_value=adr_value,
-            today_high=round(request.session_high, PRICE_PRECISION),
-            today_low=round(request.session_low, PRICE_PRECISION),
-            today_range=today_range,
-            adr_high=round(request.session_low + adr_value, PRICE_PRECISION),
-            adr_low=round(request.session_high - adr_value, PRICE_PRECISION),
-            range_consumed_pct=consumed,
-            range_remaining_pct=remaining,
-            expansion_state=expansion,
-            exhaustion_state=exhaustion,
-            timestamp=request.timestamp,
-        )
+        try:
+            snapshot = ADRSnapshot(
+                trading_date=request.trading_date,
+                instrument=request.instrument,
+                adr_period=self._period,
+                adr_value=adr_value,
+                today_high=round(request.session_high, PRICE_PRECISION),
+                today_low=round(request.session_low, PRICE_PRECISION),
+                today_range=today_range,
+                adr_high=round(request.session_low + adr_value, PRICE_PRECISION),
+                adr_low=round(request.session_high - adr_value, PRICE_PRECISION),
+                range_consumed_pct=consumed,
+                range_remaining_pct=remaining,
+                expansion_state=expansion,
+                exhaustion_state=exhaustion,
+                timestamp=request.timestamp,
+            )
+        except Exception:
+            self._last_error = "ADR calculation failed."
+            self._event_bus.publish(events.ADR_FAILED, self.snapshot())
+            raise
         self._last_request_fingerprint = fingerprint
         self._last_snapshot = snapshot
         self._data = snapshot
@@ -166,19 +165,24 @@ class ADREngine(BaseEngine):
         seen_dates = set()
         for item in values:
             if not isinstance(item, DailyOHLC):
-                self._invalid_count += 1
-                self._last_error = "ADR daily history must contain DailyOHLC values."
-                self._event_bus.publish(events.ADR_INVALID, self.snapshot())
+                self._record_invalid("ADR daily history must contain DailyOHLC values.")
                 raise TypeError(self._last_error)
-            _validate_daily_ohlc(item)
+            try:
+                _validate_daily_ohlc(item)
+            except (TypeError, ValueError) as exc:
+                self._record_invalid(str(exc))
+                raise
             if item.trading_date in seen_dates:
-                self._invalid_count += 1
-                self._last_error = "ADR daily history contains duplicate trading dates."
-                self._event_bus.publish(events.ADR_INVALID, self.snapshot())
+                self._record_invalid("ADR daily history contains duplicate trading dates.")
                 raise ValueError(self._last_error)
             seen_dates.add(item.trading_date)
             normalized.append(item)
         return tuple(sorted(normalized, key=lambda item: item.trading_date))
+
+    def _record_invalid(self, message: str) -> None:
+        self._invalid_count += 1
+        self._last_error = message
+        self._event_bus.publish(events.ADR_INVALID, self.snapshot())
 
 
 def _normalize_instrument(value: str) -> str:
@@ -233,4 +237,3 @@ def _exhaustion_state(consumed: float, today_range: float) -> ADRExhaustionState
     if consumed <= 120:
         return ADRExhaustionState.EXHAUSTED
     return ADRExhaustionState.EXTREME
-
