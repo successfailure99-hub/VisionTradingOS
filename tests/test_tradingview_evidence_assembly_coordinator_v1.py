@@ -216,6 +216,7 @@ def test_symbol_runtime_integrates_assembly_automatically_after_closed_candle_up
     orchestrator.warm_up_candles(RuntimeInstrument.NIFTY, (candle(end_time=NOW - timedelta(minutes=1)),))
 
     orchestrator.process_tick(live_tick())
+    orchestrator.process_tick(live_tick(timestamp=NOW + timedelta(minutes=1), price=101.0))
 
     evidence = runtime.tradingview_evidence_snapshot()
     assert evidence.mapping_count == 1
@@ -240,7 +241,7 @@ def test_runtime_bare_tick_without_closed_candle_does_not_publish_evidence():
     runtime = orchestrator.get_runtime(RuntimeInstrument.NIFTY)
     assert events == []
     assert runtime.tradingview_evidence_snapshot().mapping_count == 0
-    assert runtime.tradingview_evidence_assembly_coordinator.snapshot().last_wait_reason == "latest closed candle is unavailable"
+    assert runtime.tradingview_evidence_assembly_coordinator.snapshot().last_wait_reason is None
 
 
 def option_chain_with_timestamp(timestamp):

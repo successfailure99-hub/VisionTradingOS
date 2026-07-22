@@ -269,7 +269,6 @@ class SymbolRuntime:
         self._last_tick = tick
         self._updated_at = tick.timestamp
         self._refresh_closed_timeframe_analysis(closed_timeframes, tick.timestamp, tick.last_price)
-        self._refresh_dashboard_analysis(tick.timestamp, tick.last_price)
         self._process_paper_tick(tick)
         if observe_shadow:
             self.shadow_trading_session_engine.observe_market_event("tick_processed", tick, timestamp=tick.timestamp)
@@ -327,8 +326,6 @@ class SymbolRuntime:
         )
         self._vwap_last_error = None
         self._updated_at = tick.timestamp
-        if self._last_tick is not None:
-            self._refresh_dashboard_analysis(tick.timestamp, self._last_tick.last_price)
         return self.snapshot()
 
     def mark_vwap_unavailable(
@@ -410,8 +407,6 @@ class SymbolRuntime:
         self._require_running()
         state = self.option_chain_engine.process(snapshot)
         self._updated_at = state.timestamp
-        if self._last_tick is not None:
-            self._refresh_dashboard_analysis(state.timestamp, self._last_tick.last_price)
         return state
 
     def build_market_context(
@@ -829,37 +824,25 @@ class SymbolRuntime:
         for timeframe in timeframes:
             try:
                 session_high, session_low = self._session_high_low(current_price, timeframe)
-                self.build_market_context(
+                context = self.build_market_context(
                     timestamp=timestamp,
                     current_price=current_price,
                     session_high=session_high,
                     session_low=session_low,
                     timeframe=timeframe,
                 )
-                self._assemble_tradingview_evidence(timestamp, current_price, timeframe=timeframe)
             except Exception:
                 continue
 
-    def _refresh_dashboard_analysis(self, timestamp, current_price: float) -> None:
-        session_high, session_low = self._session_high_low(current_price, self._primary_timeframe)
-        try:
-            context = self.build_market_context(
-                timestamp=timestamp,
-                current_price=current_price,
-                session_high=session_high,
-                session_low=session_low,
-                timeframe=self._primary_timeframe,
-            )
-        except Exception:
-            # Downstream dashboard analysis must never reject an otherwise valid
-            # market-data tick; engines keep their previous deterministic state.
-            return
+            try:
+                self._assemble_tradingview_evidence(timestamp, current_price, timeframe=timeframe)
+            except Exception:
+                pass
 
-        try:
-            self._assemble_tradingview_evidence(timestamp, current_price, timeframe=self._primary_timeframe)
-        except Exception:
-            pass
+            if timeframe is self._primary_timeframe:
+                self._refresh_primary_closed_candle_analysis(context)
 
+    def _refresh_primary_closed_candle_analysis(self, context: MarketContextState) -> None:
         try:
             reasoning = self.run_ai_reasoning(context)
             self.run_strategy(context, reasoning)

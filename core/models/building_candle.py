@@ -8,12 +8,15 @@ Building Candle
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 from core.enums.instrument import Instrument
 from core.enums.timeframe import TimeFrame
 from core.models.candle import Candle
 from core.models.tick import Tick
+
+
+INTRADAY_SESSION_OPEN = time(hour=9, minute=15)
 
 
 @dataclass(slots=True)
@@ -74,15 +77,15 @@ class BuildingCandle:
         if seconds <= 0:
             raise ValueError("timeframe duration must be positive.")
 
-        day_start = tick.timestamp.replace(
-            hour=0,
-            minute=0,
+        session_start = tick.timestamp.replace(
+            hour=INTRADAY_SESSION_OPEN.hour,
+            minute=INTRADAY_SESSION_OPEN.minute,
             second=0,
             microsecond=0,
         )
-        elapsed_seconds = int((tick.timestamp - day_start).total_seconds())
+        elapsed_seconds = int((tick.timestamp - session_start).total_seconds())
         bucket_start_seconds = (elapsed_seconds // seconds) * seconds
-        start = day_start + timedelta(seconds=bucket_start_seconds)
+        start = session_start + timedelta(seconds=bucket_start_seconds)
         end = start + duration
 
         return cls(

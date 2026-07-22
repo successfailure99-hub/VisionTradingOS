@@ -8,6 +8,10 @@ Vision Trading OS is a synchronous, deterministic trading-analysis workstation. 
 
 The application composes one `EventBus`, one `ApplicationOrchestrator`, and one `ApplicationLifecycleManager` through `ApplicationBootstrap`. Runtime state flows from engines into immutable `RuntimeSnapshot` values and then through dashboard presenters before widgets render read-only views.
 
+## Candle Boundary Policy
+
+Intraday runtime candles are session-anchored. For the supported Indian index runtime, the canonical intraday anchor is `09:15` local exchange time, so `1m`, `3m`, `5m`, `15m`, and `30m` candles derive their boundaries from the session open instead of midnight. Daily candles follow trading-day boundaries and remain outside the intraday multi-timeframe runtime. Downstream engines such as Price Action, Market Context, and TradingView Evidence consume these canonical closed candles and must not implement separate aggregation rules.
+
 ## Execution Modes
 
 - Safety mode: `ANALYSIS_ONLY` by default.
