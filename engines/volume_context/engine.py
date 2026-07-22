@@ -108,6 +108,10 @@ class VolumeContextEngine(BaseEngine):
 
         self._candles = candidate
         self._last_fingerprint = fingerprint
+        if self._last_snapshot is not None and snapshot == self._last_snapshot:
+            self._last_error = None
+            return self._last_snapshot
+
         self._last_snapshot = snapshot
         self._data = snapshot
         self._last_error = None

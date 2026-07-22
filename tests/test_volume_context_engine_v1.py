@@ -173,6 +173,34 @@ def test_invalid_and_insufficient_history_publish_contract_events():
     assert engine.state is None
 
 
+def test_default_warm_up_boundary_is_partial_at_twenty_and_valid_at_twenty_one():
+    bus = EventBus()
+    partial = []
+    updates = []
+    bus.subscribe(VOLUME_CONTEXT_PARTIAL, partial.append)
+    bus.subscribe(VOLUME_CONTEXT_UPDATED, updates.append)
+    engine = VolumeContextEngine(bus, instrument="NIFTY", timeframe="1m")
+    history = candles_from_volumes([1000] * 21)
+
+    for candle in history[:20]:
+        with pytest.raises(ValueError, match="Insufficient candle history"):
+            engine.process(candle)
+
+    assert engine.state is None
+    assert engine.candle_count == 20
+    assert engine.snapshot().partial_count == 20
+    assert partial[-1] == engine.snapshot()
+    assert updates == []
+
+    result = engine.process(history[20])
+
+    assert isinstance(result, VolumeContextSnapshot)
+    assert engine.state is result
+    assert engine.candle_count == 21
+    assert engine.snapshot().calculation_count == 1
+    assert updates == [result]
+
+
 def test_zero_reference_average_is_invalid_not_failed():
     bus = EventBus()
     invalid = []
@@ -257,6 +285,31 @@ def test_same_end_time_correction_replaces_latest_candle_without_growing_history
     assert engine.snapshot().calculation_count == 2
     assert updates == [first, second]
     assert second.current_volume == 2500
+
+
+def test_same_end_time_ohlc_only_correction_reuses_observable_snapshot():
+    bus = EventBus()
+    updates = []
+    bus.subscribe(VOLUME_CONTEXT_UPDATED, updates.append)
+    engine = VolumeContextEngine(bus, instrument="NIFTY", timeframe="1m")
+    history = candles_from_volumes([1000] * 20 + [120000])
+    first = warm_engine(engine, history)
+    corrected = replace(
+        history[-1],
+        open=125.0,
+        high=126.0,
+        low=124.0,
+        close=125.0,
+    )
+
+    second = engine.process(corrected)
+
+    assert second is first
+    assert engine.state is first
+    assert engine.candle_count == 21
+    assert engine.snapshot().calculation_count == 1
+    assert updates == [first]
+    assert second.current_volume == 120000
 
 
 def test_same_end_time_correction_cannot_overlap_previous_finalized_candle():
