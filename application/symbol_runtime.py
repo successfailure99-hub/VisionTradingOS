@@ -72,9 +72,11 @@ class SymbolRuntime:
         self._instrument = instrument
         self._status = RuntimeStatus.CREATED
         self._core_instrument = Instrument.from_symbol(instrument.value)
+        self._timeframes = tuple(TimeFrame.from_value(value) for value in configuration.timeframes)
+        self._primary_timeframe = self._timeframes[0]
         self._last_tick: Tick | None = None
         self._updated_at = None
-        self._last_processed_history_count = 0
+        self._last_processed_history_counts = {timeframe: 0 for timeframe in self._timeframes}
         self._vwap_source_type = "-"
         self._vwap_source_exchange = "-"
         self._vwap_source_trading_symbol = "-"
@@ -96,7 +98,11 @@ class SymbolRuntime:
         self._vwap_current_accumulated_volume = 0
         self._vwap_last_error = None
 
-        self.market_context_engine = MarketContextEngine(event_bus, instrument.value, configuration.timeframe)
+        self.market_context_engines = {
+            timeframe: MarketContextEngine(event_bus, instrument.value, timeframe.value)
+            for timeframe in self._timeframes
+        }
+        self.market_context_engine = self.market_context_engines[self._primary_timeframe]
         self.ai_reasoning_engine = AIReasoningEngine(event_bus, instrument.value, configuration.timeframe)
         self.strategy_engine = StrategyEngine(event_bus, instrument.value, configuration.timeframe)
         self.confidence_calibration_engine = AIConfidenceCalibrationEngine(event_bus, instrument.value, configuration.timeframe)
@@ -148,27 +154,45 @@ class SymbolRuntime:
             execution_reconciliation_engine=self.execution_reconciliation_engine,
             position_engine=self.position_engine,
         )
-        self.candle_engine = CandleEngine(event_bus, TimeFrame.from_value(configuration.timeframe))
+        self.candle_engines = {
+            timeframe: CandleEngine(event_bus, timeframe)
+            for timeframe in self._timeframes
+        }
+        self.candle_engine = self.candle_engines[self._primary_timeframe]
         self.vwap_engine = VWAPEngine(event_bus)
         self.cpr_engine = CPREngine(event_bus)
         self.camarilla_engine = CamarillaEngine(event_bus)
-        self.price_action_engine = PriceActionEngine(event_bus, instrument.value, configuration.timeframe)
+        self.price_action_engines = {
+            timeframe: PriceActionEngine(event_bus, instrument.value, timeframe.value)
+            for timeframe in self._timeframes
+        }
+        self.price_action_engine = self.price_action_engines[self._primary_timeframe]
         self.option_chain_engine = OptionChainEngine(
             event_bus,
             instrument.value,
             configuration.exchange,
             configuration.option_expiry_date,
         )
-        self.tradingview_evidence_engine = TradingViewEvidenceMappingEngine(
-            event_bus,
-            instrument=instrument.value,
-            timeframe=configuration.timeframe,
-        )
-        self.tradingview_evidence_assembly_coordinator = TradingViewEvidenceAssemblyCoordinator(
-            instrument=instrument,
-            timeframe=configuration.timeframe,
-            mapping_engine=self.tradingview_evidence_engine,
-        )
+        self.tradingview_evidence_engines = {
+            timeframe: TradingViewEvidenceMappingEngine(
+                event_bus,
+                instrument=instrument.value,
+                timeframe=timeframe.value,
+            )
+            for timeframe in self._timeframes
+        }
+        self.tradingview_evidence_engine = self.tradingview_evidence_engines[self._primary_timeframe]
+        self.tradingview_evidence_assembly_coordinators = {
+            timeframe: TradingViewEvidenceAssemblyCoordinator(
+                instrument=instrument,
+                timeframe=timeframe.value,
+                mapping_engine=self.tradingview_evidence_engines[timeframe],
+            )
+            for timeframe in self._timeframes
+        }
+        self.tradingview_evidence_assembly_coordinator = self.tradingview_evidence_assembly_coordinators[
+            self._primary_timeframe
+        ]
 
     @property
     def instrument(self) -> RuntimeInstrument:
@@ -189,7 +213,8 @@ class SymbolRuntime:
     def start(self) -> None:
         self._status = RuntimeStatus.RUNNING
         self.confidence_calibration_engine.start()
-        self.tradingview_evidence_engine.start()
+        for engine in self.tradingview_evidence_engines.values():
+            engine.start()
         self.execution_policy_engine.start()
         self.trade_authorization_engine.start()
         self.paper_execution_coordinator.start()
@@ -203,7 +228,8 @@ class SymbolRuntime:
         self.paper_execution_coordinator.stop()
         self.trade_authorization_engine.stop()
         self.execution_policy_engine.stop()
-        self.tradingview_evidence_engine.stop()
+        for engine in self.tradingview_evidence_engines.values():
+            engine.stop()
         self.confidence_calibration_engine.stop()
         self._status = RuntimeStatus.STOPPED
 
@@ -214,7 +240,8 @@ class SymbolRuntime:
         self._require_running()
         if tick.symbol is not self._core_instrument:
             raise ValueError("Tick instrument does not match SymbolRuntime.")
-        self.candle_engine.on_tick(tick)
+        for engine in self.candle_engines.values():
+            engine.on_tick(tick)
         if not self._ready_futures_proxy():
             self.vwap_engine.on_tick(tick)
             levels = self.vwap_engine.get_latest(self._core_instrument)
@@ -238,9 +265,10 @@ class SymbolRuntime:
                 self._vwap_unavailable_reason = "No positive volume VWAP source"
                 self._vwap_source_state = "Unavailable"
                 self._vwap_source_message = self._vwap_unavailable_reason
-        self._process_closed_candles()
+        closed_timeframes = self._process_closed_candles()
         self._last_tick = tick
         self._updated_at = tick.timestamp
+        self._refresh_closed_timeframe_analysis(closed_timeframes, tick.timestamp, tick.last_price)
         self._refresh_dashboard_analysis(tick.timestamp, tick.last_price)
         self._process_paper_tick(tick)
         if observe_shadow:
@@ -348,8 +376,8 @@ class SymbolRuntime:
                 raise TypeError("warm-up candles must contain Candle values.")
             if candle.symbol != self._core_instrument.value:
                 raise ValueError("Warm-up candle instrument does not match SymbolRuntime.")
-            if candle.timeframe != TimeFrame.ONE_MINUTE.value:
-                raise ValueError("Historical warm-up supports only one-minute candles.")
+            if candle.timeframe != self._primary_timeframe.value:
+                raise ValueError("Historical warm-up candles must match the primary runtime timeframe.")
 
         accepted = self.candle_engine.seed_history(
             self._core_instrument,
@@ -367,15 +395,16 @@ class SymbolRuntime:
                 self.price_action_engine.process(candle)
                 self._seed_vwap_from_candle(candle)
 
-        self._last_processed_history_count = len(
+        self._last_processed_history_counts[self._primary_timeframe] = len(
             self.candle_engine.get_history(self._core_instrument)
         )
         if accepted:
             self._updated_at = accepted[-1].end_time
         return accepted
 
-    def get_candle_history(self) -> tuple[Candle, ...]:
-        return tuple(self.candle_engine.get_history(self._core_instrument))
+    def get_candle_history(self, timeframe: str | TimeFrame | None = None) -> tuple[Candle, ...]:
+        engine = self._candle_engine_for(timeframe)
+        return tuple(engine.get_history(self._core_instrument))
 
     def process_option_chain(self, snapshot: OptionChainSnapshot) -> OptionChainState:
         self._require_running()
@@ -392,8 +421,10 @@ class SymbolRuntime:
         current_price: float,
         session_high: float,
         session_low: float,
+        timeframe: str | TimeFrame | None = None,
     ) -> MarketContextState:
         self._require_running()
+        lane = self._timeframe_for(timeframe)
         trading_date = timestamp.date()
         cpr = self.cpr if self.cpr is not None and self.cpr.trading_date <= trading_date else None
         camarilla = (
@@ -403,18 +434,18 @@ class SymbolRuntime:
         )
         snapshot = MarketContextSnapshot(
             symbol=self._instrument.value,
-            timeframe=self._configuration.timeframe,
+            timeframe=lane.value,
             timestamp=timestamp,
             current_price=current_price,
             session_high=session_high,
             session_low=session_low,
-            price_action=self.price_action_engine.state,
+            price_action=self.price_action_engines[lane].state,
             option_chain=self.option_chain_engine.state,
             vwap=self.vwap_engine.get_latest(self._core_instrument),
             cpr=cpr,
             camarilla=camarilla,
         )
-        state = self.market_context_engine.process(snapshot)
+        state = self.market_context_engines[lane].process(snapshot)
         self._updated_at = state.timestamp
         return state
 
@@ -432,7 +463,7 @@ class SymbolRuntime:
             raise ValueError("Market context and AI reasoning are required for strategy.")
         snapshot = StrategySnapshot(
             symbol=self._instrument.value,
-            timeframe=self._configuration.timeframe,
+            timeframe=self._primary_timeframe.value,
             timestamp=market_context.timestamp,
             ai_reasoning=ai_reasoning,
             market_context=market_context,
@@ -441,7 +472,7 @@ class SymbolRuntime:
         if self._configuration.risk_configuration is not None:
             risk_state = self.trade_plan_engine.evaluate(
                 symbol=self._instrument.value,
-                timeframe=self._configuration.timeframe,
+                timeframe=self._primary_timeframe.value,
                 strategy=state,
                 configuration=self._configuration.risk_configuration,
                 market_context=market_context,
@@ -495,7 +526,7 @@ class SymbolRuntime:
             raise ValueError("Strategy state is required for risk.")
         snapshot = RiskSnapshot(
             symbol=self._instrument.value,
-            timeframe=self._configuration.timeframe,
+            timeframe=self._primary_timeframe.value,
             timestamp=strategy.timestamp,
             strategy=strategy,
             policy=policy,
@@ -513,7 +544,7 @@ class SymbolRuntime:
             raise ValueError("Risk state is required for order creation.")
         snapshot = OrderSnapshot(
             symbol=self._instrument.value,
-            timeframe=self._configuration.timeframe,
+            timeframe=self._primary_timeframe.value,
             timestamp=request.timestamp,
             risk=risk,
             request=request,
@@ -554,18 +585,19 @@ class SymbolRuntime:
             raise TypeError("request must be TradingViewEvidenceRequest")
         if request.instrument != self._instrument:
             raise ValueError("TradingView evidence request instrument does not match SymbolRuntime.")
-        result = self.tradingview_evidence_engine.map_evidence(request)
+        engine = self._tradingview_evidence_engine_for(request.timeframe)
+        result = engine.map_evidence(request)
         self._updated_at = result.timestamp
         return result
 
-    def get_tradingview_evidence(self, evidence_id: str):
-        return self.tradingview_evidence_engine.get_evidence(evidence_id)
+    def get_tradingview_evidence(self, evidence_id: str, timeframe: str | TimeFrame | None = None):
+        return self._tradingview_evidence_engine_for(timeframe).get_evidence(evidence_id)
 
-    def tradingview_evidence_snapshot(self):
-        return self.tradingview_evidence_engine.snapshot()
+    def tradingview_evidence_snapshot(self, timeframe: str | TimeFrame | None = None):
+        return self._tradingview_evidence_engine_for(timeframe).snapshot()
 
-    def reset_tradingview_evidence(self):
-        return self.tradingview_evidence_engine.reset()
+    def reset_tradingview_evidence(self, timeframe: str | TimeFrame | None = None):
+        return self._tradingview_evidence_engine_for(timeframe).reset()
 
     def create_order_from_execution_plan(self, plan: TradeExecutionPlan) -> OrderState | None:
         self._require_running()
@@ -586,7 +618,7 @@ class SymbolRuntime:
             client_order_id=plan.execution_plan_id,
             symbol=plan.instrument,
             exchange=self._configuration.exchange,
-            timeframe=self._configuration.timeframe,
+            timeframe=self._primary_timeframe.value,
             timestamp=plan.created_at,
             side=plan.entry_side,
             order_type=plan.entry_order_type,
@@ -668,18 +700,23 @@ class SymbolRuntime:
         return state
 
     def reset(self) -> None:
-        self.candle_engine.clear()
+        for engine in self.candle_engines.values():
+            engine.clear()
         self.vwap_engine.clear()
         self.cpr_engine.reset()
         self.camarilla_engine.reset()
-        self.price_action_engine.reset()
+        for engine in self.price_action_engines.values():
+            engine.reset()
         self.option_chain_engine.reset()
-        self.market_context_engine.reset()
+        for engine in self.market_context_engines.values():
+            engine.reset()
         self.ai_reasoning_engine.reset()
         self.strategy_engine.reset()
         self.confidence_calibration_engine.reset()
-        self.tradingview_evidence_engine.reset()
-        self.tradingview_evidence_assembly_coordinator.reset()
+        for engine in self.tradingview_evidence_engines.values():
+            engine.reset()
+        for coordinator in self.tradingview_evidence_assembly_coordinators.values():
+            coordinator.reset()
         self.risk_engine.reset()
         self.execution_policy_engine.reset_session()
         self.trade_authorization_engine.reset()
@@ -692,7 +729,7 @@ class SymbolRuntime:
         self.position_engine.reset()
         self._last_tick = None
         self._updated_at = None
-        self._last_processed_history_count = 0
+        self._last_processed_history_counts = {timeframe: 0 for timeframe in self._timeframes}
         self._vwap_source_type = "-"
         self._vwap_source_exchange = "-"
         self._vwap_source_trading_symbol = "-"
@@ -722,7 +759,7 @@ class SymbolRuntime:
             latest_candle = history[-1] if history else None
         return RuntimeSnapshot(
             symbol=self._instrument,
-            timeframe=self._configuration.timeframe,
+            timeframe=self._primary_timeframe.value,
             status=self._status,
             latest_tick=self._last_tick,
             latest_candle=latest_candle,
@@ -770,20 +807,48 @@ class SymbolRuntime:
             if updated is not None:
                 self.risk_engine.record_decision(updated)
 
-    def _process_closed_candles(self) -> None:
-        history = self.candle_engine.get_history(self._core_instrument)
-        for candle in history[self._last_processed_history_count :]:
-            self.price_action_engine.process(candle)
-        self._last_processed_history_count = len(history)
+    def _process_closed_candles(self) -> tuple[TimeFrame, ...]:
+        closed_timeframes = []
+        for timeframe, candle_engine in self.candle_engines.items():
+            history = candle_engine.get_history(self._core_instrument)
+            last_count = self._last_processed_history_counts[timeframe]
+            new_candles = history[last_count:]
+            for candle in new_candles:
+                self.price_action_engines[timeframe].process(candle)
+            self._last_processed_history_counts[timeframe] = len(history)
+            if new_candles:
+                closed_timeframes.append(timeframe)
+        return tuple(closed_timeframes)
+
+    def _refresh_closed_timeframe_analysis(
+        self,
+        timeframes: tuple[TimeFrame, ...],
+        timestamp,
+        current_price: float,
+    ) -> None:
+        for timeframe in timeframes:
+            try:
+                session_high, session_low = self._session_high_low(current_price, timeframe)
+                self.build_market_context(
+                    timestamp=timestamp,
+                    current_price=current_price,
+                    session_high=session_high,
+                    session_low=session_low,
+                    timeframe=timeframe,
+                )
+                self._assemble_tradingview_evidence(timestamp, current_price, timeframe=timeframe)
+            except Exception:
+                continue
 
     def _refresh_dashboard_analysis(self, timestamp, current_price: float) -> None:
-        session_high, session_low = self._session_high_low(current_price)
+        session_high, session_low = self._session_high_low(current_price, self._primary_timeframe)
         try:
             context = self.build_market_context(
                 timestamp=timestamp,
                 current_price=current_price,
                 session_high=session_high,
                 session_low=session_low,
+                timeframe=self._primary_timeframe,
             )
         except Exception:
             # Downstream dashboard analysis must never reject an otherwise valid
@@ -791,7 +856,7 @@ class SymbolRuntime:
             return
 
         try:
-            self._assemble_tradingview_evidence(timestamp, current_price)
+            self._assemble_tradingview_evidence(timestamp, current_price, timeframe=self._primary_timeframe)
         except Exception:
             pass
 
@@ -803,36 +868,59 @@ class SymbolRuntime:
             # market-data tick; engines keep their previous deterministic state.
             return
 
-    def _assemble_tradingview_evidence(self, timestamp, current_price: float):
-        history = self.candle_engine.get_history(self._core_instrument)
+    def _assemble_tradingview_evidence(
+        self,
+        timestamp,
+        current_price: float,
+        *,
+        timeframe: str | TimeFrame | None = None,
+    ):
+        lane = self._timeframe_for(timeframe)
+        history = self.candle_engines[lane].get_history(self._core_instrument)
         latest_closed_candle = history[-1] if history else None
         source = TradingViewEvidenceAssemblyInput(
             timestamp=timestamp,
             instrument=self._instrument,
-            timeframe=self._configuration.timeframe,
+            timeframe=lane.value,
             latest_price=current_price,
             latest_candle=latest_closed_candle,
-            price_action=self.price_action_engine.state,
+            price_action=self.price_action_engines[lane].state,
             camarilla=self.camarilla_engine.levels,
             cpr=self.cpr_engine.levels,
             vwap=self.vwap_engine.get_latest(self._core_instrument),
             option_chain=self.option_chain_engine.state,
-            market_context=self.market_context_engine.state,
-            correlation_id=f"{self._instrument.value}:{self._configuration.timeframe}:{timestamp.isoformat()}",
+            market_context=self.market_context_engines[lane].state,
+            correlation_id=f"{self._instrument.value}:{lane.value}:{timestamp.isoformat()}",
         )
-        return self.tradingview_evidence_assembly_coordinator.assemble(source)
+        return self.tradingview_evidence_assembly_coordinators[lane].assemble(source)
 
-    def _session_high_low(self, current_price: float) -> tuple[float, float]:
+    def _session_high_low(self, current_price: float, timeframe: str | TimeFrame | None = None) -> tuple[float, float]:
+        lane = self._timeframe_for(timeframe)
         highs = [current_price]
         lows = [current_price]
-        current = self.candle_engine.get_current(self._core_instrument)
+        candle_engine = self.candle_engines[lane]
+        current = candle_engine.get_current(self._core_instrument)
         if current is not None:
             highs.append(current.high)
             lows.append(current.low)
-        for candle in self.candle_engine.get_history(self._core_instrument):
+        for candle in candle_engine.get_history(self._core_instrument):
             highs.append(candle.high)
             lows.append(candle.low)
         return max(highs), min(lows)
+
+    def _timeframe_for(self, timeframe: str | TimeFrame | None) -> TimeFrame:
+        if timeframe is None:
+            return self._primary_timeframe
+        parsed = timeframe if isinstance(timeframe, TimeFrame) else TimeFrame.from_value(str(timeframe).strip())
+        if parsed not in self.candle_engines:
+            raise ValueError("timeframe is not configured for SymbolRuntime.")
+        return parsed
+
+    def _candle_engine_for(self, timeframe: str | TimeFrame | None) -> CandleEngine:
+        return self.candle_engines[self._timeframe_for(timeframe)]
+
+    def _tradingview_evidence_engine_for(self, timeframe: str | TimeFrame | None) -> TradingViewEvidenceMappingEngine:
+        return self.tradingview_evidence_engines[self._timeframe_for(timeframe)]
 
     def _seed_vwap_from_candle(self, candle: Candle) -> None:
         if candle.volume <= 0:

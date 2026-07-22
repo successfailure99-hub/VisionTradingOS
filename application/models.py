@@ -8,6 +8,7 @@ from datetime import date, datetime
 from application.enums import ExecutionSafetyMode, RuntimeInstrument, RuntimeStatus
 from adapters.zerodha.models import ZerodhaConnectionSnapshot
 from brokers.zerodha.enums import BrokerExecutionMode
+from core.enums.timeframe import TimeFrame
 from core.models.building_candle import BuildingCandle
 from core.models.candle import Candle
 from core.models.tick import Tick
@@ -130,6 +131,7 @@ class RuntimeConfiguration:
     instruments: tuple[RuntimeInstrument, ...] = (RuntimeInstrument.NIFTY,)
     exchange: str = "NSE"
     timeframe: str = "1m"
+    timeframes: tuple[str, ...] | None = None
     option_expiry_date: date = date(1970, 1, 1)
     safety_mode: ExecutionSafetyMode = ExecutionSafetyMode.ANALYSIS_ONLY
     risk_configuration: RiskConfiguration | None = None
@@ -151,11 +153,8 @@ class RuntimeConfiguration:
             normalized.append(instrument)
         if not isinstance(self.exchange, str) or not self.exchange.strip():
             raise ValueError("RuntimeConfiguration exchange cannot be empty.")
-        if not isinstance(self.timeframe, str) or not self.timeframe.strip():
-            raise ValueError("RuntimeConfiguration timeframe cannot be empty.")
-        timeframe = self.timeframe.strip()
-        if timeframe != "1m":
-            raise ValueError("Application Orchestrator V1 supports only timeframe '1m'.")
+        timeframes = _normalize_runtime_timeframes(self.timeframe, self.timeframes)
+        timeframe = timeframes[0]
         if not isinstance(self.option_expiry_date, date) or isinstance(self.option_expiry_date, datetime):
             raise ValueError("RuntimeConfiguration option_expiry_date must be a date.")
         if not isinstance(self.safety_mode, ExecutionSafetyMode):
@@ -175,6 +174,38 @@ class RuntimeConfiguration:
         object.__setattr__(self, "instruments", tuple(normalized))
         object.__setattr__(self, "exchange", self.exchange.strip().upper())
         object.__setattr__(self, "timeframe", timeframe)
+        object.__setattr__(self, "timeframes", timeframes)
+
+
+def _normalize_runtime_timeframes(
+    timeframe: str,
+    timeframes: tuple[str, ...] | None,
+) -> tuple[str, ...]:
+    allowed = {
+        TimeFrame.ONE_MINUTE,
+        TimeFrame.THREE_MINUTES,
+        TimeFrame.FIVE_MINUTES,
+        TimeFrame.FIFTEEN_MINUTES,
+        TimeFrame.THIRTY_MINUTES,
+    }
+    if timeframes is None:
+        candidates = (timeframe,)
+    else:
+        if not isinstance(timeframes, tuple) or not timeframes:
+            raise ValueError("RuntimeConfiguration timeframes must be a non-empty tuple when provided.")
+        candidates = timeframes
+
+    normalized: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, str) or not candidate.strip():
+            raise ValueError("RuntimeConfiguration timeframe values cannot be empty.")
+        parsed = TimeFrame.from_value(candidate.strip())
+        if parsed not in allowed:
+            raise ValueError("RuntimeConfiguration supports only 1m, 3m, 5m, 15m and 30m runtime lanes.")
+        if parsed.value in normalized:
+            raise ValueError("RuntimeConfiguration timeframes must be unique.")
+        normalized.append(parsed.value)
+    return tuple(normalized)
 
 
 @dataclass(frozen=True, slots=True)

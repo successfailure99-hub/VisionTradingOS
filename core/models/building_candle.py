@@ -69,17 +69,21 @@ class BuildingCandle:
         Create a new candle from the first tick.
         """
 
-        start = tick.timestamp.replace(
+        duration = timeframe.duration
+        seconds = int(duration.total_seconds())
+        if seconds <= 0:
+            raise ValueError("timeframe duration must be positive.")
+
+        day_start = tick.timestamp.replace(
+            hour=0,
+            minute=0,
             second=0,
             microsecond=0,
         )
-
-        if timeframe == TimeFrame.ONE_MINUTE:
-            end = start + timedelta(minutes=1)
-        else:
-            raise NotImplementedError(
-                f"{timeframe} not yet supported."
-            )
+        elapsed_seconds = int((tick.timestamp - day_start).total_seconds())
+        bucket_start_seconds = (elapsed_seconds // seconds) * seconds
+        start = day_start + timedelta(seconds=bucket_start_seconds)
+        end = start + duration
 
         return cls(
             symbol=tick.symbol,

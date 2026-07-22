@@ -26,14 +26,11 @@ from core.models.tick import Tick
 
 class CandleEngine(BaseEngine):
     """
-    Builds live one-minute candles from incoming ticks.
+    Builds live candles from incoming ticks for one timeframe.
 
     Candle Engine V1 assumes serialized, single-threaded
     tick delivery. Thread safety is provided upstream by the
     Market Data Engine.
-
-    V1 supports only TimeFrame.ONE_MINUTE. Multi-timeframe
-    candle construction will be implemented in a future version.
 
     Responsibilities
     ----------------
@@ -49,10 +46,11 @@ class CandleEngine(BaseEngine):
         timeframe: TimeFrame = TimeFrame.ONE_MINUTE,
     ):
 
-        if timeframe != TimeFrame.ONE_MINUTE:
-            raise NotImplementedError(
-                "Candle Engine V1 supports only 1-minute candles."
-            )
+        if not isinstance(timeframe, TimeFrame):
+            raise TypeError("timeframe must be a TimeFrame.")
+        if not timeframe.is_intraday:
+            raise ValueError("CandleEngine runtime candles require an intraday timeframe.")
+        timeframe.duration
 
         super().__init__(event_bus)
 
@@ -137,7 +135,7 @@ class CandleEngine(BaseEngine):
         replace: bool = False,
     ) -> tuple[Candle, ...]:
         """
-        Seed closed historical one-minute candles without publishing live events.
+        Seed closed historical candles without publishing live events.
         """
 
         if not isinstance(symbol, Instrument):
@@ -222,8 +220,8 @@ class CandleEngine(BaseEngine):
                 raise ValueError(f"historical candle {name} must be timezone-aware")
         if candle.start_time >= candle.end_time:
             raise ValueError("historical candle start_time must be before end_time")
-        if candle.end_time - candle.start_time != timedelta(minutes=1):
-            raise ValueError("historical candle duration must be exactly one minute")
+        if candle.end_time - candle.start_time != self.timeframe.duration:
+            raise ValueError("historical candle duration must match engine timeframe")
 
     def _validate_strict_history(self, candles: tuple[Candle, ...]) -> None:
         for previous, current in zip(candles, candles[1:]):

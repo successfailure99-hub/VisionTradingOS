@@ -248,14 +248,16 @@ def test_cpr_and_camarilla_engines_are_owned_and_preserve_lifecycle():
     assert runtime.camarilla_engine.is_ready() is False
 
 
-def test_configuration_restricts_timeframe_to_one_minute_consistently():
+def test_configuration_preserves_primary_timeframe_backward_compatibility():
     config = RuntimeConfiguration(timeframe=" 1m ")
     orchestrator = ApplicationOrchestrator(EventBus(), config)
     runtime = orchestrator.get_runtime(RuntimeInstrument.NIFTY)
     assert config.timeframe == "1m"
     assert runtime.candle_engine.timeframe.value == "1m"
-    with pytest.raises(ValueError):
-        RuntimeConfiguration(timeframe="5m")
+
+    five_minute = RuntimeConfiguration(timeframe="5m")
+    assert five_minute.timeframe == "5m"
+    assert five_minute.timeframes == ("5m",)
 
 
 def test_process_tick_returns_immutable_runtime_snapshot_with_dashboard_state():
