@@ -8,6 +8,7 @@ from core.enums.timeframe import TimeFrame
 from core.models.candle import Candle
 from core.models.daily_ohlc import DailyOHLC
 from core.models.tick import Tick
+from engines.adr.engine import ADREngine
 from engines.ai_reasoning.ai_reasoning_engine import AIReasoningEngine
 from engines.ai_confidence_calibration.engine import AIConfidenceCalibrationEngine
 from engines.ai_confidence_calibration.models import ConfidenceCalibrationRequest
@@ -76,6 +77,7 @@ class SymbolRuntime:
         self._primary_timeframe = self._timeframes[0]
         self._last_tick: Tick | None = None
         self._updated_at = None
+        self._daily_ohlc_history: tuple[DailyOHLC, ...] = ()
         self._last_processed_history_counts = {timeframe: 0 for timeframe in self._timeframes}
         self._vwap_source_type = "-"
         self._vwap_source_exchange = "-"
@@ -160,6 +162,7 @@ class SymbolRuntime:
         }
         self.candle_engine = self.candle_engines[self._primary_timeframe]
         self.vwap_engine = VWAPEngine(event_bus)
+        self.adr_engine = ADREngine(event_bus, instrument=instrument.value, period=configuration.adr_period)
         self.cpr_engine = CPREngine(event_bus)
         self.camarilla_engine = CamarillaEngine(event_bus)
         self.price_action_engines = {
@@ -268,6 +271,7 @@ class SymbolRuntime:
         closed_timeframes = self._process_closed_candles()
         self._last_tick = tick
         self._updated_at = tick.timestamp
+        self._refresh_adr(tick.timestamp, tick.last_price)
         self._refresh_closed_timeframe_analysis(closed_timeframes, tick.timestamp, tick.last_price)
         self._process_paper_tick(tick)
         if observe_shadow:
@@ -356,8 +360,11 @@ class SymbolRuntime:
 
     def process_daily_ohlc(self, daily_ohlc: DailyOHLC) -> tuple[CPRLevels, CamarillaLevels]:
         self._require_running()
+        self._append_daily_ohlc(daily_ohlc)
         cpr = self.cpr_engine.update(daily_ohlc)
         camarilla = self.camarilla_engine.update(daily_ohlc)
+        if self._last_tick is not None:
+            self._refresh_adr(self._last_tick.timestamp, self._last_tick.last_price)
         return cpr, camarilla
 
     def warm_up_candles(
@@ -698,6 +705,7 @@ class SymbolRuntime:
         for engine in self.candle_engines.values():
             engine.clear()
         self.vwap_engine.clear()
+        self.adr_engine.reset()
         self.cpr_engine.reset()
         self.camarilla_engine.reset()
         for engine in self.price_action_engines.values():
@@ -724,6 +732,7 @@ class SymbolRuntime:
         self.position_engine.reset()
         self._last_tick = None
         self._updated_at = None
+        self._daily_ohlc_history = ()
         self._last_processed_history_counts = {timeframe: 0 for timeframe in self._timeframes}
         self._vwap_source_type = "-"
         self._vwap_source_exchange = "-"
@@ -759,6 +768,7 @@ class SymbolRuntime:
             latest_tick=self._last_tick,
             latest_candle=latest_candle,
             vwap=self.vwap_engine.get_latest(self._core_instrument),
+            adr=self.adr_engine.state,
             cpr=self.cpr,
             camarilla=self.camarilla,
             price_action=self.price_action_engine.state,
@@ -781,6 +791,7 @@ class SymbolRuntime:
             confidence_calibration=self.confidence_calibration_engine.snapshot(),
             trade_authorization=self.trade_authorization_engine.snapshot(),
             tradingview_evidence=self.tradingview_evidence_engine.snapshot(),
+            adr_diagnostics=self.adr_engine.snapshot(),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
@@ -871,11 +882,31 @@ class SymbolRuntime:
             camarilla=self.camarilla_engine.levels,
             cpr=self.cpr_engine.levels,
             vwap=self.vwap_engine.get_latest(self._core_instrument),
+            adr=self.adr_engine.state,
             option_chain=self.option_chain_engine.state,
             market_context=self.market_context_engines[lane].state,
             correlation_id=f"{self._instrument.value}:{lane.value}:{timestamp.isoformat()}",
         )
         return self.tradingview_evidence_assembly_coordinators[lane].assemble(source)
+
+    def _append_daily_ohlc(self, daily_ohlc: DailyOHLC) -> None:
+        existing = {item.trading_date: item for item in self._daily_ohlc_history}
+        existing[daily_ohlc.trading_date] = daily_ohlc
+        self._daily_ohlc_history = tuple(existing[key] for key in sorted(existing))
+
+    def _refresh_adr(self, timestamp, current_price: float) -> None:
+        try:
+            session_high, session_low = self._session_high_low(current_price, self._primary_timeframe)
+            self.adr_engine.update(
+                trading_date=timestamp.date(),
+                daily_history=self._daily_ohlc_history,
+                latest_price=current_price,
+                session_high=session_high,
+                session_low=session_low,
+                timestamp=timestamp,
+            )
+        except Exception:
+            return
 
     def _session_high_low(self, current_price: float, timeframe: str | TimeFrame | None = None) -> tuple[float, float]:
         lane = self._timeframe_for(timeframe)

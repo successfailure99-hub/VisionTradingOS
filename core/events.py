@@ -37,6 +37,11 @@ CANDLE_CLOSED = "candle_closed"
 CAMARILLA_UPDATED = "camarilla_updated"
 CPR_UPDATED = "cpr_updated"
 VWAP_UPDATED = "vwap_updated"
+ADR_UPDATED = "adr_updated"
+ADR_PARTIAL = "adr_partial"
+ADR_INVALID = "adr_invalid"
+ADR_FAILED = "adr_failed"
+ADR_STATE_UPDATED = "adr_state_updated"
 
 # ==================================================
 # Market Context Events

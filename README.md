@@ -12,6 +12,10 @@ The application composes one `EventBus`, one `ApplicationOrchestrator`, and one 
 
 Intraday runtime candles are session-anchored. For the supported Indian index runtime, the canonical intraday anchor is `09:15` local exchange time, so `1m`, `3m`, `5m`, `15m`, and `30m` candles derive their boundaries from the session open instead of midnight. Daily candles follow trading-day boundaries and remain outside the intraday multi-timeframe runtime. Downstream engines such as Price Action, Market Context, and TradingView Evidence consume these canonical closed candles and must not implement separate aggregation rules.
 
+## ADR Evidence
+
+ADR Engine V1 calculates Average Daily Range from externally supplied daily OHLC history and the current session high/low maintained by the runtime. ADR is an evidence source only: it publishes immutable range context, is owned once per instrument runtime, and is consumed by TradingView Evidence Assembly without recalculating ADR inside the evidence mapper.
+
 ## Execution Modes
 
 - Safety mode: `ANALYSIS_ONLY` by default.

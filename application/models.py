@@ -14,6 +14,7 @@ from core.models.candle import Candle
 from core.models.tick import Tick
 from engines.ai_reasoning.models import AIReasoningState
 from engines.ai_confidence_calibration.models import ConfidenceCalibrationSnapshot
+from engines.adr.models import ADRDiagnosticSnapshot, ADRSnapshot
 from engines.camarilla.levels import CamarillaLevels
 from engines.cpr.levels import CPRLevels
 from engines.market_context.models import MarketContextState
@@ -140,6 +141,7 @@ class RuntimeConfiguration:
     live_validation_configuration: LiveMarketValidationConfiguration | None = None
     historical_replay_configuration: ReplayConfiguration | None = None
     deterministic_backtest_configuration: BacktestConfiguration | None = None
+    adr_period: int = 20
 
     def __post_init__(self) -> None:
         if not isinstance(self.instruments, tuple) or not self.instruments:
@@ -171,6 +173,8 @@ class RuntimeConfiguration:
             raise TypeError("RuntimeConfiguration historical_replay_configuration must be ReplayConfiguration or None.")
         if self.deterministic_backtest_configuration is not None and not isinstance(self.deterministic_backtest_configuration, BacktestConfiguration):
             raise TypeError("RuntimeConfiguration deterministic_backtest_configuration must be BacktestConfiguration or None.")
+        if isinstance(self.adr_period, bool) or not isinstance(self.adr_period, int) or self.adr_period not in {5, 10, 20, 50}:
+            raise ValueError("RuntimeConfiguration adr_period must be one of 5, 10, 20 or 50.")
         object.__setattr__(self, "instruments", tuple(normalized))
         object.__setattr__(self, "exchange", self.exchange.strip().upper())
         object.__setattr__(self, "timeframe", timeframe)
@@ -238,6 +242,8 @@ class RuntimeSnapshot:
     confidence_calibration: ConfidenceCalibrationSnapshot | None = None
     trade_authorization: TradeAuthorizationSnapshot | None = None
     tradingview_evidence: TradingViewEvidenceEngineSnapshot | None = None
+    adr: ADRSnapshot | None = None
+    adr_diagnostics: ADRDiagnosticSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
