@@ -12,6 +12,7 @@ from core.models.building_candle import BuildingCandle
 from core.models.candle import Candle
 from engines.camarilla.levels import CamarillaLevels
 from engines.cpr.levels import CPRLevels
+from engines.adr.models import ADRSnapshot
 from engines.market_context.models import MarketContextState
 from engines.option_chain.models import OptionChainState
 from engines.price_action.models import PriceActionState
@@ -32,6 +33,7 @@ class TradingViewEvidenceAssemblyInput:
     vwap: VWAPLevels | None
     option_chain: OptionChainState | None
     market_context: MarketContextState | None
+    adr: ADRSnapshot | None = None
     correlation_id: str | None = None
 
     def __post_init__(self) -> None:

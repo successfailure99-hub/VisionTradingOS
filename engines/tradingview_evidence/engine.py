@@ -12,6 +12,7 @@ from core.models.building_candle import BuildingCandle
 from core.models.candle import Candle
 from engines.camarilla.levels import CamarillaLevels
 from engines.cpr.levels import CPRLevels
+from engines.adr.models import ADRSnapshot
 from engines.market_context.models import MarketContextState
 from engines.option_chain.models import OptionChainState
 from engines.price_action.models import PriceActionState
@@ -203,7 +204,7 @@ class TradingViewEvidenceMappingEngine(BaseEngine):
             "camarilla": self._status("camarilla", request.camarilla, CamarillaLevels, request),
             "cpr": self._status("cpr", request.cpr, CPRLevels, request),
             "vwap": self._status("vwap", request.vwap, VWAPLevels, request),
-            "adr": self._status("adr", request.adr, (), request),
+            "adr": self._status("adr", request.adr, ADRSnapshot, request),
             "price_action": self._status("price_action", request.price_action, PriceActionState, request),
             "market_context": self._status("market_context", request.market_context, MarketContextState, request),
             "option_chain": self._status("option_chain", request.option_chain, OptionChainState, request),

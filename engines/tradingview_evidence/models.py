@@ -15,6 +15,7 @@ from core.models.building_candle import BuildingCandle
 from core.models.candle import Candle
 from engines.camarilla.levels import CamarillaLevels
 from engines.cpr.levels import CPRLevels
+from engines.adr.models import ADRSnapshot
 from engines.market_context.models import MarketContextState
 from engines.option_chain.models import OptionChainState
 from engines.price_action.models import PriceActionState
@@ -121,7 +122,7 @@ class TradingViewEvidenceRequest:
     camarilla: CamarillaLevels | object | None
     cpr: CPRLevels | object | None
     vwap: VWAPLevels | object | None
-    adr: object | None
+    adr: ADRSnapshot | object | None
     price_action: PriceActionState | object | None
     market_context: MarketContextState | object | None
     option_chain: OptionChainState | object | None
@@ -198,7 +199,7 @@ class TradingViewEvidenceSnapshot:
     vwap_distance_points: float | None
     vwap_distance_percentage: float | None
     adr_status: EvidenceStatus
-    adr_observation: object | None
+    adr_observation: ADRSnapshot | object | None
     price_action_status: EvidenceStatus
     price_action_observation: PriceActionState | object | None
     market_context_status: EvidenceStatus
