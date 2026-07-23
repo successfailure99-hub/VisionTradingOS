@@ -270,8 +270,6 @@ class TradeJournalRuntimeIntegrationV1:
             lifecycle.execution_result,
             lifecycle.risk_decision,
             lifecycle.strategy_decision,
-            lifecycle.ai_reasoning,
-            lifecycle.market_context,
         )
         if any(value is None for value in required):
             return TradeJournalRoutingResult.REJECTED, "Lifecycle is missing required journal data."

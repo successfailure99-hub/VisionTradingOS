@@ -59,3 +59,24 @@ def test_trade_journal_v1_does_not_call_live_or_persistence_functions():
                 function = node.func
                 name = function.id if isinstance(function, ast.Name) else getattr(function, "attr", "")
                 assert name not in forbidden_calls, f"{path}:{node.lineno}"
+
+
+def test_trade_journal_v1_has_no_legacy_intelligence_contract_dependency():
+    forbidden_text = {
+        "MarketContextV2",
+        "market_context_v2",
+        "AIReasoningV2Input",
+        "StrategyDecisionV2Input",
+        "RiskManagementV2Input",
+        "engines.ai_reasoning_v2",
+        "engines.market_context_v2",
+        "engines.market_state",
+        "MultiTimeframeEvidenceSnapshot",
+        "MarketStateSnapshot",
+        "ChartExplanationSnapshot",
+        "Fusion",
+        "ChartExplanation",
+    }
+    for path in PACKAGE.glob("*.py"):
+        source = path.read_text()
+        assert not any(token in source for token in forbidden_text), path

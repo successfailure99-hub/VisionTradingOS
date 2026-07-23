@@ -12,10 +12,7 @@ from application.trade_lifecycle_runtime_integration_v1 import (
 )
 from application.trade_lifecycle_v1 import TradeLifecycleCoordinatorV1
 from core.enums.instrument import Instrument
-from engines.ai_reasoning_v2 import AIReasoningV2Engine
 from engines.position_management_v1 import PositionManagementV1Engine
-from engines.risk_management_v2 import RiskManagementV2Configuration, RiskManagementV2Engine
-from engines.strategy_decision_v2 import StrategyDecisionV2Engine
 from engines.trade_journal_v1 import TradeJournalV1Engine
 from tests.test_trade_journal_v1_integration import closed_lifecycle, open_lifecycle
 
@@ -23,12 +20,6 @@ from tests.test_trade_journal_v1_integration import closed_lifecycle, open_lifec
 def coordinator(instrument=Instrument.NIFTY):
     return TradeLifecycleCoordinatorV1(
         instrument=instrument,
-        ai_reasoning_engine=AIReasoningV2Engine(instrument=instrument),
-        strategy_engine=StrategyDecisionV2Engine(instrument=instrument),
-        risk_engine=RiskManagementV2Engine(
-            instrument=instrument,
-            configuration=RiskManagementV2Configuration(maximum_position_quantity=10),
-        ),
         execution_runtime=ExecutionRuntimeV1(instrument=instrument),
         position_engine=PositionManagementV1Engine(instrument=instrument),
     )

@@ -32,7 +32,7 @@ class TradeJournalEntryBuilder:
         risk = source.risk_snapshot
         strategy = source.strategy_snapshot
         reasoning = strategy.ai_reasoning
-        market = strategy.market_context
+        market_state = reasoning.market_state
         if position.closed_at is None:
             raise ValueError("closed position timestamp is required")
         if position.average_exit_price is None:
@@ -60,11 +60,12 @@ class TradeJournalEntryBuilder:
             outcome=_outcome(position.realized_pnl, self._configuration.flat_pnl_tolerance),
             exit_reason=position.exit_reason,
             close_category=_close_category(position.exit_reason),
-            market_direction=market.direction,
-            market_regime=market.regime,
-            context_confidence=market.confidence,
-            reasoning_direction=reasoning.direction,
-            reasoning_conviction=reasoning.conviction,
+            market_state=market_state.market_state.value,
+            market_phase=market_state.market_phase.value,
+            structural_confidence=market_state.confidence_level.value,
+            context_confidence=strategy.context_confidence,
+            reasoning_direction=reasoning.direction.value,
+            reasoning_conviction=reasoning.conviction.value,
             reasoning_confidence=reasoning.confidence,
             risk_decision=risk.decision,
             risk_approved_quantity=risk.approved_quantity,

@@ -10,11 +10,9 @@ from numbers import Real
 from application.execution_runtime_v1.enums import ExecutionSide
 from application.trade_lifecycle_v1.models import TradeLifecycleV1Snapshot
 from core.enums.instrument import Instrument
-from engines.ai_reasoning_v2.enums import AIConviction, AIReasoningDirection
-from engines.market_context_v2.enums import MarketDirection, MarketRegime
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS
 from engines.position_management_v1.enums import PositionExitReason
 from engines.risk_management_v2.enums import RiskDecision
+from engines.risk_management_v2.models import SUPPORTED_INSTRUMENTS
 from engines.strategy_decision_v2.enums import (
     StrategyDecisionQuality,
     StrategyDirection,
@@ -52,11 +50,12 @@ class TradeJournalEntry:
     outcome: TradeOutcome
     exit_reason: PositionExitReason
     close_category: TradeCloseCategory
-    market_direction: MarketDirection
-    market_regime: MarketRegime
+    market_state: str
+    market_phase: str
+    structural_confidence: str
     context_confidence: float
-    reasoning_direction: AIReasoningDirection
-    reasoning_conviction: AIConviction
+    reasoning_direction: str
+    reasoning_conviction: str
     reasoning_confidence: float
     risk_decision: RiskDecision
     risk_approved_quantity: int
@@ -74,11 +73,13 @@ class TradeJournalEntry:
         if self.closed_at < self.opened_at:
             raise ValueError("closed_at cannot precede opened_at")
         object.__setattr__(self, "duration_seconds", _non_negative_real(self.duration_seconds, "duration_seconds"))
-        for name in ("direction", "setup_family", "setup_quality", "outcome", "exit_reason", "close_category", "market_direction", "market_regime", "reasoning_direction", "reasoning_conviction", "risk_decision", "execution_side"):
+        for name in ("direction", "setup_family", "setup_quality", "outcome", "exit_reason", "close_category", "risk_decision", "execution_side"):
             value = getattr(self, name)
             enum_type = _ENTRY_ENUMS[name]
             if not isinstance(value, enum_type):
                 raise TypeError(f"{name} must be {enum_type.__name__}")
+        for name in ("market_state", "market_phase", "structural_confidence", "reasoning_direction", "reasoning_conviction"):
+            object.__setattr__(self, name, _non_empty(getattr(self, name), name))
         for name in ("entry_price", "average_exit_price", "invalidation_price", "execution_fill_price"):
             object.__setattr__(self, name, _positive_real(getattr(self, name), name))
         if self.objective_price is not None:
@@ -310,10 +311,6 @@ _ENTRY_ENUMS = {
     "outcome": TradeOutcome,
     "exit_reason": PositionExitReason,
     "close_category": TradeCloseCategory,
-    "market_direction": MarketDirection,
-    "market_regime": MarketRegime,
-    "reasoning_direction": AIReasoningDirection,
-    "reasoning_conviction": AIConviction,
     "risk_decision": RiskDecision,
     "execution_side": ExecutionSide,
 }
@@ -367,6 +364,7 @@ def _non_negative_int(value: int, name: str) -> None:
 def _non_empty(value: str, name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be non-empty string")
+    return value.strip()
 
 
 def _tuple_of(values, item_type, name: str):
