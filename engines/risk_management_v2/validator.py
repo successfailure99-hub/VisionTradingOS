@@ -97,8 +97,6 @@ def _capital(inputs):
 
 
 def _invalidation(inputs, configuration, risk_distance):
-    if configuration.require_invalidation_reference and inputs.strategy.invalidation_reference is None:
-        return _evaluation(RiskRuleType.INVALIDATION_REQUIRED, RiskRuleResult.FAILED, RiskSeverity.HIGH, "Strategy invalidation reference is required.")
     if risk_distance <= 0.0:
         return _evaluation(RiskRuleType.INVALIDATION_REQUIRED, RiskRuleResult.FAILED, RiskSeverity.HIGH, "Invalidation distance must be positive.", risk_distance, 0)
     return _evaluation(RiskRuleType.INVALIDATION_REQUIRED, RiskRuleResult.PASSED, RiskSeverity.NONE, "Structural invalidation is available.", risk_distance, None)

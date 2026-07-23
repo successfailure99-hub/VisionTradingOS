@@ -104,3 +104,21 @@ def test_architecture_text_rejects_broker_order_margin_and_unsafe_sizing_terms()
     assert "place_order" not in combined
     assert "direction =" not in (PACKAGE / "calculator.py").read_text().lower()
     assert "floor(" in (PACKAGE / "sizing.py").read_text()
+
+
+def test_risk_management_v2_consumes_strategy_decision_only_not_market_context_or_raw_indicators():
+    combined = "\n".join(path.read_text() for path in APPROVED_FILES)
+
+    assert "StrategyDecisionV2Snapshot" in combined
+    for term in (
+        "MarketContextV2",
+        "market_context_v2",
+        "AIReasoningV2Input",
+        "Camarilla",
+        "CPRLevels",
+        "VWAP",
+        "camarilla",
+        "cpr",
+        "vwap",
+    ):
+        assert term not in combined

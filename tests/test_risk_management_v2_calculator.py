@@ -14,16 +14,15 @@ from engines.risk_management_v2 import (
 )
 from engines.strategy_decision_v2 import StrategyDecisionV2Engine, StrategyDecisionV2Input
 from engines.strategy_decision_v2.enums import StrategyAction, StrategyDecisionQuality, StrategySetupStatus
-from tests.test_strategy_decision_v2_integration import build_stack, cam, cpr, replace_context, vwap
+from tests.test_strategy_decision_v2_integration import build_stack, replace_context
 
 
 def strategy(kind="bullish", *, minutes=0):
     reasoning = build_stack(kind)
     if minutes:
         reasoning = replace_context(reasoning, timestamp=reasoning.timestamp + timedelta(minutes=minutes))
-    price = 93.0 if kind == "bearish" else 108.0
     return StrategyDecisionV2Engine(instrument=Instrument.NIFTY).process(
-        StrategyDecisionV2Input(reasoning, price, cam(), cpr(), vwap())
+        StrategyDecisionV2Input(reasoning)
     )
 
 
