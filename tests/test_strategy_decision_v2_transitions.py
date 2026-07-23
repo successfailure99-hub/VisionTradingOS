@@ -2,11 +2,11 @@ from datetime import timedelta
 
 from core.enums.instrument import Instrument
 from engines.strategy_decision_v2 import StrategyDecisionChange, StrategyDecisionV2Engine, StrategyDecisionV2Input
-from tests.test_strategy_decision_v2_integration import build_stack, cam, cpr, replace_context, vwap
+from tests.test_strategy_decision_v2_integration import build_stack, replace_context
 
 
 def inp(reasoning):
-    return StrategyDecisionV2Input(reasoning, 108.0, cam(), cpr(), vwap())
+    return StrategyDecisionV2Input(reasoning)
 
 
 def test_chronological_direction_and_confidence_transitions():

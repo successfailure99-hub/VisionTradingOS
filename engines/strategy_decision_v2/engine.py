@@ -4,11 +4,10 @@ from core.base_engine import BaseEngine
 from core.enums.instrument import Instrument
 from core.event_bus import EventBus
 from core.events import STRATEGY_DECISION_V2_READY, STRATEGY_DECISION_V2_UPDATED
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS
 from engines.strategy_decision_v2.calculator import StrategyDecisionV2Calculator
 from engines.strategy_decision_v2.configuration import StrategyDecisionV2Configuration
 from engines.strategy_decision_v2.eligibility import StrategyEligibilityEvaluator
-from engines.strategy_decision_v2.models import StrategyDecisionV2Input, StrategyDecisionV2Snapshot
+from engines.strategy_decision_v2.models import SUPPORTED_INSTRUMENTS, StrategyDecisionV2Input, StrategyDecisionV2Snapshot
 from engines.strategy_decision_v2.selector import StrategySetupSelector
 
 

@@ -1,5 +1,4 @@
 from engines.ai_reasoning_v2.enums import AIReasoningDirection
-from engines.market_context_v2.enums import MarketConflictSeverity, MarketDirection
 from engines.strategy_decision_v2.configuration import StrategyDecisionV2Configuration
 from engines.strategy_decision_v2.eligibility import StrategyEligibilityEvaluator
 from engines.strategy_decision_v2.enums import (
@@ -42,7 +41,6 @@ class StrategyDecisionV2Calculator:
         previous: StrategyDecisionV2Snapshot | None = None,
     ) -> StrategyDecisionV2Snapshot:
         eligible, blocked_status, eligibility_notes = self._eligibility.evaluate(inputs, configuration)
-        context = inputs.reasoning.market_context
         direction = _direction(inputs.reasoning.direction)
         family = self._selector.select(inputs, configuration) if eligible else StrategySetupFamily.NO_SETUP
         references = _references(inputs)
@@ -58,7 +56,7 @@ class StrategyDecisionV2Calculator:
             status = StrategySetupStatus.READY_FOR_RISK_REVIEW
         else:
             status = blocked_status
-        action = _action(direction, status, context.direction)
+        action = _action(direction, status, inputs.reasoning.direction)
         conditions = _conditions(direction, family, primary, configuration)
         invalidations = _invalidations(direction, primary, configuration)
         objectives = _objectives(direction, references, configuration)
@@ -68,14 +66,14 @@ class StrategyDecisionV2Calculator:
             objectives = ()
             primary = None
         invalidation_ref = primary if direction in {StrategyDirection.LONG, StrategyDirection.SHORT} else None
-        quality = _quality(eligible, inputs, configuration, context.conflict_severity)
+        quality = _quality(eligible, inputs, configuration)
         risk = StrategyRiskHandoff(
             requires_risk_review=status is StrategySetupStatus.READY_FOR_RISK_REVIEW,
             direction=direction,
             setup_status=status,
             invalidation_reference=invalidation_ref,
             objective_count=len(objectives),
-            context_confidence=context.confidence,
+            context_confidence=_structural_confidence(inputs.reasoning),
             reasoning_confidence=inputs.reasoning.confidence,
             notes=("Risk Engine must make final approval.",),
         )
@@ -88,9 +86,8 @@ class StrategyDecisionV2Calculator:
             setup_status=status,
             quality=quality,
             change=StrategyDecisionChange.INITIAL,
-            market_context=context,
             ai_reasoning=inputs.reasoning,
-            current_price=inputs.current_price,
+            current_price=None,
             setup_name=family.value.replace("_", " "),
             thesis=_thesis(action, direction, family),
             entry_conditions=conditions,
@@ -98,13 +95,13 @@ class StrategyDecisionV2Calculator:
             objectives=objectives,
             primary_reference=primary,
             invalidation_reference=invalidation_ref,
-            context_confidence=context.confidence,
+            context_confidence=_structural_confidence(inputs.reasoning),
             reasoning_confidence=inputs.reasoning.confidence,
             eligible=eligible and status is StrategySetupStatus.READY_FOR_RISK_REVIEW,
             requires_retest=requires_retest,
             risk_handoff=risk,
             rationale=_rationale(inputs, family, primary, conditions, invalidations, objectives, eligibility_notes),
-            warnings=_warnings(family, status, context.conflict_severity),
+            warnings=_warnings(family, status, inputs.reasoning.multi_timeframe_evidence.evidence_conflict),
         )
         return _with_change(snapshot, _change(snapshot, previous))
 
@@ -119,8 +116,8 @@ def _direction(ai_direction) -> StrategyDirection:
     return StrategyDirection.NONE
 
 
-def _action(direction, status, context_direction) -> StrategyAction:
-    if context_direction is MarketDirection.INSUFFICIENT_DATA:
+def _action(direction, status, ai_direction) -> StrategyAction:
+    if ai_direction is AIReasoningDirection.INSUFFICIENT_DATA:
         return StrategyAction.INSUFFICIENT_DATA
     if status is StrategySetupStatus.BLOCKED_BY_CONFLICT:
         return StrategyAction.NO_TRADE
@@ -134,19 +131,7 @@ def _action(direction, status, context_direction) -> StrategyAction:
 
 
 def _references(inputs):
-    refs = [StrategyStructuralReference(StrategyReferenceType.CURRENT_PRICE, inputs.current_price, "Current price", "market_context")]
-    if inputs.camarilla:
-        for attr, ref in (("h3", StrategyReferenceType.CAMARILLA_H3), ("h4", StrategyReferenceType.CAMARILLA_H4), ("h5", StrategyReferenceType.CAMARILLA_H5), ("h6", StrategyReferenceType.CAMARILLA_H6), ("l3", StrategyReferenceType.CAMARILLA_L3), ("l4", StrategyReferenceType.CAMARILLA_L4), ("l5", StrategyReferenceType.CAMARILLA_L5), ("l6", StrategyReferenceType.CAMARILLA_L6)):
-            refs.append(StrategyStructuralReference(ref, getattr(inputs.camarilla, attr), ref.value.upper(), "camarilla"))
-    if inputs.cpr:
-        refs.extend([
-            StrategyStructuralReference(StrategyReferenceType.CPR_TC, inputs.cpr.tc, "CPR TC", "cpr"),
-            StrategyStructuralReference(StrategyReferenceType.CPR_PIVOT, inputs.cpr.pivot, "CPR Pivot", "cpr"),
-            StrategyStructuralReference(StrategyReferenceType.CPR_BC, inputs.cpr.bc, "CPR BC", "cpr"),
-        ])
-    if inputs.vwap:
-        refs.append(StrategyStructuralReference(StrategyReferenceType.VWAP, inputs.vwap.vwap, "VWAP", "vwap"))
-    return tuple(dict.fromkeys(refs))
+    return ()
 
 
 def _primary_reference(direction, family, refs):
@@ -192,21 +177,14 @@ def _invalidations(direction, reference, configuration):
 
 
 def _objectives(direction, refs, configuration):
-    if direction is StrategyDirection.LONG:
-        candidates = [r for r in refs if r.reference_type in {StrategyReferenceType.CAMARILLA_H5, StrategyReferenceType.CAMARILLA_H6}]
-        ordered = sorted(candidates, key=lambda r: r.price)
-    elif direction is StrategyDirection.SHORT:
-        candidates = [r for r in refs if r.reference_type in {StrategyReferenceType.CAMARILLA_L5, StrategyReferenceType.CAMARILLA_L6}]
-        ordered = sorted(candidates, key=lambda r: r.price, reverse=True)
-    else:
-        ordered = []
-    return tuple(StrategyObjective(i + 1, ref, f"{ref.label} is a structural objective.") for i, ref in enumerate(ordered[: configuration.maximum_objectives]))
+    return ()
 
 
-def _quality(eligible, inputs, configuration, conflict):
+def _quality(eligible, inputs, configuration):
+    conflict = inputs.reasoning.multi_timeframe_evidence.evidence_conflict.value
     if not eligible:
-        return StrategyDecisionQuality.UNAVAILABLE if conflict in {MarketConflictSeverity.HIGH, MarketConflictSeverity.CRITICAL} else StrategyDecisionQuality.LOW
-    if inputs.reasoning.confidence >= configuration.high_quality_confidence and inputs.reasoning.market_context.conflict_severity in {MarketConflictSeverity.NONE, MarketConflictSeverity.LOW}:
+        return StrategyDecisionQuality.UNAVAILABLE if conflict in {"major", "insufficient"} else StrategyDecisionQuality.LOW
+    if inputs.reasoning.confidence >= configuration.high_quality_confidence and conflict in {"none", "minor"}:
         return StrategyDecisionQuality.HIGH
     return StrategyDecisionQuality.MODERATE
 
@@ -238,9 +216,17 @@ def _warnings(family, status, conflict):
         warnings.append("Breakout retest has not yet been confirmed.")
     if family is StrategySetupFamily.REVERSAL_WATCH:
         warnings.append("Reversal-watch setups are observation-only.")
-    if conflict in {MarketConflictSeverity.HIGH, MarketConflictSeverity.CRITICAL}:
+    if conflict.value in {"major", "insufficient"}:
         warnings.append("Conflict has increased.")
     return tuple(warnings) or ("Risk Engine remains the final approval gate.",)
+
+
+def _structural_confidence(reasoning) -> float:
+    return {
+        "high_structure": 0.85,
+        "medium_structure": 0.65,
+        "low_structure": 0.35,
+    }.get(reasoning.market_state.confidence_level.value, 0.0)
 
 
 def _change(snapshot, previous):
