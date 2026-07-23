@@ -62,6 +62,11 @@ MULTI_TIMEFRAME_EVIDENCE_PARTIAL = "multi_timeframe_evidence_partial"
 MULTI_TIMEFRAME_EVIDENCE_INVALID = "multi_timeframe_evidence_invalid"
 MULTI_TIMEFRAME_EVIDENCE_FAILED = "multi_timeframe_evidence_failed"
 MULTI_TIMEFRAME_EVIDENCE_STATE_UPDATED = "multi_timeframe_evidence_state_updated"
+MARKET_STATE_UPDATED = "market_state_updated"
+MARKET_STATE_PARTIAL = "market_state_partial"
+MARKET_STATE_INVALID = "market_state_invalid"
+MARKET_STATE_FAILED = "market_state_failed"
+MARKET_STATE_STATE_UPDATED = "market_state_state_updated"
 
 # ==================================================
 # Market Context Events

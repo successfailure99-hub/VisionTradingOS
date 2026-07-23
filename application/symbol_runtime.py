@@ -19,6 +19,7 @@ from engines.cpr.cpr_engine import CPREngine
 from engines.cpr.levels import CPRLevels
 from engines.market_context.market_context_engine import MarketContextEngine
 from engines.market_context.models import MarketContextSnapshot, MarketContextState
+from engines.market_state.engine import MarketStateEngine
 from engines.moving_average_context.engine import MovingAverageContextEngine
 from engines.moving_average_context.models import MovingAverageContextProfile
 from engines.momentum_context.engine import MomentumContextEngine
@@ -241,6 +242,10 @@ class SymbolRuntime:
             instrument=instrument,
             expected_timeframes=self._timeframes,
         )
+        self.market_state_engine = MarketStateEngine(
+            event_bus,
+            instrument=instrument,
+        )
 
     @property
     def instrument(self) -> RuntimeInstrument:
@@ -264,6 +269,7 @@ class SymbolRuntime:
         for engine in self.tradingview_evidence_engines.values():
             engine.start()
         self.multi_timeframe_evidence_fusion_engine.start()
+        self.market_state_engine.start()
         self.execution_policy_engine.start()
         self.trade_authorization_engine.start()
         self.paper_execution_coordinator.start()
@@ -277,6 +283,7 @@ class SymbolRuntime:
         self.paper_execution_coordinator.stop()
         self.trade_authorization_engine.stop()
         self.execution_policy_engine.stop()
+        self.market_state_engine.stop()
         self.multi_timeframe_evidence_fusion_engine.stop()
         for engine in self.tradingview_evidence_engines.values():
             engine.stop()
@@ -801,6 +808,7 @@ class SymbolRuntime:
         for coordinator in self.tradingview_evidence_assembly_coordinators.values():
             coordinator.reset()
         self.multi_timeframe_evidence_fusion_engine.reset()
+        self.market_state_engine.reset()
         self.risk_engine.reset()
         self.execution_policy_engine.reset_session()
         self.trade_authorization_engine.reset()
@@ -880,6 +888,7 @@ class SymbolRuntime:
             momentum_context_diagnostics=self.momentum_context_engine.snapshot(),
             volume_context_diagnostics=self.volume_context_engine.snapshot(),
             multi_timeframe_evidence=self.multi_timeframe_evidence_fusion_engine.snapshot(),
+            market_state=self.market_state_engine.snapshot(),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
@@ -1002,7 +1011,8 @@ class SymbolRuntime:
         if not snapshots:
             return
         try:
-            self.multi_timeframe_evidence_fusion_engine.fuse(snapshots, timestamp=timestamp)
+            fusion = self.multi_timeframe_evidence_fusion_engine.fuse(snapshots, timestamp=timestamp)
+            self.market_state_engine.process(fusion, timestamp=timestamp)
         except Exception:
             return
 

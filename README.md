@@ -32,6 +32,10 @@ Volume Context Engine V1 calculates average volume and relative volume from clos
 
 Multi-Timeframe Evidence Fusion Engine V1 is the first deterministic intelligence layer. It is owned once per instrument runtime and consumes only immutable TradingView Evidence snapshots from configured timeframe lanes. It compares existing evidence agreement, conflict, dominance, and completeness, then publishes immutable fusion context without calculating indicators or producing trade decisions.
 
+## Market State
+
+Market State Engine V1 consumes only the immutable Multi-Timeframe Evidence Fusion snapshot for one instrument. It describes the current market environment, such as trending, ranging, transitioning, expanding, compressing, volatile, quiet, or balanced. It publishes structural context and evidence quality through the EventBus without calculating indicators, inferring trade intent, or calling strategy, risk, confidence, execution, or broker layers.
+
 ## Execution Modes
 
 - Safety mode: `ANALYSIS_ONLY` by default.

@@ -45,6 +45,7 @@ tests/ docs/
 -   Momentum Context Engine
 -   Volume Context Engine
 -   Multi-Timeframe Evidence Fusion Engine
+-   Market State Engine
 
 ## TradingView Evidence Assembly Coordinator V1
 
@@ -176,6 +177,40 @@ Fusion lifecycle:
 - Publish `MULTI_TIMEFRAME_EVIDENCE_INVALID` for malformed fusion input and
   `MULTI_TIMEFRAME_EVIDENCE_FAILED` only for unexpected engine failures.
 - Suppress duplicate publication when the observable fusion snapshot is
+  unchanged.
+
+## Market State Engine V1
+
+Market State is a deterministic intelligence engine, not an evidence engine,
+strategy engine, risk engine, confidence engine, or execution component. It is
+owned once per `SymbolRuntime` instrument and consumes only the latest immutable
+`MultiTimeframeEvidenceSnapshot`.
+
+Runtime ownership:
+
+- One `MarketStateEngine` per instrument runtime.
+- No market-data ownership, tick processing, historical downloads, indicator
+  calculations, trade decisions, confidence scoring, risk evaluation, or order
+  execution.
+- Price Action, CPR, Camarilla, VWAP, ADR, Moving Average Context, Momentum
+  Context, Volume Context, Option Chain, and Market Context remain upstream
+  evidence responsibilities and are never consumed directly by Market State.
+
+Event flow:
+
+Tick -> Market Data Engine -> Candle Engine -> closed Candle -> per-timeframe
+analysis engines -> TradingView Evidence Assembly Coordinator -> TradingView
+Evidence Mapping Engine -> Multi-Timeframe Evidence Fusion Engine -> Market
+State Engine.
+
+Market State lifecycle:
+
+- Publish `MARKET_STATE_UPDATED` when a complete fusion snapshot produces a new
+  observable market environment.
+- Publish `MARKET_STATE_PARTIAL` when fusion is missing, stale, or partial.
+- Publish `MARKET_STATE_INVALID` for malformed Market State input and
+  `MARKET_STATE_FAILED` only for unexpected engine failures.
+- Suppress duplicate publication when the observable Market State snapshot is
   unchanged.
 
 ## Current Milestone
