@@ -8,7 +8,6 @@ from math import isfinite
 from numbers import Real
 
 from core.enums.instrument import Instrument
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS
 from engines.risk_management_v2.enums import (
     RiskDecision,
     RiskDecisionChange,
@@ -19,6 +18,9 @@ from engines.risk_management_v2.enums import (
 )
 from engines.strategy_decision_v2.enums import StrategyDirection
 from engines.strategy_decision_v2.models import StrategyDecisionV2Snapshot
+
+
+SUPPORTED_INSTRUMENTS = {Instrument.NIFTY, Instrument.BANKNIFTY, Instrument.SENSEX}
 
 
 @dataclass(frozen=True, slots=True)

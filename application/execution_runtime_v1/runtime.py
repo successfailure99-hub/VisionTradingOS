@@ -32,8 +32,7 @@ from core.events import (
     EXECUTION_INTENT_CREATED,
     EXECUTION_RUNTIME_V1_UPDATED,
 )
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS
-from engines.risk_management_v2.models import RiskManagementV2Snapshot
+from engines.risk_management_v2.models import SUPPORTED_INSTRUMENTS, RiskManagementV2Snapshot
 
 
 class ExecutionRuntimeV1:

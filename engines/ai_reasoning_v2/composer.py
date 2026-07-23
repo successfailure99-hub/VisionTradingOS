@@ -2,12 +2,10 @@
 Deterministic AI Reasoning Engine V2 composer.
 """
 
+from datetime import datetime
+
 from engines.ai_reasoning_v2.configuration import AIReasoningV2Configuration
-from engines.ai_reasoning_v2.enums import (
-    AICautionSeverity,
-    AIReasoningEvidenceRole,
-    AIReasoningState,
-)
+from engines.ai_reasoning_v2.enums import AICautionSeverity, AIReasoningState
 from engines.ai_reasoning_v2.interpreter import AIReasoningV2Interpreter
 from engines.ai_reasoning_v2.models import (
     AIReasoningCaution,
@@ -15,15 +13,9 @@ from engines.ai_reasoning_v2.models import (
     AIReasoningV2Snapshot,
     AIWatchCondition,
 )
-from engines.market_context_v2.enums import (
-    EvidenceDirection,
-    MarketConflictSeverity,
-    MarketContextReadiness,
-    MarketDirection,
-    MarketEvidenceSource,
-    MarketRegime,
-    TradePosture,
-)
+
+
+_FORBIDDEN_WORDS = ("buy", "sell", "long", "short", "entry", "exit", "target", "stop", "position size")
 
 
 class AIReasoningV2Composer:
@@ -37,49 +29,54 @@ class AIReasoningV2Composer:
         inputs: AIReasoningV2Input,
         configuration: AIReasoningV2Configuration,
         interpreter: AIReasoningV2Interpreter,
+        timestamp: datetime | None = None,
     ) -> AIReasoningV2Snapshot:
-        context = inputs.context
-        direction = interpreter.direction(context)
-        conviction = interpreter.conviction(context, configuration)
-        state = interpreter.reasoning_state(context)
-        change = interpreter.change_type(context, inputs.previous_reasoning)
-        caution_severity = interpreter.caution_severity(context)
-        evidence = interpreter.interpret_evidence(context, configuration)
-        thesis = _primary_thesis(context)
-        supporting = _supporting_points(evidence, configuration.maximum_supporting_points)
-        conflicting = _conflicting_points(context, evidence, configuration.maximum_conflicting_points)
-        cautions = _cautions(context, caution_severity, configuration.maximum_cautions)
-        watch = _watch_conditions(context, configuration.maximum_watch_conditions)
-        headline = f"{context.instrument.value} market context is {direction.value.replace('_', ' ')}."
-        summary = _summary(context, conviction)
-        actionable = (
-            state is AIReasoningState.ACTIONABLE_CONTEXT
-            and context.trade_posture
-            in {TradePosture.LOOK_FOR_LONGS, TradePosture.LOOK_FOR_SHORTS}
-            and context.readiness is MarketContextReadiness.READY
-            and context.conflict_severity
-            not in {MarketConflictSeverity.HIGH, MarketConflictSeverity.CRITICAL}
-        )
-        rationale = (
-            thesis,
-            evidence[0].explanation,
-            evidence[1].explanation,
-            "Structural confirmation is interpreted from Camarilla, CPR and VWAP evidence.",
-            "Conflict interpretation is based only on Market Context V2 conflicts.",
-            f"Confidence interpretation is {conviction.value}.",
-            f"Posture interpretation is {context.trade_posture.value}.",
-            watch[0].condition if watch else "No additional watch condition is required.",
+        if not isinstance(inputs, AIReasoningV2Input):
+            raise TypeError("inputs must be AIReasoningV2Input")
+        if not isinstance(configuration, AIReasoningV2Configuration):
+            raise TypeError("configuration must be AIReasoningV2Configuration")
+        if not isinstance(interpreter, AIReasoningV2Interpreter):
+            raise TypeError("interpreter must be AIReasoningV2Interpreter")
+        output_timestamp = timestamp or inputs.chart_explanation.timestamp
+        direction = interpreter.direction(inputs)
+        conviction = interpreter.conviction(inputs, configuration)
+        state = interpreter.reasoning_state(inputs)
+        change = interpreter.change_type(inputs, inputs.previous_reasoning, configuration)
+        caution_severity = interpreter.caution_severity(inputs)
+        evidence = interpreter.interpret_evidence(inputs, configuration)
+        supporting = _supporting_points(inputs, evidence, configuration.maximum_supporting_points)
+        conflicting = _conflicting_points(inputs, configuration.maximum_conflicting_points)
+        cautions = _cautions(inputs, caution_severity, configuration.maximum_cautions)
+        watch = _watch_conditions(inputs, configuration.maximum_watch_conditions)
+        confidence = _confidence_from_conviction(conviction)
+        actionable = state is AIReasoningState.ACTIONABLE_CONTEXT
+        headline = _headline(inputs, direction)
+        summary = _summary(inputs, conviction)
+        thesis = _primary_thesis(inputs)
+        rationale = _clean_text(
+            (
+                thesis,
+                summary,
+                f"Fusion agreement is {inputs.multi_timeframe_evidence.evidence_agreement.value}.",
+                f"Market state is {inputs.market_state.market_state.value}.",
+                f"Setup classification is {inputs.setup_classification.primary_setup.value}.",
+                f"Chart explanation quality is {inputs.chart_explanation.explanation_quality.value}.",
+            )
         )
         previous = inputs.previous_reasoning
         return AIReasoningV2Snapshot(
-            instrument=context.instrument,
-            timestamp=context.timestamp,
+            trading_date=inputs.multi_timeframe_evidence.trading_date,
+            instrument=_instrument_for_snapshot(inputs.multi_timeframe_evidence.instrument),
+            timestamp=output_timestamp,
             direction=direction,
             conviction=conviction,
             reasoning_state=state,
             change=change,
             caution_severity=caution_severity,
-            market_context=context,
+            multi_timeframe_evidence=inputs.multi_timeframe_evidence,
+            market_state=inputs.market_state,
+            setup_classification=inputs.setup_classification,
+            chart_explanation=inputs.chart_explanation,
             headline=headline,
             summary=summary,
             primary_thesis=thesis,
@@ -88,96 +85,160 @@ class AIReasoningV2Composer:
             conflicting_points=conflicting,
             cautions=cautions,
             watch_conditions=watch,
-            confidence=context.confidence,
+            confidence=confidence,
             actionable_context=actionable,
             previous_direction=previous.direction if previous is not None else None,
             previous_confidence=previous.confidence if previous is not None else None,
-            rationale=tuple(dict.fromkeys(rationale)),
+            rationale=rationale,
+            source_fingerprint=_source_fingerprint(inputs, state),
         )
 
 
-def _primary_thesis(context):
-    pa = context.price_action_evidence
-    oc = context.option_chain_evidence
-    if any(conflict.primary_conflict for conflict in context.conflicts):
-        return "Price Action and Option Chain Analytics conflict."
-    if pa.direction is oc.direction and pa.direction in {EvidenceDirection.BULLISH, EvidenceDirection.BEARISH}:
-        return f"Price Action and Option Chain Analytics are aligned {pa.direction.value}."
-    if pa.direction is not EvidenceDirection.UNAVAILABLE and oc.direction is EvidenceDirection.UNAVAILABLE:
-        return f"Price Action is {pa.direction.value}, but Option Chain Analytics are unavailable."
-    if oc.direction is not EvidenceDirection.UNAVAILABLE and pa.direction is EvidenceDirection.UNAVAILABLE:
-        return f"Option Chain Analytics are {oc.direction.value}, but Price Action is unavailable."
-    return "Insufficient primary evidence is available."
+def _headline(inputs: AIReasoningV2Input, direction) -> str:
+    setup = inputs.setup_classification.primary_setup
+    if inputs.multi_timeframe_evidence.evidence_completeness.value != "complete":
+        return "Partial Deterministic Intelligence"
+    if setup.value == "no_quality_setup":
+        return "Low-Quality Market Explanation"
+    setup_text = setup.value.replace("_", " ").title()
+    if direction.value in {"bullish", "strongly_bullish"}:
+        return f"Bullish {setup_text}"
+    if direction.value in {"bearish", "strongly_bearish"}:
+        return f"Bearish {setup_text}"
+    if direction.value == "conflicted":
+        return f"Conflicted {setup_text}"
+    return setup_text
 
 
-def _summary(context, conviction):
-    if context.readiness is MarketContextReadiness.INSUFFICIENT:
-        return f"{context.instrument.value} does not yet have sufficient primary evidence for a reliable market interpretation."
-    if context.direction is MarketDirection.CONFLICTED:
-        return (
-            f"{context.instrument.value} has conflicting primary evidence. "
-            "Secondary confirmations do not establish a reliable direction. "
-            "New trades should be avoided until the conflict is resolved."
-        )
-    return (
-        f"{context.instrument.value} has a {context.direction.value.replace('_', ' ')} market context "
-        f"in a {context.regime.value.replace('_', ' ')} regime. "
-        f"Trade posture is {context.trade_posture.value.replace('_', ' ')}. "
-        f"Confidence is {conviction.value.replace('_', ' ')} and conflict is {context.conflict_severity.value}."
+def _summary(inputs: AIReasoningV2Input, conviction) -> str:
+    fusion = inputs.multi_timeframe_evidence
+    market_state = inputs.market_state
+    setup = inputs.setup_classification
+    explanation = inputs.chart_explanation
+    return _safe_sentence(
+        f"{explanation.headline} is explained by {fusion.evidence_agreement.value} "
+        f"multi-timeframe evidence, {market_state.market_state.value} market state, "
+        f"and {setup.primary_setup.value} setup classification. "
+        f"Structural conviction is {conviction.value}."
     )
 
 
-def _supporting_points(evidence, limit):
+def _primary_thesis(inputs: AIReasoningV2Input) -> str:
+    return _safe_sentence(
+        f"The deterministic intelligence layer describes {inputs.market_state.market_state.value} "
+        f"conditions with {inputs.setup_classification.setup_quality.value} setup quality."
+    )
+
+
+def _supporting_points(inputs: AIReasoningV2Input, evidence, limit: int) -> tuple[str, ...]:
     points = [
         item.explanation
         for item in evidence
-        if item.role in {
-            AIReasoningEvidenceRole.PRIMARY,
-            AIReasoningEvidenceRole.CONFIRMATION,
-        }
+        if item.role.value in {"primary", "confirmation"}
     ]
-    return tuple(dict.fromkeys(points))[:limit]
+    points.extend(inputs.chart_explanation.supporting_evidence)
+    return _clean_text(points)[:limit]
 
 
-def _conflicting_points(context, evidence, limit):
-    points = [conflict.rationale for conflict in context.conflicts]
-    points.extend(item.explanation for item in evidence if item.role is AIReasoningEvidenceRole.CONFLICT)
-    return tuple(dict.fromkeys(points))[:limit]
+def _conflicting_points(inputs: AIReasoningV2Input, limit: int) -> tuple[str, ...]:
+    points: list[str] = []
+    points.extend(inputs.chart_explanation.conflicting_evidence)
+    points.extend(inputs.setup_classification.conflicting_evidence)
+    if inputs.multi_timeframe_evidence.evidence_conflict.value != "none":
+        points.append(f"Fusion conflict is {inputs.multi_timeframe_evidence.evidence_conflict.value}.")
+    return _clean_text(points or ("No major deterministic conflict reported.",))[:limit]
 
 
-def _cautions(context, severity, limit):
-    cautions = []
-    if severity is not AICautionSeverity.NONE:
-        category = "primary_conflict" if any(conflict.primary_conflict for conflict in context.conflicts) else "context_caution"
-        cautions.append(AIReasoningCaution(severity, category, "Context contains cautionary conditions and should be interpreted conditionally."))
-    if context.readiness is MarketContextReadiness.PARTIAL:
-        cautions.append(AIReasoningCaution(AICautionSeverity.MODERATE, "partial_readiness", "Only one primary source is available."))
-    if context.readiness is MarketContextReadiness.INSUFFICIENT:
-        cautions.append(AIReasoningCaution(AICautionSeverity.HIGH, "insufficient_data", "Primary market evidence is not yet sufficient."))
-    for warning in context.warnings:
-        category = "extension" if "extended" in warning else "missing_source"
-        cautions.append(AIReasoningCaution(AICautionSeverity.LOW, category, warning))
+def _cautions(inputs: AIReasoningV2Input, severity: AICautionSeverity, limit: int) -> tuple[AIReasoningCaution, ...]:
+    if severity is AICautionSeverity.NONE:
+        return ()
+    cautions = [
+        AIReasoningCaution(
+            severity=severity,
+            category="deterministic_intelligence",
+            message="AI Reasoning V2 found cautionary conditions in deterministic intelligence.",
+        )
+    ]
+    for note in inputs.chart_explanation.risk_notes:
+        cautions.append(AIReasoningCaution(severity=severity, category="chart_explanation", message=note))
     return tuple(dict.fromkeys(cautions))[:limit]
 
 
-def _watch_conditions(context, limit):
-    items = []
-    if any(conflict.primary_conflict for conflict in context.conflicts):
-        items.append(AIWatchCondition(1, "Wait for Price Action and Option Chain evidence to align.", "Primary evidence is conflicting."))
-    if context.readiness is MarketContextReadiness.PARTIAL:
-        items.append(AIWatchCondition(2, "Wait for the missing primary source before treating the context as fully confirmed.", "Readiness is partial."))
-    if context.regime is MarketRegime.RANGE_BOUND:
-        items.append(AIWatchCondition(3, "Wait for a confirmed break from the current range.", "The market context is range bound."))
-    if context.regime is MarketRegime.BREAKOUT_ATTEMPT:
-        items.append(AIWatchCondition(4, "Watch whether bullish structure sustains beyond the breakout area.", "The context is a breakout attempt."))
-    if context.regime is MarketRegime.BREAKDOWN_ATTEMPT:
-        items.append(AIWatchCondition(4, "Watch whether bearish structure sustains beyond the breakdown area.", "The context is a breakdown attempt."))
-    if context.direction in {MarketDirection.BULLISH, MarketDirection.STRONGLY_BULLISH} and context.vwap_evidence.direction is EvidenceDirection.BEARISH:
-        items.append(AIWatchCondition(5, "Watch whether price reclaims and sustains above VWAP.", "VWAP conflicts with bullish context."))
-    if context.direction in {MarketDirection.BEARISH, MarketDirection.STRONGLY_BEARISH} and context.vwap_evidence.direction is EvidenceDirection.BULLISH:
-        items.append(AIWatchCondition(5, "Watch whether price moves back below VWAP.", "VWAP conflicts with bearish context."))
-    if any("Camarilla H5" in warning or "Camarilla L5" in warning for warning in context.warnings):
-        items.append(AIWatchCondition(6, "Monitor extension risk near the outer Camarilla levels.", "Camarilla warning indicates extension risk."))
-    if context.readiness is MarketContextReadiness.INSUFFICIENT:
-        items.append(AIWatchCondition(1, "Wait for Price Action or Option Chain Analytics to become available.", "Primary context is insufficient."))
-    return tuple(sorted(dict.fromkeys(items), key=lambda item: item.priority))[:limit]
+def _watch_conditions(inputs: AIReasoningV2Input, limit: int) -> tuple[AIWatchCondition, ...]:
+    items = [
+        AIWatchCondition(
+            priority=1,
+            condition="Monitor whether the deterministic intelligence remains internally consistent.",
+            reason=f"Fusion completeness is {inputs.multi_timeframe_evidence.evidence_completeness.value}.",
+        )
+    ]
+    if inputs.multi_timeframe_evidence.conflicting_timeframes:
+        items.append(
+            AIWatchCondition(
+                priority=2,
+                condition="Monitor the conflicting timeframe group.",
+                reason="Conflicting timeframes are reported by Fusion.",
+            )
+        )
+    if inputs.market_state.market_stability.value != "stable":
+        items.append(
+            AIWatchCondition(
+                priority=3,
+                condition="Monitor whether market state stabilizes.",
+                reason=f"Market stability is {inputs.market_state.market_stability.value}.",
+            )
+        )
+    return tuple(dict.fromkeys(items))[:limit]
+
+
+def _confidence_from_conviction(conviction) -> float:
+    return {
+        "very_high": 0.9,
+        "high": 0.75,
+        "moderate": 0.6,
+        "low": 0.4,
+        "very_low": 0.2,
+        "unavailable": 0.0,
+    }[conviction.value]
+
+
+def _source_fingerprint(inputs: AIReasoningV2Input, state: AIReasoningState) -> str:
+    return "|".join(
+        (
+            inputs.multi_timeframe_evidence.source_fingerprint,
+            inputs.market_state.source_fingerprint,
+            inputs.setup_classification.source_fingerprint,
+            inputs.chart_explanation.source_fingerprint,
+            state.value,
+        )
+    )
+
+
+def _instrument_for_snapshot(instrument):
+    from core.enums.instrument import Instrument
+
+    for item in Instrument:
+        if item.value == instrument.value:
+            return item
+    raise ValueError("unsupported deterministic intelligence instrument")
+
+
+def _clean_text(values) -> tuple[str, ...]:
+    cleaned = []
+    for value in values:
+        text = _safe_sentence(value)
+        if text not in cleaned:
+            cleaned.append(text)
+    return tuple(cleaned)
+
+
+def _safe_sentence(value: str) -> str:
+    text = str(value).strip().replace("_", " ")
+    lowered = text.lower()
+    for word in _FORBIDDEN_WORDS:
+        lowered = lowered.replace(word, "")
+    text = lowered.strip()
+    if not text:
+        text = "deterministic intelligence unavailable"
+    text = text[0].upper() + text[1:]
+    return text if text.endswith(".") else text + "."

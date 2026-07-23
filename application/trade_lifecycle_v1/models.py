@@ -16,61 +16,33 @@ from application.trade_lifecycle_v1.enums import (
     TradeLifecycleStatus,
 )
 from core.enums.instrument import Instrument
-from engines.ai_reasoning_v2.models import AIReasoningV2Snapshot
-from engines.camarilla.levels import CamarillaLevels
-from engines.cpr.levels import CPRLevels
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS, MarketContextV2Snapshot
 from engines.position_management_v1.models import PositionManagementResult, PositionManagementV1Snapshot
-from engines.risk_management_v2.models import AccountRiskState, InstrumentExposureState, RiskManagementV2Snapshot, SessionRiskState
+from engines.risk_management_v2.models import SUPPORTED_INSTRUMENTS, RiskManagementV2Snapshot
 from engines.strategy_decision_v2.models import StrategyDecisionV2Snapshot
-from engines.vwap.levels import VWAPLevels
 
 
 @dataclass(frozen=True, slots=True)
 class TradeLifecycleV1Request:
-    market_context: MarketContextV2Snapshot
-    current_price: float
-    account_risk_state: AccountRiskState
-    session_risk_state: SessionRiskState
-    instrument_exposure_state: InstrumentExposureState
-    proposed_entry_price: float
-    proposed_invalidation_price: float
-    proposed_objective_price: float | None
-    quantity_step: int = 1
-    contract_multiplier: float = 1.0
-    camarilla: CamarillaLevels | None = None
-    cpr: CPRLevels | None = None
-    vwap: VWAPLevels | None = None
+    strategy_decision: StrategyDecisionV2Snapshot
+    risk_decision: RiskManagementV2Snapshot
 
     def __post_init__(self) -> None:
-        if not isinstance(self.market_context, MarketContextV2Snapshot):
-            raise TypeError("market_context must be MarketContextV2Snapshot")
-        if self.market_context.instrument not in SUPPORTED_INSTRUMENTS:
+        if not isinstance(self.strategy_decision, StrategyDecisionV2Snapshot):
+            raise TypeError("strategy_decision must be StrategyDecisionV2Snapshot")
+        if not isinstance(self.risk_decision, RiskManagementV2Snapshot):
+            raise TypeError("risk_decision must be RiskManagementV2Snapshot")
+        if self.strategy_decision.instrument not in SUPPORTED_INSTRUMENTS:
             raise ValueError("instrument must be NIFTY, BANKNIFTY or SENSEX")
-        instrument = self.market_context.instrument
-        if not isinstance(self.account_risk_state, AccountRiskState):
-            raise TypeError("account_risk_state must be AccountRiskState")
-        if not isinstance(self.session_risk_state, SessionRiskState):
-            raise TypeError("session_risk_state must be SessionRiskState")
-        if not isinstance(self.instrument_exposure_state, InstrumentExposureState):
-            raise TypeError("instrument_exposure_state must be InstrumentExposureState")
-        if self.instrument_exposure_state.instrument is not instrument:
-            raise ValueError("instrument exposure must match market context")
-        for name in ("current_price", "proposed_entry_price", "proposed_invalidation_price"):
-            object.__setattr__(self, name, _positive_real(getattr(self, name), name))
-        if self.proposed_objective_price is not None:
-            object.__setattr__(self, "proposed_objective_price", _positive_real(self.proposed_objective_price, "proposed_objective_price"))
-        _positive_int(self.quantity_step, "quantity_step")
-        object.__setattr__(self, "contract_multiplier", _positive_real(self.contract_multiplier, "contract_multiplier"))
-        if self.camarilla is not None and not isinstance(self.camarilla, CamarillaLevels):
-            raise TypeError("camarilla must be CamarillaLevels or None")
-        if self.cpr is not None and not isinstance(self.cpr, CPRLevels):
-            raise TypeError("cpr must be CPRLevels or None")
-        if self.vwap is not None:
-            if not isinstance(self.vwap, VWAPLevels):
-                raise TypeError("vwap must be VWAPLevels or None")
-            if self.vwap.symbol is not instrument:
-                raise ValueError("vwap instrument mismatch")
+        if self.risk_decision.strategy is not self.strategy_decision:
+            raise ValueError("risk decision must reference the supplied strategy decision")
+        if self.risk_decision.instrument is not self.strategy_decision.instrument:
+            raise ValueError("risk decision instrument must match strategy decision")
+        if self.risk_decision.timestamp != self.strategy_decision.timestamp:
+            raise ValueError("risk decision timestamp must match strategy decision")
+
+    @property
+    def instrument(self) -> Instrument:
+        return self.strategy_decision.instrument
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,8 +72,6 @@ class TradeLifecycleV1Snapshot:
     outcome: TradeLifecycleOutcome
     change: TradeLifecycleChange
     block_source: TradeLifecycleBlockSource
-    market_context: MarketContextV2Snapshot | None
-    ai_reasoning: AIReasoningV2Snapshot | None
     strategy_decision: StrategyDecisionV2Snapshot | None
     risk_decision: RiskManagementV2Snapshot | None
     execution_result: ExecutionResult | None
@@ -136,10 +106,13 @@ class TradeLifecycleV1Snapshot:
         ):
             if not isinstance(getattr(self, name), enum_type):
                 raise TypeError(f"{name} must be {enum_type.__name__}")
-        for name in ("market_context", "ai_reasoning", "strategy_decision", "risk_decision"):
+        for name in ("strategy_decision", "risk_decision"):
             value = getattr(self, name)
             if value is not None and value.instrument is not self.instrument:
                 raise ValueError(f"{name} instrument mismatch")
+        if self.risk_decision is not None and self.strategy_decision is not None:
+            if self.risk_decision.strategy is not self.strategy_decision:
+                raise ValueError("risk decision must reference strategy decision")
         if self.execution_result is not None and not isinstance(self.execution_result, ExecutionResult):
             raise TypeError("execution_result must be ExecutionResult or None")
         if self.position_result is not None and not isinstance(self.position_result, PositionManagementResult):

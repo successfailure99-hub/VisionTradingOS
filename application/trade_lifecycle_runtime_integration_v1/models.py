@@ -14,8 +14,8 @@ from application.trade_lifecycle_runtime_integration_v1.enums import (
 from application.trade_lifecycle_v1.models import TradeLifecycleV1Request, TradeLifecycleV1Snapshot
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.enums.instrument import Instrument
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS
 from engines.position_management_v1.models import PositionPriceUpdate
+from engines.risk_management_v2.models import SUPPORTED_INSTRUMENTS
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +28,7 @@ class TradeLifecycleRoutingRequest:
             raise ValueError("instrument must be NIFTY, BANKNIFTY or SENSEX")
         if not isinstance(self.lifecycle_request, TradeLifecycleV1Request):
             raise TypeError("lifecycle_request must be TradeLifecycleV1Request")
-        if self.lifecycle_request.market_context.instrument is not self.instrument:
+        if self.lifecycle_request.instrument is not self.instrument:
             raise ValueError("routing instrument must match lifecycle request")
 
 

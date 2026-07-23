@@ -52,3 +52,10 @@ def test_v1_and_upstream_v2_packages_remain_separate():
     assert (ROOT / "engines" / "ai_reasoning_v2").exists()
     assert (ROOT / "engines" / "market_context_v2").exists()
     assert PACKAGE.exists()
+
+
+def test_strategy_decision_v2_consumes_ai_reasoning_v2_only_not_market_context_v2():
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in PACKAGE.glob("*.py"))
+    assert "market_context_v2" not in combined
+    assert "MarketContextV2Snapshot" not in combined
+    assert "AIReasoningV2Snapshot" in combined

@@ -84,5 +84,29 @@ def test_architecture_text_has_no_broker_network_persistence_or_duplicate_calcul
     for term in ("api_key", "access_token", "kite", "websocket", "database", "margin"):
         assert term not in combined
     assert "process(" in combined
-    assert "riskmanagementv2input" in combined
+    assert "riskmanagementv2input" not in combined
     assert "positionpriceupdate" in combined
+
+
+def test_trade_lifecycle_consumes_strategy_and_risk_only_not_market_context_or_ai():
+    combined = "\n".join(path.read_text() for path in APPROVED)
+
+    assert "StrategyDecisionV2Snapshot" in combined
+    assert "RiskManagementV2Snapshot" in combined
+    for term in (
+        "MarketContextV2",
+        "market_context_v2",
+        "AIReasoningV2Engine",
+        "AIReasoningV2Input",
+        "process(request.market_context",
+        "Camarilla",
+        "CPRLevels",
+        "VWAP",
+        "camarilla",
+        "cpr",
+        "vwap",
+        "Fusion",
+        "MarketState",
+        "ChartExplanation",
+    ):
+        assert term not in combined

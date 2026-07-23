@@ -22,3 +22,24 @@ def test_integration_does_not_call_builder_registry_or_analytics_directly():
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             assert node.func.attr not in forbidden_attrs, node.func.attr
+
+
+def test_trade_journal_runtime_integration_has_no_legacy_intelligence_contract_dependency():
+    forbidden_text = {
+        "MarketContextV2",
+        "market_context_v2",
+        "AIReasoningV2Input",
+        "StrategyDecisionV2Input",
+        "RiskManagementV2Input",
+        "engines.ai_reasoning_v2",
+        "engines.market_context_v2",
+        "engines.market_state",
+        "MultiTimeframeEvidenceSnapshot",
+        "MarketStateSnapshot",
+        "ChartExplanationSnapshot",
+        "Fusion",
+        "ChartExplanation",
+    }
+    for path in PACKAGE.glob("*.py"):
+        source = path.read_text()
+        assert not any(token in source for token in forbidden_text), path

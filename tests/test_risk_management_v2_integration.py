@@ -2,25 +2,15 @@ from application.bootstrap import ApplicationBootstrap
 from application.enums import ExecutionSafetyMode
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.enums.instrument import Instrument
-from engines.ai_reasoning_v2 import AIReasoningV2Engine
-from engines.market_context_v2 import MarketContextV2Engine
 from engines.risk_management_v2 import RiskDecision, RiskManagementV2Engine, RiskStatus
 from engines.strategy_decision_v2 import StrategyDecisionV2Engine, StrategyDecisionV2Input
-from tests.test_market_context_v2_integration import input_bundle
 from tests.test_risk_management_v2_calculator import account, config, exposure, risk_input
-from tests.test_strategy_decision_v2_integration import cam, cpr, vwap
-from engines.option_chain_analytics.enums import OptionAnalyticsBias
-from engines.price_action.enums import Trend
+from tests.test_strategy_decision_v2_integration import build_stack
 
 
 def stack(kind="bullish"):
-    trend = Trend.BEARISH if kind == "bearish" else Trend.BULLISH
-    bias = OptionAnalyticsBias.BEARISH if kind == "bearish" else OptionAnalyticsBias.BULLISH
-    price = 93.0 if kind == "bearish" else 108.0
-    context = MarketContextV2Engine(instrument=Instrument.NIFTY).process(input_bundle(trend, bias, price))
-    reasoning = AIReasoningV2Engine(instrument=Instrument.NIFTY).process(context)
     return StrategyDecisionV2Engine(instrument=Instrument.NIFTY).process(
-        StrategyDecisionV2Input(reasoning, price, cam(), cpr(), vwap())
+        StrategyDecisionV2Input(build_stack(kind))
     )
 
 

@@ -9,7 +9,7 @@ from numbers import Real
 from application.enums import ExecutionSafetyMode
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.enums.instrument import Instrument
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS
+from engines.risk_management_v2.models import SUPPORTED_INSTRUMENTS
 
 
 @dataclass(frozen=True, slots=True)

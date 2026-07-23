@@ -10,6 +10,7 @@ from core.models.daily_ohlc import DailyOHLC
 from core.models.tick import Tick
 from engines.adr.engine import ADREngine
 from engines.ai_reasoning.ai_reasoning_engine import AIReasoningEngine
+from engines.ai_reasoning_v2.engine import AIReasoningV2Engine
 from engines.ai_confidence_calibration.engine import AIConfidenceCalibrationEngine
 from engines.ai_confidence_calibration.models import ConfidenceCalibrationRequest
 from engines.camarilla.camarilla_engine import CamarillaEngine
@@ -255,6 +256,10 @@ class SymbolRuntime:
         self.chart_explanation_engine = ChartExplanationEngine(
             event_bus,
             instrument=instrument,
+        )
+        self.ai_reasoning_v2_engine = AIReasoningV2Engine(
+            instrument=self._core_instrument,
+            event_bus=event_bus,
         )
 
     @property
@@ -825,6 +830,7 @@ class SymbolRuntime:
         self.market_state_engine.reset()
         self.setup_classification_engine.reset()
         self.chart_explanation_engine.reset()
+        self.ai_reasoning_v2_engine.reset()
         self.risk_engine.reset()
         self.execution_policy_engine.reset_session()
         self.trade_authorization_engine.reset()
@@ -1032,7 +1038,8 @@ class SymbolRuntime:
             fusion = self.multi_timeframe_evidence_fusion_engine.fuse(snapshots, timestamp=timestamp)
             market_state = self.market_state_engine.process(fusion, timestamp=timestamp)
             setup = self.setup_classification_engine.process(fusion, market_state, timestamp=timestamp)
-            self.chart_explanation_engine.process(fusion, market_state, setup, timestamp=timestamp)
+            explanation = self.chart_explanation_engine.process(fusion, market_state, setup, timestamp=timestamp)
+            self.ai_reasoning_v2_engine.process(fusion, market_state, setup, explanation, timestamp=timestamp)
         except Exception:
             return
 

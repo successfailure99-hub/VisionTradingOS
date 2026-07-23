@@ -8,10 +8,9 @@ from core.base_engine import BaseEngine
 from core.enums.instrument import Instrument
 from core.event_bus import EventBus
 from core.events import RISK_MANAGEMENT_V2_READY, RISK_MANAGEMENT_V2_UPDATED
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS
 from engines.risk_management_v2.calculator import RiskManagementV2Calculator
 from engines.risk_management_v2.configuration import RiskManagementV2Configuration
-from engines.risk_management_v2.models import RiskManagementV2Input, RiskManagementV2Snapshot
+from engines.risk_management_v2.models import SUPPORTED_INSTRUMENTS, RiskManagementV2Input, RiskManagementV2Snapshot
 from engines.risk_management_v2.sizing import PositionSizeCalculator
 from engines.risk_management_v2.validator import RiskRuleValidator
 

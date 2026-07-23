@@ -6,16 +6,25 @@ from application.enums import ExecutionSafetyMode
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.enums.instrument import Instrument
 from engines.ai_reasoning_v2 import AIReasoningV2Engine
-from engines.ai_reasoning_v2.enums import AIReasoningDirection, AIReasoningState
+from engines.ai_reasoning_v2.enums import AIReasoningState
 from engines.camarilla.levels import CamarillaLevels
 from engines.cpr.levels import CPRLevels
-from engines.market_context_v2 import MarketContextV2Engine
-from engines.market_context_v2.enums import MarketContextReadiness, MarketDirection, MarketRegime, TradePosture
-from engines.option_chain_analytics.enums import OptionAnalyticsBias
-from engines.price_action.enums import Trend
 from engines.strategy_decision_v2 import StrategyAction, StrategyDecisionV2Engine, StrategyDecisionV2Input, StrategySetupStatus
 from engines.vwap.levels import VWAPLevels
-from tests.test_market_context_v2_integration import NOW, input_bundle
+from tests.test_ai_reasoning_v2_models import (
+    NOW,
+    EvidenceCompleteness,
+    EvidenceConflict,
+    ExpertSetup,
+    ExplanationQuality,
+    FusionDirection,
+    MarketEvidenceQuality,
+    SetupQuality,
+    explanation,
+    fusion,
+    market_state,
+    setup,
+)
 
 
 def cam():
@@ -30,39 +39,68 @@ def vwap(instrument=Instrument.NIFTY):
     return VWAPLevels(instrument, date(2026, 7, 14), NOW, 100.0, 1000, 100000.0)
 
 
-def build_stack(kind="bullish"):
+def build_stack(kind="bullish", *, timestamp=NOW):
+    direction = FusionDirection.BULLISH
+    conflict = EvidenceConflict.NONE
+    completeness = EvidenceCompleteness.COMPLETE
+    setup_kind = ExpertSetup.TREND_CONTINUATION
+    setup_quality = SetupQuality.HIGH
+    evidence_quality = MarketEvidenceQuality.HIGH
+    explanation_quality = ExplanationQuality.HIGH
+
     if kind == "bearish":
-        context = MarketContextV2Engine(instrument=Instrument.NIFTY).process(input_bundle(Trend.BEARISH, OptionAnalyticsBias.BEARISH, 93.0))
+        direction = FusionDirection.BEARISH
     elif kind == "conflict":
-        context = MarketContextV2Engine(instrument=Instrument.NIFTY).process(input_bundle(Trend.BULLISH, OptionAnalyticsBias.BEARISH, 108.0))
+        direction = FusionDirection.MIXED
+        conflict = EvidenceConflict.MAJOR
     elif kind == "insufficient":
-        context = MarketContextV2Engine(instrument=Instrument.NIFTY).process(input_bundle(Trend.BULLISH, OptionAnalyticsBias.BULLISH, 108.0))
-        context = type(context)(**{**{field: getattr(context, field) for field in context.__dataclass_fields__}, "direction": MarketDirection.INSUFFICIENT_DATA, "readiness": MarketContextReadiness.INSUFFICIENT, "trade_posture": TradePosture.INSUFFICIENT_DATA, "confidence": 0.0, "primary_sources_available": 0, "bullish_score": 0, "bearish_score": 0, "net_score": 0})
+        direction = FusionDirection.UNKNOWN
+        completeness = EvidenceCompleteness.INSUFFICIENT
+        evidence_quality = MarketEvidenceQuality.INSUFFICIENT
     elif kind == "low_confidence":
-        context = MarketContextV2Engine(instrument=Instrument.NIFTY).process(input_bundle(Trend.BULLISH, OptionAnalyticsBias.BULLISH, 108.0))
-        context = type(context)(**{**{field: getattr(context, field) for field in context.__dataclass_fields__}, "confidence": 0.2})
-    else:
-        context = MarketContextV2Engine(instrument=Instrument.NIFTY).process(input_bundle(Trend.BULLISH, OptionAnalyticsBias.BULLISH, 108.0))
-    return AIReasoningV2Engine(instrument=Instrument.NIFTY).process(context)
+        setup_quality = SetupQuality.MEDIUM
+        explanation_quality = ExplanationQuality.MEDIUM
+
+    reasoning = AIReasoningV2Engine(instrument=Instrument.NIFTY).process(
+        fusion(timestamp=timestamp, direction=direction, evidence_conflict=conflict, completeness=completeness),
+        market_state(timestamp=timestamp, evidence_quality=evidence_quality),
+        setup(timestamp=timestamp, primary_setup=setup_kind, quality=setup_quality),
+        explanation(timestamp=timestamp, quality=explanation_quality),
+        timestamp=timestamp,
+    )
+    if kind == "low_confidence":
+        reasoning = replace(reasoning, confidence=0.2)
+    return reasoning
 
 
 def replace_context(reasoning, **changes):
-    context = replace(reasoning.market_context, **changes)
-    direction = AIReasoningDirection(context.direction.value)
-    state = reasoning.reasoning_state
-    if context.trade_posture is TradePosture.WAIT_FOR_CONFIRMATION:
-        state = AIReasoningState.WAITING_CONFIRMATION
+    timestamp = changes.pop("timestamp", reasoning.timestamp)
+    confidence = changes.pop("confidence", reasoning.confidence)
+    state = changes.pop("reasoning_state", reasoning.reasoning_state)
+    primary_setup = changes.pop("primary_setup", reasoning.setup_classification.primary_setup)
+    setup_quality = changes.pop("setup_quality", reasoning.setup_classification.setup_quality)
+    direction = changes.pop("direction", reasoning.multi_timeframe_evidence.summaries[0].direction)
+    conflict = changes.pop("evidence_conflict", reasoning.multi_timeframe_evidence.evidence_conflict)
+    completeness = changes.pop("evidence_completeness", reasoning.multi_timeframe_evidence.evidence_completeness)
+    if changes:
+        raise TypeError(f"unsupported deterministic intelligence changes: {tuple(sorted(changes))}")
+
+    updated = AIReasoningV2Engine(instrument=Instrument.NIFTY).process(
+        fusion(timestamp=timestamp, direction=direction, evidence_conflict=conflict, completeness=completeness),
+        market_state(timestamp=timestamp),
+        setup(timestamp=timestamp, primary_setup=primary_setup, quality=setup_quality),
+        explanation(timestamp=timestamp),
+        timestamp=timestamp,
+    )
     return replace(
-        reasoning,
-        timestamp=context.timestamp,
-        market_context=context,
-        direction=direction,
+        updated,
+        confidence=confidence,
         reasoning_state=state,
-        confidence=context.confidence,
+        actionable_context=state is AIReasoningState.ACTIONABLE_CONTEXT,
     )
 
 
-def test_replace_context_keeps_reasoning_and_context_timestamps_aligned():
+def test_replace_context_keeps_reasoning_and_intelligence_timestamps_aligned():
     reasoning = build_stack("bullish")
     new_timestamp = reasoning.timestamp.replace(minute=reasoning.timestamp.minute + 1)
 
@@ -72,22 +110,23 @@ def test_replace_context_keeps_reasoning_and_context_timestamps_aligned():
     )
 
     assert updated.timestamp == new_timestamp
-    assert updated.market_context.timestamp == new_timestamp
-    assert updated.timestamp == updated.market_context.timestamp
-    assert updated.instrument is updated.market_context.instrument
-    assert updated.confidence == updated.market_context.confidence
+    assert updated.multi_timeframe_evidence.timestamp == new_timestamp
+    assert updated.market_state.timestamp == new_timestamp
+    assert updated.setup_classification.timestamp == new_timestamp
+    assert updated.chart_explanation.timestamp == new_timestamp
+    assert updated.instrument is Instrument.NIFTY
 
 
 def test_no_network_strategy_decision_flow_and_application_defaults():
     engine = StrategyDecisionV2Engine(instrument=Instrument.NIFTY)
-    bullish = engine.process(StrategyDecisionV2Input(build_stack("bullish"), 108.0, cam(), cpr(), vwap()))
+    bullish = engine.process(StrategyDecisionV2Input(build_stack("bullish")))
     assert bullish.action is StrategyAction.CONSIDER_LONG
     assert bullish.setup_status is StrategySetupStatus.READY_FOR_RISK_REVIEW
     assert bullish.risk_handoff.requires_risk_review is True
-    assert bullish.market_context is bullish.ai_reasoning.market_context
-    bearish = engine.process(StrategyDecisionV2Input(build_stack("bearish"), 93.0, cam(), cpr(), vwap()))
+    assert bullish.ai_reasoning.setup_classification.primary_setup is ExpertSetup.TREND_CONTINUATION
+    bearish = engine.process(StrategyDecisionV2Input(build_stack("bearish")))
     assert bearish.action is StrategyAction.CONSIDER_SHORT
-    conflict = StrategyDecisionV2Engine(instrument=Instrument.NIFTY).process(StrategyDecisionV2Input(build_stack("conflict"), 108.0, cam(), cpr(), vwap()))
+    conflict = StrategyDecisionV2Engine(instrument=Instrument.NIFTY).process(StrategyDecisionV2Input(build_stack("conflict")))
     assert conflict.action is StrategyAction.NO_TRADE
     lifecycle = ApplicationBootstrap().create_application()
     snapshot = lifecycle.snapshot().orchestrator_snapshot

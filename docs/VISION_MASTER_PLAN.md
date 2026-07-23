@@ -286,6 +286,40 @@ Chart Explanation lifecycle:
 - Suppress duplicate publication when the observable explanation snapshot is
   unchanged.
 
+## AI Reasoning V2 Migration
+
+AI Reasoning V2 is the downstream consumer of deterministic market
+intelligence. It is no longer based on `MarketContextV2Snapshot` and does not
+consume raw indicator engines.
+
+Runtime inputs:
+
+- `MultiTimeframeEvidenceSnapshot`
+- `MarketStateSnapshot`
+- `ExpertSetupClassificationSnapshot`
+- `ChartExplanationSnapshot`
+- optional previous `AIReasoningV2Snapshot`
+
+Migrated downstream chain:
+
+Tick -> Evidence Engines -> TradingView Evidence Mapping Engine ->
+Multi-Timeframe Evidence Fusion Engine -> Market State Engine -> Expert Setup
+Classification Engine -> Chart Explanation Engine -> AI Reasoning V2 ->
+StrategyDecisionV2 -> RiskManagementV2 -> TradeLifecycleV1 -> TradeJournalV1.
+
+Migration contract:
+
+- All upstream AI inputs must be immutable deterministic intelligence snapshots.
+- All upstream AI inputs must share the same instrument, trading date, and
+  timezone-aware timestamp.
+- AI Reasoning V2 snapshots store deterministic upstream intelligence references
+  and source fingerprints instead of legacy Market Context V2 state.
+- StrategyDecisionV2 consumes only the migrated AI Reasoning V2 snapshot.
+- RiskManagementV2 consumes only the migrated strategy decision snapshot.
+- TradeLifecycleV1 consumes only finalized strategy and risk snapshots.
+- TradeJournalV1 records lifecycle outcomes and does not participate in
+  reasoning, strategy, risk, or lifecycle state management.
+
 ## Current Milestone
 
 Milestone 7: Candle Engine V1

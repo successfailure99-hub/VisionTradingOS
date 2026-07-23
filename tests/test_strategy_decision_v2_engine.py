@@ -6,11 +6,11 @@ from core.enums.instrument import Instrument
 from core.event_bus import EventBus
 from core.events import STRATEGY_DECISION_V2_READY, STRATEGY_DECISION_V2_UPDATED
 from engines.strategy_decision_v2 import StrategyDecisionV2Configuration, StrategyDecisionV2Engine, StrategyDecisionV2Input
-from tests.test_strategy_decision_v2_integration import build_stack, cam, cpr, replace_context, vwap
+from tests.test_strategy_decision_v2_integration import build_stack, replace_context
 
 
 def input_for(reasoning):
-    return StrategyDecisionV2Input(reasoning, 108.0, cam(), cpr(), vwap())
+    return StrategyDecisionV2Input(reasoning)
 
 
 def test_constructor_first_process_update_duplicate_and_events():

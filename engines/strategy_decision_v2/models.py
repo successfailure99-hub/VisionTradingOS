@@ -9,9 +9,6 @@ from numbers import Real
 
 from core.enums.instrument import Instrument
 from engines.ai_reasoning_v2.models import AIReasoningV2Snapshot
-from engines.camarilla.levels import CamarillaLevels
-from engines.cpr.levels import CPRLevels
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS, MarketContextV2Snapshot
 from engines.strategy_decision_v2.enums import (
     StrategyAction,
     StrategyDecisionChange,
@@ -23,7 +20,9 @@ from engines.strategy_decision_v2.enums import (
     StrategySetupStatus,
     StrategyTriggerType,
 )
-from engines.vwap.levels import VWAPLevels
+
+
+SUPPORTED_INSTRUMENTS = {Instrument.NIFTY, Instrument.BANKNIFTY, Instrument.SENSEX}
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,24 +121,10 @@ class StrategyRiskHandoff:
 @dataclass(frozen=True, slots=True)
 class StrategyDecisionV2Input:
     reasoning: AIReasoningV2Snapshot
-    current_price: float
-    camarilla: CamarillaLevels | None = None
-    cpr: CPRLevels | None = None
-    vwap: VWAPLevels | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.reasoning, AIReasoningV2Snapshot):
             raise TypeError("reasoning must be AIReasoningV2Snapshot")
-        object.__setattr__(self, "current_price", _positive(self.current_price, "current_price"))
-        if self.camarilla is not None and not isinstance(self.camarilla, CamarillaLevels):
-            raise TypeError("camarilla must be CamarillaLevels or None")
-        if self.cpr is not None and not isinstance(self.cpr, CPRLevels):
-            raise TypeError("cpr must be CPRLevels or None")
-        if self.vwap is not None:
-            if not isinstance(self.vwap, VWAPLevels):
-                raise TypeError("vwap must be VWAPLevels or None")
-            if self.vwap.symbol is not self.reasoning.instrument:
-                raise ValueError("vwap instrument mismatch")
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,9 +137,8 @@ class StrategyDecisionV2Snapshot:
     setup_status: StrategySetupStatus
     quality: StrategyDecisionQuality
     change: StrategyDecisionChange
-    market_context: MarketContextV2Snapshot
     ai_reasoning: AIReasoningV2Snapshot
-    current_price: float
+    current_price: float | None
     setup_name: str
     thesis: str
     entry_conditions: tuple[StrategyEntryCondition, ...]
@@ -184,11 +168,12 @@ class StrategyDecisionV2Snapshot:
         ):
             if not isinstance(getattr(self, name), enum_type):
                 raise TypeError(f"{name} must be {enum_type.__name__}")
-        if self.market_context.instrument is not self.instrument or self.ai_reasoning.instrument is not self.instrument:
-            raise ValueError("context, reasoning and decision instruments must match")
-        if self.market_context.timestamp != self.timestamp or self.ai_reasoning.timestamp != self.timestamp:
-            raise ValueError("context and reasoning timestamps must match decision timestamp")
-        object.__setattr__(self, "current_price", _positive(self.current_price, "current_price"))
+        if self.ai_reasoning.instrument is not self.instrument:
+            raise ValueError("reasoning and decision instruments must match")
+        if self.ai_reasoning.timestamp != self.timestamp:
+            raise ValueError("reasoning timestamp must match decision timestamp")
+        if self.current_price is not None:
+            object.__setattr__(self, "current_price", _positive(self.current_price, "current_price"))
         _non_empty(self.setup_name, "setup_name")
         _non_empty(self.thesis, "thesis")
         object.__setattr__(self, "entry_conditions", _tuple_of(self.entry_conditions, StrategyEntryCondition, "entry_conditions"))
