@@ -19,7 +19,7 @@ from engines.expert_setup_classification.enums import (
 from engines.expert_setup_classification.models import ExpertSetupClassificationSnapshot
 from engines.market_state.enums import MarketEvidenceQuality, MarketState, VolatilityState
 from engines.market_state.models import MarketStateSnapshot
-from engines.multi_timeframe_evidence_fusion.enums import EvidenceCompleteness, EvidenceConflict
+from engines.multi_timeframe_evidence_fusion.enums import EvidenceCompleteness, EvidenceConflict, FusionDirection
 from engines.multi_timeframe_evidence_fusion.models import MultiTimeframeEvidenceSnapshot
 
 from .enums import ChartExplanationLifecycle, ExplanationQuality
@@ -215,7 +215,7 @@ class ChartExplanationEngine(BaseEngine):
         partial: bool,
     ) -> ChartExplanationSnapshot:
         quality = _quality(fusion, market_state, setup, partial)
-        headline = _headline(setup, market_state, partial)
+        headline = _headline(fusion, setup, market_state, partial)
         summary = _market_summary(fusion, market_state, setup, partial)
         setup_text = _setup_explanation(setup, market_state, partial)
         supporting = _supporting_evidence(fusion, market_state, setup, partial)
@@ -247,6 +247,7 @@ class ChartExplanationEngine(BaseEngine):
 
 
 def _headline(
+    fusion: MultiTimeframeEvidenceSnapshot,
     setup: ExpertSetupClassificationSnapshot,
     market_state: MarketStateSnapshot,
     partial: bool,
@@ -254,9 +255,9 @@ def _headline(
     if partial or setup.primary_setup is ExpertSetup.NO_QUALITY_SETUP:
         return "Low-Quality Setup"
     if setup.primary_setup is ExpertSetup.TREND_CONTINUATION:
-        return "Bullish Trend Continuation"
+        return _trend_continuation_headline(fusion)
     if setup.primary_setup is ExpertSetup.TREND_DAY:
-        return "Bullish Trend Continuation"
+        return _trend_continuation_headline(fusion)
     if setup.primary_setup is ExpertSetup.RANGE_DAY:
         return "Range-Bound Market"
     if setup.primary_setup is ExpertSetup.BREAKOUT:
@@ -280,6 +281,20 @@ def _headline(
     if market_state.market_state is MarketState.TRANSITION:
         return "Transition Phase"
     return "Low-Quality Setup"
+
+
+def _trend_continuation_headline(fusion: MultiTimeframeEvidenceSnapshot) -> str:
+    direction = _dominant_direction(fusion)
+    if direction is FusionDirection.BULLISH:
+        return "Bullish Trend Continuation"
+    if direction is FusionDirection.BEARISH:
+        return "Bearish Trend Continuation"
+    return "Trend Continuation"
+
+
+def _dominant_direction(fusion: MultiTimeframeEvidenceSnapshot) -> FusionDirection:
+    directions = {summary.timeframe: summary.direction for summary in fusion.summaries}
+    return directions.get(fusion.dominant_timeframe, FusionDirection.UNKNOWN)
 
 
 def _market_summary(

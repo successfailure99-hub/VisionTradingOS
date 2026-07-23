@@ -27,7 +27,7 @@ from engines.market_state import (
     MarketState,
     VolatilityState,
 )
-from engines.multi_timeframe_evidence_fusion import EvidenceConflict
+from engines.multi_timeframe_evidence_fusion import EvidenceConflict, FusionDirection
 from tests.test_expert_setup_classification_engine_v1 import setup_engine
 from tests.test_market_state_engine_v1 import fused, market_state_engine
 from tests.test_tradingview_evidence_assembly_coordinator_v1 import live_tick
@@ -51,6 +51,19 @@ def explain(fusion, state, setup, *, timestamp=NOW):
     return explanation_engine().process(fusion, state, setup, timestamp=timestamp)
 
 
+def explanation_text(snapshot):
+    return " ".join(
+        (
+            snapshot.headline,
+            snapshot.market_summary,
+            snapshot.primary_setup_explanation,
+            *snapshot.supporting_evidence,
+            *snapshot.conflicting_evidence,
+            *snapshot.risk_notes,
+        )
+    ).upper()
+
+
 def test_trend_continuation_explanation_is_deterministic_and_read_only():
     fusion, state, setup = intelligence_inputs()
 
@@ -70,18 +83,27 @@ def test_trend_continuation_explanation_is_deterministic_and_read_only():
     assert result.execution_calls == 0
     assert result.broker_order_calls == 0
     assert result.live_order_submission_enabled is False
-    forbidden = ("BUY", "SELL", "LONG", "SHORT", "ENTRY", "EXIT", "TARGET", "STOP LOSS")
-    text = " ".join(
-        (
-            result.headline,
-            result.market_summary,
-            result.primary_setup_explanation,
-            *result.supporting_evidence,
-            *result.conflicting_evidence,
-            *result.risk_notes,
-        )
-    ).upper()
+    forbidden = ("BUY", "SELL", "LONG", "SHORT", "ENTRY", "EXIT", "TARGET", "STOP", "STOP LOSS", "POSITION SIZE")
+    text = explanation_text(result)
     assert all(term not in text for term in forbidden)
+
+
+def test_trend_headline_uses_only_consumed_direction_or_neutral_wording():
+    fusion, state, setup = intelligence_inputs()
+    unknown_summaries = tuple(replace(summary, direction=FusionDirection.UNKNOWN) for summary in fusion.summaries)
+    unknown_fusion = replace(fusion, summaries=unknown_summaries, source_fingerprint="unknown-direction-fusion")
+
+    neutral = explain(unknown_fusion, state, replace(setup, primary_setup=ExpertSetup.TREND_CONTINUATION))
+
+    assert neutral.headline == "Trend Continuation"
+    assert "Bullish Trend Continuation" not in neutral.headline
+    assert "Bearish Trend Continuation" not in neutral.headline
+
+    bearish_fusion, bearish_state, bearish_setup = intelligence_inputs((MarketBias.BEARISH, MarketBias.BEARISH))
+
+    bearish = explain(bearish_fusion, bearish_state, bearish_setup)
+
+    assert bearish.headline == "Bearish Trend Continuation"
 
 
 def test_range_breakout_failed_breakout_bull_trap_and_partial_headlines():
@@ -129,12 +151,28 @@ def test_range_breakout_failed_breakout_bull_trap_and_partial_headlines():
         source_fingerprint="trap-state",
     )
     trap_setup = setup_engine().process(trap_fusion, trap_state, timestamp=NOW)
+    bear_fusion, bear_state, _ = intelligence_inputs((MarketBias.BEARISH, MarketBias.BEARISH))
+    bear_trap_fusion = replace(
+        bear_fusion,
+        evidence_conflict=EvidenceConflict.MAJOR,
+        conflicting_timeframes=("5m",),
+        source_fingerprint="bear-trap-fusion",
+    )
+    bear_trap_state = replace(
+        bear_state,
+        market_state=MarketState.TRANSITION,
+        market_stability=MarketStability.UNSTABLE,
+        volatility_state=VolatilityState.VOLATILE,
+        source_fingerprint="bear-trap-state",
+    )
+    bear_trap_setup = setup_engine().process(bear_trap_fusion, bear_trap_state, timestamp=NOW)
     partial_setup = replace(range_setup, setup_quality=range_setup.setup_quality, source_fingerprint="partial-setup")
 
     assert explain(range_fusion, range_state, range_setup).headline == "Range-Bound Market"
     assert explain(breakout_fusion, breakout_state, breakout_setup).headline == "Breakout Attempt"
     assert explain(failed_fusion, failed_state, failed_setup).headline == "Failed Breakout"
     assert explain(trap_fusion, trap_state, trap_setup).headline == "Bull Trap"
+    assert explain(bear_trap_fusion, bear_trap_state, bear_trap_setup).headline == "Bear Trap"
     assert explain(range_fusion, replace(range_state, evidence_quality=MarketEvidenceQuality.LOW), partial_setup).headline == "Low-Quality Setup"
 
 
@@ -178,6 +216,25 @@ def test_duplicate_publication_is_suppressed_and_snapshot_is_immutable():
     assert item.snapshot().explanation_count == 1
     with pytest.raises((FrozenInstanceError, AttributeError, TypeError)):
         first.headline = "Changed"
+
+
+def test_changed_upstream_fingerprints_do_not_republish_identical_explanation():
+    bus = EventBus()
+    updated = []
+    bus.subscribe(CHART_EXPLANATION_UPDATED, lambda payload: updated.append(payload))
+    item = explanation_engine(bus)
+    fusion, state, setup = intelligence_inputs()
+
+    first = item.process(fusion, state, setup, timestamp=NOW)
+    changed_fusion = replace(fusion, source_fingerprint="changed-fusion-fingerprint")
+    changed_state = replace(state, source_fingerprint="changed-market-state-fingerprint")
+    changed_setup = replace(setup, source_fingerprint="changed-setup-fingerprint")
+    second = item.process(changed_fusion, changed_state, changed_setup, timestamp=NOW + timedelta(seconds=1))
+
+    assert second is first
+    assert updated == [first]
+    assert item.snapshot().explanation_count == 1
+    assert item.snapshot().updated_count == 1
 
 
 def test_invalid_input_and_unexpected_failure_publish_canonical_events(monkeypatch):
