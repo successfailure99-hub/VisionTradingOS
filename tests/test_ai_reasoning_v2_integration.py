@@ -3,27 +3,28 @@ from application.enums import ExecutionSafetyMode
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.enums.instrument import Instrument
 from engines.ai_reasoning_v2 import AIReasoningV2Engine
-from engines.market_context_v2 import MarketContextV2Engine
-from engines.market_context_v2.enums import MarketDirection, TradePosture
-from tests.test_market_context_v2_integration import input_bundle
-from engines.option_chain_analytics.enums import OptionAnalyticsBias
-from engines.price_action.enums import Trend
+from engines.multi_timeframe_evidence_fusion.enums import FusionDirection
+from tests.test_ai_reasoning_v2_interpreter import intelligence
 
 
-def test_no_network_market_context_v2_to_ai_reasoning_v2_flow():
-    context_engine = MarketContextV2Engine(instrument=Instrument.NIFTY)
-    context = context_engine.process(
-        input_bundle(Trend.BULLISH, OptionAnalyticsBias.BULLISH, 108.0)
+def test_no_network_deterministic_intelligence_to_ai_reasoning_v2_flow():
+    inputs = intelligence(direction=FusionDirection.BULLISH)
+    reasoning = AIReasoningV2Engine(instrument=Instrument.NIFTY).process(
+        inputs.multi_timeframe_evidence,
+        inputs.market_state,
+        inputs.setup_classification,
+        inputs.chart_explanation,
     )
-    reasoning = AIReasoningV2Engine(instrument=Instrument.NIFTY).process(context)
-    assert reasoning.direction.value == context.direction.value
-    assert reasoning.market_context is context
+
+    assert reasoning.direction.value == "bullish"
+    assert reasoning.multi_timeframe_evidence is inputs.multi_timeframe_evidence
+    assert reasoning.market_state is inputs.market_state
+    assert reasoning.setup_classification is inputs.setup_classification
+    assert reasoning.chart_explanation is inputs.chart_explanation
     assert reasoning.evidence[0].role.value == "primary"
     assert reasoning.evidence[1].role.value == "primary"
     assert reasoning.evidence[2].role.value == "confirmation"
     assert reasoning.actionable_context is True
-    assert context.direction in {MarketDirection.BULLISH, MarketDirection.STRONGLY_BULLISH}
-    assert context.trade_posture is TradePosture.LOOK_FOR_LONGS
 
 
 def test_application_defaults_remain_analysis_only_and_dry_run():

@@ -1,48 +1,37 @@
-from engines.ai_reasoning_v2 import AIReasoningChange, AIReasoningV2Engine
+from application.enums import RuntimeInstrument  # noqa: F401
 from core.enums.instrument import Instrument
-from engines.market_context_v2.enums import MarketDirection, TradePosture
-from tests.test_ai_reasoning_v2_interpreter import ctx
+from engines.multi_timeframe_evidence_fusion.enums import FusionDirection
+from tests.test_ai_reasoning_v2_interpreter import intelligence
+from engines.ai_reasoning_v2 import AIReasoningChange, AIReasoningV2Engine
+
+
+def _process(engine, inputs):
+    return engine.process(
+        inputs.multi_timeframe_evidence,
+        inputs.market_state,
+        inputs.setup_classification,
+        inputs.chart_explanation,
+    )
 
 
 def test_direction_and_confidence_transitions():
     engine = AIReasoningV2Engine(instrument=Instrument.NIFTY)
-    first = engine.process(
-        ctx(
-            MarketDirection.NEUTRAL,
-            0.4,
-            minute=0,
-            posture=TradePosture.WAIT_FOR_CONFIRMATION,
-        )
-    )
+    first = _process(engine, intelligence(direction=FusionDirection.NEUTRAL, alignment=40.0, minute=0))
     assert first.change is AIReasoningChange.INITIAL
-    bullish = engine.process(ctx(MarketDirection.BULLISH, 0.6, minute=1))
+    bullish = _process(engine, intelligence(direction=FusionDirection.BULLISH, alignment=60.0, minute=1))
     assert bullish.change is AIReasoningChange.TURNED_BULLISH
-    stronger = engine.process(ctx(MarketDirection.BULLISH, 0.8, minute=2))
+    stronger = _process(engine, intelligence(direction=FusionDirection.BULLISH, alignment=95.0, minute=2))
     assert stronger.change is AIReasoningChange.STRENGTHENED
-    weaker = engine.process(ctx(MarketDirection.BULLISH, 0.55, minute=3))
+    weaker = _process(engine, intelligence(direction=FusionDirection.BULLISH, alignment=30.0, conflict_score=50.0, minute=3))
     assert weaker.change is AIReasoningChange.WEAKENED
-    bearish = engine.process(
-        ctx(
-            MarketDirection.BEARISH,
-            0.7,
-            minute=4,
-            posture=TradePosture.LOOK_FOR_SHORTS,
-        )
-    )
+    bearish = _process(engine, intelligence(direction=FusionDirection.BEARISH, alignment=70.0, minute=4))
     assert bearish.change is AIReasoningChange.TURNED_BEARISH
 
 
 def test_same_timestamp_first_record_correction_remains_initial():
     engine = AIReasoningV2Engine(instrument=Instrument.NIFTY)
-    first = engine.process(
-        ctx(
-            MarketDirection.NEUTRAL,
-            0.4,
-            minute=0,
-            posture=TradePosture.WAIT_FOR_CONFIRMATION,
-        )
-    )
-    corrected = engine.process(ctx(MarketDirection.BULLISH, 0.6, minute=0))
+    first = _process(engine, intelligence(direction=FusionDirection.NEUTRAL, alignment=40.0, minute=0))
+    corrected = _process(engine, intelligence(direction=FusionDirection.BULLISH, alignment=60.0, minute=0))
 
     assert first.change is AIReasoningChange.INITIAL
     assert corrected.change is AIReasoningChange.INITIAL
@@ -51,23 +40,9 @@ def test_same_timestamp_first_record_correction_remains_initial():
 
 def test_same_timestamp_correction_compares_against_previous_distinct_state():
     engine = AIReasoningV2Engine(instrument=Instrument.NIFTY)
-    first = engine.process(
-        ctx(
-            MarketDirection.NEUTRAL,
-            0.4,
-            minute=0,
-            posture=TradePosture.WAIT_FOR_CONFIRMATION,
-        )
-    )
-    second = engine.process(ctx(MarketDirection.BULLISH, 0.6, minute=1))
-    corrected = engine.process(
-        ctx(
-            MarketDirection.BEARISH,
-            0.7,
-            minute=1,
-            posture=TradePosture.LOOK_FOR_SHORTS,
-        )
-    )
+    first = _process(engine, intelligence(direction=FusionDirection.NEUTRAL, alignment=40.0, minute=0))
+    second = _process(engine, intelligence(direction=FusionDirection.BULLISH, alignment=60.0, minute=1))
+    corrected = _process(engine, intelligence(direction=FusionDirection.BEARISH, alignment=70.0, minute=1))
 
     assert first.change is AIReasoningChange.INITIAL
     assert second.change is AIReasoningChange.TURNED_BULLISH

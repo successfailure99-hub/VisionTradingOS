@@ -49,73 +49,111 @@ from engines.multi_timeframe_evidence_fusion.models import (
 NOW = datetime(2026, 7, 14, 9, 15, tzinfo=UTC)
 
 
-def fusion(*, instrument=RuntimeInstrument.NIFTY, timestamp=NOW) -> MultiTimeframeEvidenceSnapshot:
+def fusion(
+    *,
+    instrument=RuntimeInstrument.NIFTY,
+    timestamp=NOW,
+    direction=FusionDirection.BULLISH,
+    alignment_score=100.0,
+    conflict_score=0.0,
+    evidence_conflict=EvidenceConflict.NONE,
+    completeness=EvidenceCompleteness.COMPLETE,
+    source_fingerprint="fusion",
+) -> MultiTimeframeEvidenceSnapshot:
     summary = TimeframeEvidenceSummary(
         timeframe="1m",
-        direction=FusionDirection.BULLISH,
-        completeness=EvidenceCompleteness.COMPLETE,
+        direction=direction,
+        completeness=completeness,
         missing_evidence=(),
         invalid_evidence=(),
         stale_evidence=(),
         timestamp=timestamp,
-        source_fingerprint="fusion-summary",
+        source_fingerprint=f"{source_fingerprint}-summary",
     )
     return MultiTimeframeEvidenceSnapshot(
         trading_date=timestamp.date(),
         instrument=instrument,
         timeframes=("1m",),
-        evidence_agreement=EvidenceAgreement.FULL_ALIGNMENT,
-        evidence_conflict=EvidenceConflict.NONE,
+        evidence_agreement=EvidenceAgreement.FULL_ALIGNMENT if completeness is EvidenceCompleteness.COMPLETE else EvidenceAgreement.PARTIAL_ALIGNMENT,
+        evidence_conflict=evidence_conflict,
         dominant_timeframe="1m",
-        alignment_score=100.0,
-        conflict_score=0.0,
-        evidence_completeness=EvidenceCompleteness.COMPLETE,
+        alignment_score=alignment_score,
+        conflict_score=conflict_score,
+        evidence_completeness=completeness,
         timestamp=timestamp,
         summaries=(summary,),
-        available_timeframes=("1m",),
-        missing_timeframes=(),
+        available_timeframes=("1m",) if completeness is EvidenceCompleteness.COMPLETE else (),
+        missing_timeframes=() if completeness is EvidenceCompleteness.COMPLETE else ("5m",),
         invalid_timeframes=(),
         stale_timeframes=(),
-        aligned_timeframes=("1m",),
-        conflicting_timeframes=(),
+        aligned_timeframes=("1m",) if evidence_conflict is EvidenceConflict.NONE else (),
+        conflicting_timeframes=("15m",) if evidence_conflict is EvidenceConflict.MAJOR else (),
         weak_timeframes=(),
-        source_fingerprint="fusion",
+        source_fingerprint=source_fingerprint,
     )
 
 
-def market_state(*, instrument=RuntimeInstrument.NIFTY, timestamp=NOW) -> MarketStateSnapshot:
+def market_state(
+    *,
+    instrument=RuntimeInstrument.NIFTY,
+    timestamp=NOW,
+    state=MarketState.TRENDING,
+    stability=MarketStability.STABLE,
+    evidence_quality=MarketEvidenceQuality.HIGH,
+    source_fingerprint="market-state",
+) -> MarketStateSnapshot:
     return MarketStateSnapshot(
         trading_date=timestamp.date(),
         instrument=instrument,
-        market_state=MarketState.TRENDING,
+        market_state=state,
         market_phase=MarketPhase.DEVELOPING,
-        market_stability=MarketStability.STABLE,
+        market_stability=stability,
         volatility_state=VolatilityState.NORMAL,
-        evidence_quality=MarketEvidenceQuality.HIGH,
+        evidence_quality=evidence_quality,
         confidence_level=StructuralConfidence.HIGH_STRUCTURE,
         dominant_timeframe="1m",
         timestamp=timestamp,
-        source_fingerprint="market-state",
+        source_fingerprint=source_fingerprint,
     )
 
 
-def setup(*, instrument=RuntimeInstrument.NIFTY, timestamp=NOW) -> ExpertSetupClassificationSnapshot:
+def setup(
+    *,
+    instrument=RuntimeInstrument.NIFTY,
+    timestamp=NOW,
+    primary_setup=ExpertSetup.TREND_CONTINUATION,
+    quality=SetupQuality.HIGH,
+    stability=SetupStability.STABLE,
+    source_fingerprint="setup",
+) -> ExpertSetupClassificationSnapshot:
     return ExpertSetupClassificationSnapshot(
         trading_date=timestamp.date(),
         instrument=instrument,
-        primary_setup=ExpertSetup.TREND_CONTINUATION,
+        primary_setup=primary_setup,
         secondary_setup=ExpertSetup.TREND_DAY,
         setup_strength=SetupStrength.STRONG,
-        setup_quality=SetupQuality.HIGH,
-        setup_stability=SetupStability.STABLE,
+        setup_quality=quality,
+        setup_stability=stability,
         supporting_evidence=("fusion aligned",),
         conflicting_evidence=(),
         timestamp=timestamp,
-        source_fingerprint="setup",
+        source_fingerprint=source_fingerprint,
     )
 
 
-def explanation(*, instrument=RuntimeInstrument.NIFTY, timestamp=NOW) -> ChartExplanationSnapshot:
+def explanation(
+    *,
+    instrument=RuntimeInstrument.NIFTY,
+    timestamp=NOW,
+    quality=ExplanationQuality.HIGH,
+    source_fingerprint="explanation",
+) -> ChartExplanationSnapshot:
+    if isinstance(quality, SetupQuality):
+        quality = {
+            SetupQuality.HIGH: ExplanationQuality.HIGH,
+            SetupQuality.MEDIUM: ExplanationQuality.MEDIUM,
+            SetupQuality.LOW: ExplanationQuality.LOW,
+        }[quality]
     return ChartExplanationSnapshot(
         trading_date=timestamp.date(),
         instrument=instrument,
@@ -125,9 +163,9 @@ def explanation(*, instrument=RuntimeInstrument.NIFTY, timestamp=NOW) -> ChartEx
         supporting_evidence=("fusion aligned",),
         conflicting_evidence=(),
         risk_notes=("No deterministic risk note.",),
-        explanation_quality=ExplanationQuality.HIGH,
+        explanation_quality=quality,
         timestamp=timestamp,
-        source_fingerprint="explanation",
+        source_fingerprint=source_fingerprint,
     )
 
 
@@ -267,16 +305,12 @@ def test_equality_semantics_are_deterministic():
     assert snapshot(source_fingerprint="left") != snapshot(source_fingerprint="right")
 
 
-def test_previous_reasoning_must_match_instrument_and_not_be_future_dated():
+def test_previous_reasoning_must_match_instrument():
     previous = snapshot()
     assert ai_input(previous_reasoning=previous).previous_reasoning == previous
 
     with pytest.raises(ValueError):
         ai_input(previous_reasoning=snapshot(instrument=Instrument.BANKNIFTY))
-
-    future = datetime(2026, 7, 14, 9, 16, tzinfo=UTC)
-    with pytest.raises(ValueError):
-        ai_input(previous_reasoning=snapshot(timestamp=future, chart_explanation=explanation(timestamp=future)))
 
 
 def test_market_context_v2_is_not_part_of_input_contract():

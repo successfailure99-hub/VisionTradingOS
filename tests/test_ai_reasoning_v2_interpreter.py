@@ -1,77 +1,93 @@
 from datetime import UTC, datetime, timedelta
 
-from core.enums.instrument import Instrument
+from application.enums import RuntimeInstrument  # noqa: F401
+from engines.expert_setup_classification.enums import ExpertSetup, SetupQuality, SetupStability
+from engines.market_state.enums import MarketEvidenceQuality, MarketStability, MarketState
+from engines.multi_timeframe_evidence_fusion.enums import EvidenceCompleteness, EvidenceConflict, FusionDirection
+from tests.test_ai_reasoning_v2_models import explanation, fusion, market_state, setup, snapshot
 from engines.ai_reasoning_v2 import (
     AIConviction,
     AIReasoningChange,
     AIReasoningDirection,
     AIReasoningState,
     AIReasoningV2Configuration,
+    AIReasoningV2Input,
     AIReasoningV2Interpreter,
 )
-from engines.market_context_v2.enums import (
-    EvidenceDirection,
-    EvidenceStrength,
-    MarketConflictSeverity,
-    MarketContextReadiness,
-    MarketDirection,
-    MarketEvidenceSource,
-    MarketRegime,
-    TradePosture,
-)
-from engines.market_context_v2.models import MarketContextV2Snapshot, MarketEvidence
 
 
 NOW = datetime(2026, 7, 14, 9, 15, tzinfo=UTC)
 
 
-def ev(source, direction, score, timestamp=NOW):
-    return MarketEvidence(source, direction, EvidenceStrength.MODERATE, 1, score, direction is not EvidenceDirection.UNAVAILABLE, source in {MarketEvidenceSource.PRICE_ACTION, MarketEvidenceSource.OPTION_CHAIN}, timestamp, (f"{source.value} {direction.value}",))
-
-
-def ctx(
-    direction=MarketDirection.BULLISH,
-    confidence=0.75,
-    readiness=MarketContextReadiness.READY,
-    posture=TradePosture.LOOK_FOR_LONGS,
-    conflict=MarketConflictSeverity.NONE,
+def intelligence(
     *,
+    direction=FusionDirection.BULLISH,
+    alignment=92.0,
+    conflict_score=4.0,
+    evidence_conflict=EvidenceConflict.NONE,
+    completeness=EvidenceCompleteness.COMPLETE,
+    state=MarketState.TRENDING,
+    stability=MarketStability.STABLE,
+    quality=SetupQuality.HIGH,
+    setup_type=ExpertSetup.TREND_CONTINUATION,
+    setup_stability=SetupStability.STABLE,
+    evidence_quality=MarketEvidenceQuality.HIGH,
     minute=0,
 ):
     timestamp = NOW + timedelta(minutes=minute)
-    edir = EvidenceDirection.BULLISH if direction in {MarketDirection.BULLISH, MarketDirection.STRONGLY_BULLISH} else EvidenceDirection.BEARISH if direction in {MarketDirection.BEARISH, MarketDirection.STRONGLY_BEARISH} else EvidenceDirection.NEUTRAL
-    score = 2 if edir is EvidenceDirection.BULLISH else -2 if edir is EvidenceDirection.BEARISH else 0
-    items = (
-        ev(MarketEvidenceSource.PRICE_ACTION, edir, score, timestamp),
-        ev(MarketEvidenceSource.OPTION_CHAIN, edir, score, timestamp),
-        ev(MarketEvidenceSource.CAMARILLA, EvidenceDirection.NEUTRAL, 0, timestamp),
-        ev(MarketEvidenceSource.CPR, EvidenceDirection.NEUTRAL, 0, timestamp),
-        ev(MarketEvidenceSource.VWAP, EvidenceDirection.NEUTRAL, 0, timestamp),
+    return AIReasoningV2Input(
+        multi_timeframe_evidence=fusion(
+            timestamp=timestamp,
+            direction=direction,
+            alignment_score=alignment,
+            conflict_score=conflict_score,
+            evidence_conflict=evidence_conflict,
+            completeness=completeness,
+        ),
+        market_state=market_state(
+            timestamp=timestamp,
+            state=state,
+            stability=stability,
+            evidence_quality=evidence_quality,
+        ),
+        setup_classification=setup(
+            timestamp=timestamp,
+            primary_setup=setup_type,
+            quality=quality,
+            stability=setup_stability,
+        ),
+        chart_explanation=explanation(timestamp=timestamp, quality=quality),
     )
-    bullish = 4 if score > 0 else 0
-    bearish = 4 if score < 0 else 0
-    return MarketContextV2Snapshot(Instrument.NIFTY, timestamp, readiness, direction, MarketRegime.TRENDING_UP, posture, conflict, bullish, bearish, bullish - bearish, confidence, items, (), items[0], items[1], items[2], items[3], items[4], 100.0, None, 2 if readiness is not MarketContextReadiness.INSUFFICIENT else 0, 3, ("context",), ())
 
 
 def test_direction_conviction_and_state_mapping():
     interpreter = AIReasoningV2Interpreter()
     config = AIReasoningV2Configuration()
-    assert interpreter.direction(ctx(MarketDirection.STRONGLY_BULLISH)) is AIReasoningDirection.STRONGLY_BULLISH
-    assert interpreter.conviction(ctx(confidence=0.9), config) is AIConviction.VERY_HIGH
-    assert interpreter.conviction(ctx(confidence=0.72), config) is AIConviction.HIGH
-    assert interpreter.conviction(ctx(confidence=0.55), config) is AIConviction.MODERATE
-    assert interpreter.conviction(ctx(confidence=0.35), config) is AIConviction.LOW
-    assert interpreter.conviction(ctx(confidence=0.1), config) is AIConviction.VERY_LOW
-    assert interpreter.conviction(ctx(readiness=MarketContextReadiness.INSUFFICIENT, confidence=0.0), config) is AIConviction.UNAVAILABLE
-    assert interpreter.conviction(ctx(conflict=MarketConflictSeverity.HIGH), config) is AIConviction.LOW
-    assert interpreter.reasoning_state(ctx()) is AIReasoningState.ACTIONABLE_CONTEXT
-    assert interpreter.reasoning_state(ctx(posture=TradePosture.WAIT_FOR_CONFIRMATION)) is AIReasoningState.WAITING_CONFIRMATION
-    assert interpreter.reasoning_state(ctx(direction=MarketDirection.CONFLICTED, conflict=MarketConflictSeverity.HIGH, posture=TradePosture.AVOID_NEW_TRADES)) is AIReasoningState.CONFLICTED_CONTEXT
+
+    assert interpreter.direction(intelligence(direction=FusionDirection.BULLISH)) is AIReasoningDirection.BULLISH
+    assert interpreter.direction(intelligence(direction=FusionDirection.BEARISH)) is AIReasoningDirection.BEARISH
+    assert interpreter.direction(intelligence(direction=FusionDirection.NEUTRAL)) is AIReasoningDirection.NEUTRAL
+    assert interpreter.direction(intelligence(evidence_conflict=EvidenceConflict.MAJOR)) is AIReasoningDirection.CONFLICTED
+    assert interpreter.direction(intelligence(completeness=EvidenceCompleteness.INSUFFICIENT)) is AIReasoningDirection.INSUFFICIENT_DATA
+    assert interpreter.conviction(intelligence(alignment=100, conflict_score=0), config) is AIConviction.VERY_HIGH
+    assert interpreter.conviction(intelligence(alignment=80, conflict_score=10), config) is AIConviction.HIGH
+    assert interpreter.conviction(intelligence(alignment=50, conflict_score=20), config) is AIConviction.MODERATE
+    assert interpreter.conviction(intelligence(alignment=20, conflict_score=70, quality=SetupQuality.LOW), config) is AIConviction.VERY_LOW
+    assert interpreter.conviction(intelligence(completeness=EvidenceCompleteness.INSUFFICIENT), config) is AIConviction.UNAVAILABLE
+    assert interpreter.reasoning_state(intelligence()) is AIReasoningState.ACTIONABLE_CONTEXT
+    assert interpreter.reasoning_state(intelligence(stability=MarketStability.CHANGING)) is AIReasoningState.WAITING_CONFIRMATION
+    assert interpreter.reasoning_state(intelligence(evidence_conflict=EvidenceConflict.MAJOR)) is AIReasoningState.CONFLICTED_CONTEXT
+    assert interpreter.reasoning_state(intelligence(quality=SetupQuality.LOW)) is AIReasoningState.AVOID_CONTEXT
 
 
-def test_evidence_roles_and_initial_change():
+def test_evidence_roles_and_change_classification():
     interpreter = AIReasoningV2Interpreter()
-    evidence = interpreter.interpret_evidence(ctx(), AIReasoningV2Configuration())
+    config = AIReasoningV2Configuration()
+    evidence = interpreter.interpret_evidence(intelligence(), config)
+
     assert evidence[0].role.value == "primary"
+    assert evidence[1].source == "market_state"
     assert evidence[2].role.value == "confirmation"
-    assert interpreter.change_type(ctx(), None) is AIReasoningChange.INITIAL
+    assert interpreter.change_type(intelligence(), None, config) is AIReasoningChange.INITIAL
+    previous = snapshot(direction=AIReasoningDirection.NEUTRAL, confidence=0.4)
+    assert interpreter.change_type(intelligence(direction=FusionDirection.BULLISH), previous, config) is AIReasoningChange.TURNED_BULLISH

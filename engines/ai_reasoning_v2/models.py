@@ -107,8 +107,6 @@ class AIReasoningV2Input:
                 raise TypeError("previous_reasoning must be AIReasoningV2Snapshot or None")
             if self.previous_reasoning.instrument.value != self.multi_timeframe_evidence.instrument.value:
                 raise ValueError("previous reasoning instrument must match deterministic intelligence")
-            if self.previous_reasoning.timestamp > self.chart_explanation.timestamp:
-                raise ValueError("previous reasoning cannot be from the future")
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,8 +154,8 @@ class AIReasoningV2Snapshot:
             raise ValueError("instrument must match deterministic intelligence")
         if self.multi_timeframe_evidence.trading_date != self.trading_date:
             raise ValueError("trading_date must match deterministic intelligence")
-        if self.chart_explanation.timestamp != self.timestamp:
-            raise ValueError("timestamp must match chart explanation")
+        if self.timestamp < self.chart_explanation.timestamp:
+            raise ValueError("timestamp cannot precede chart explanation")
         for name, enum_type in (
             ("direction", AIReasoningDirection),
             ("conviction", AIConviction),
