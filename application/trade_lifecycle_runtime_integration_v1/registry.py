@@ -7,7 +7,7 @@ from threading import RLock
 from application.trade_lifecycle_v1 import TradeLifecycleCoordinatorV1
 from application.trade_lifecycle_v1.enums import TradeLifecycleStatus
 from core.enums.instrument import Instrument
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS
+from engines.risk_management_v2.models import SUPPORTED_INSTRUMENTS
 
 
 class TradeLifecycleCoordinatorRegistry:

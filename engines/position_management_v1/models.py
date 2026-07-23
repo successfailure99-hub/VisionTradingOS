@@ -9,8 +9,7 @@ from numbers import Real
 
 from application.execution_runtime_v1.models import ExecutionIntent, ExecutionResult
 from core.enums.instrument import Instrument
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS
-from engines.risk_management_v2.models import RiskManagementV2Snapshot
+from engines.risk_management_v2.models import SUPPORTED_INSTRUMENTS, RiskManagementV2Snapshot
 from engines.strategy_decision_v2.models import StrategyDecisionV2Snapshot
 from engines.position_management_v1.enums import (
     PositionChange,

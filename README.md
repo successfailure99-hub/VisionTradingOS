@@ -44,6 +44,27 @@ Expert Setup Classification Engine V1 consumes only Multi-Timeframe Evidence Fus
 
 Chart Explanation Engine V1 consumes only Multi-Timeframe Evidence Fusion, Market State, and Expert Setup Classification snapshots. It converts deterministic intelligence into stable human-readable explanations: headline, market summary, setup explanation, supporting evidence, conflicting evidence, and caution notes. It uses fixed wording templates, publishes through the EventBus, and never calculates indicators, creates signals, or recommends orders.
 
+## AI Reasoning V2
+
+AI Reasoning V2 consumes only deterministic intelligence snapshots: Multi-Timeframe Evidence Fusion, Market State, Expert Setup Classification, and Chart Explanation. It summarizes the structured market explanation, prioritizes uncertainty and conflicts, and produces an immutable AI reasoning snapshot for StrategyDecisionV2. It does not consume MarketContextV2, raw indicators, raw candles, broker data, or evidence-engine internals.
+
+The certified runtime chain is:
+
+```text
+Evidence Engines
+    -> Multi-Timeframe Evidence Fusion
+    -> Market State
+    -> Expert Setup Classification
+    -> Chart Explanation
+    -> AI Reasoning V2
+    -> StrategyDecisionV2
+    -> RiskManagementV2
+    -> TradeLifecycleV1
+    -> TradeJournalV1
+```
+
+The RC1 certification report is maintained in `docs/AI_REASONING_V2_RC1_CERTIFICATION.md`.
+
 ## Execution Modes
 
 - Safety mode: `ANALYSIS_ONLY` by default.

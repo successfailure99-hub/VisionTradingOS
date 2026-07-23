@@ -12,7 +12,6 @@ from application.trade_journal_runtime_integration_v1.models import TradeJournal
 from application.trade_lifecycle_runtime_integration_v1.models import TradeLifecycleRuntimeIntegrationV1Snapshot
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.enums.instrument import Instrument
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS
 from engines.production_safety_v1.enums import (
     ProductionSafetyStatus,
     RecoveryDecision,
@@ -24,7 +23,7 @@ from engines.production_safety_v1.enums import (
     SafetyScope,
     SafetySeverity,
 )
-from engines.risk_management_v2.models import AccountRiskState, SessionRiskState
+from engines.risk_management_v2.models import SUPPORTED_INSTRUMENTS, AccountRiskState, SessionRiskState
 
 
 @dataclass(frozen=True, slots=True)

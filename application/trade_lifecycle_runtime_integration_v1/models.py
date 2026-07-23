@@ -14,8 +14,8 @@ from application.trade_lifecycle_runtime_integration_v1.enums import (
 from application.trade_lifecycle_v1.models import TradeLifecycleV1Request, TradeLifecycleV1Snapshot
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.enums.instrument import Instrument
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS
 from engines.position_management_v1.models import PositionPriceUpdate
+from engines.risk_management_v2.models import SUPPORTED_INSTRUMENTS
 
 
 @dataclass(frozen=True, slots=True)

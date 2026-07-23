@@ -19,7 +19,6 @@ from core.events import (
     POSITION_PARTIALLY_CLOSED_DRY_RUN,
     POSITION_PRICE_UPDATED,
 )
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS
 from engines.position_management_v1.calculator import PositionManagementCalculator
 from engines.position_management_v1.configuration import PositionManagementV1Configuration
 from engines.position_management_v1.enums import (
@@ -34,6 +33,7 @@ from engines.position_management_v1.models import (
     PositionManagementV1Snapshot,
     PositionPriceUpdate,
 )
+from engines.risk_management_v2.models import SUPPORTED_INSTRUMENTS
 from engines.position_management_v1.validator import PositionSourceValidator
 
 
