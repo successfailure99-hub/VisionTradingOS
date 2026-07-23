@@ -226,6 +226,167 @@ def test_duplicate_publication_idempotency_and_immutable_snapshot():
         first.primary_setup = ExpertSetup.BREAKOUT
 
 
+def test_same_observable_setup_with_different_upstream_fingerprints_does_not_republish():
+    bus = EventBus()
+    updated = []
+    bus.subscribe(SETUP_CLASSIFICATION_UPDATED, lambda payload: updated.append(payload))
+    item = setup_engine(bus)
+    fusion, state = setup_inputs()
+
+    first = item.process(fusion, state, timestamp=NOW)
+    fingerprint_changed_fusion = replace(fusion, source_fingerprint="changed-fusion")
+    fingerprint_changed_state = replace(state, source_fingerprint="changed-market-state")
+    second = item.process(
+        fingerprint_changed_fusion,
+        fingerprint_changed_state,
+        timestamp=NOW + timedelta(seconds=1),
+    )
+
+    assert second is first
+    assert updated == [first]
+    assert item.snapshot().classification_count == 1
+    assert item.snapshot().updated_count == 1
+
+
+def test_complete_setup_publishes_partial_when_market_state_later_becomes_stale():
+    bus = EventBus()
+    updated = []
+    partial = []
+    bus.subscribe(SETUP_CLASSIFICATION_UPDATED, lambda payload: updated.append(payload))
+    bus.subscribe(SETUP_CLASSIFICATION_PARTIAL, lambda payload: partial.append(payload))
+    item = setup_engine(bus)
+    fusion, state = setup_inputs()
+    fresh_fusion = replace(fusion, timestamp=NOW + timedelta(minutes=6), source_fingerprint="fresh-fusion")
+
+    first = item.process(fusion, state, timestamp=NOW)
+    stale = item.process(fresh_fusion, state, timestamp=NOW + timedelta(minutes=6))
+
+    assert first.primary_setup is ExpertSetup.TREND_DAY
+    assert stale.primary_setup is ExpertSetup.NO_QUALITY_SETUP
+    assert stale is not first
+    assert updated == [first]
+    assert partial == [stale]
+    assert item.snapshot().classification_count == 2
+
+
+def test_near_identical_inputs_do_not_oscillate_breakout_to_failed_breakout():
+    item = setup_engine()
+    trend_fusion, trend_state = setup_inputs()
+    breakout_fusion = replace(
+        trend_fusion,
+        evidence_conflict=EvidenceConflict.MINOR,
+        evidence_agreement=EvidenceAgreement.PARTIAL_ALIGNMENT,
+        conflicting_timeframes=("1m",),
+        source_fingerprint="breakout-fusion",
+    )
+    breakout_state = replace(
+        trend_state,
+        market_state=MarketState.TRANSITION,
+        market_stability=MarketStability.CHANGING,
+        source_fingerprint="breakout-state",
+    )
+    noisy_failed_fusion = replace(
+        breakout_fusion,
+        evidence_conflict=EvidenceConflict.MAJOR,
+        conflict_score=20.0,
+        source_fingerprint="noisy-failed-fusion",
+    )
+    noisy_failed_state = replace(
+        breakout_state,
+        market_state=MarketState.VOLATILE,
+        market_stability=MarketStability.UNSTABLE,
+        volatility_state=VolatilityState.VOLATILE,
+        source_fingerprint="noisy-failed-state",
+    )
+
+    first = item.process(breakout_fusion, breakout_state, timestamp=NOW)
+    second = item.process(noisy_failed_fusion, noisy_failed_state, timestamp=NOW + timedelta(seconds=1))
+    third = item.process(breakout_fusion, breakout_state, timestamp=NOW + timedelta(seconds=2))
+    fourth = item.process(noisy_failed_fusion, noisy_failed_state, timestamp=NOW + timedelta(seconds=3))
+
+    assert first.primary_setup is ExpertSetup.BREAKOUT
+    assert second.primary_setup is ExpertSetup.BREAKOUT
+    assert third.primary_setup is ExpertSetup.BREAKOUT
+    assert fourth.primary_setup is ExpertSetup.BREAKOUT
+
+
+def test_material_strong_conflict_changes_setup_to_failed_breakout():
+    item = setup_engine()
+    trend_fusion, trend_state = setup_inputs()
+    breakout_fusion = replace(
+        trend_fusion,
+        evidence_conflict=EvidenceConflict.MINOR,
+        evidence_agreement=EvidenceAgreement.PARTIAL_ALIGNMENT,
+        conflicting_timeframes=("1m",),
+        source_fingerprint="breakout-fusion",
+    )
+    breakout_state = replace(
+        trend_state,
+        market_state=MarketState.TRANSITION,
+        market_stability=MarketStability.CHANGING,
+        source_fingerprint="breakout-state",
+    )
+    material_fusion = replace(
+        breakout_fusion,
+        evidence_conflict=EvidenceConflict.MAJOR,
+        conflict_score=60.0,
+        source_fingerprint="material-fusion",
+    )
+    material_state = replace(
+        breakout_state,
+        market_state=MarketState.VOLATILE,
+        market_stability=MarketStability.UNSTABLE,
+        volatility_state=VolatilityState.VOLATILE,
+        source_fingerprint="material-state",
+    )
+
+    first = item.process(breakout_fusion, breakout_state, timestamp=NOW)
+    second = item.process(material_fusion, material_state, timestamp=NOW + timedelta(seconds=1))
+
+    assert first.primary_setup is ExpertSetup.BREAKOUT
+    assert second.primary_setup is ExpertSetup.FAILED_BREAKOUT
+
+
+def test_primary_setup_exclusivity_prevents_impossible_combinations():
+    trend_fusion, trend_state = setup_inputs()
+    trend = classify(trend_fusion, trend_state)
+    range_fusion, range_state = setup_inputs((MarketBias.NEUTRAL, MarketBias.NEUTRAL))
+    range_day = classify(range_fusion, range_state)
+    breakout_fusion = replace(
+        trend_fusion,
+        evidence_conflict=EvidenceConflict.MINOR,
+        evidence_agreement=EvidenceAgreement.PARTIAL_ALIGNMENT,
+        conflicting_timeframes=("1m",),
+        source_fingerprint="breakout-fusion",
+    )
+    breakout_state = replace(
+        trend_state,
+        market_state=MarketState.TRANSITION,
+        market_stability=MarketStability.CHANGING,
+        source_fingerprint="breakout-state",
+    )
+    breakout = classify(breakout_fusion, breakout_state)
+    failed = classify(
+        replace(breakout_fusion, evidence_conflict=EvidenceConflict.MAJOR, source_fingerprint="failed-fusion"),
+        replace(
+            breakout_state,
+            market_state=MarketState.VOLATILE,
+            market_stability=MarketStability.UNSTABLE,
+            volatility_state=VolatilityState.VOLATILE,
+            source_fingerprint="failed-state",
+        ),
+    )
+
+    assert trend.primary_setup is ExpertSetup.TREND_DAY
+    assert trend.secondary_setup is not ExpertSetup.RANGE_DAY
+    assert range_day.primary_setup is ExpertSetup.RANGE_DAY
+    assert range_day.secondary_setup is not ExpertSetup.TREND_DAY
+    assert breakout.primary_setup is ExpertSetup.BREAKOUT
+    assert breakout.secondary_setup is not ExpertSetup.FAILED_BREAKOUT
+    assert failed.primary_setup is ExpertSetup.FAILED_BREAKOUT
+    assert failed.secondary_setup is not ExpertSetup.BREAKOUT
+
+
 def test_invalid_input_and_unexpected_failure_publish_canonical_events(monkeypatch):
     bus = EventBus()
     invalid = []

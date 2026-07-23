@@ -223,6 +223,19 @@ class ExpertSetupClassificationEngine(BaseEngine):
         strength = _strength(fusion, market_state, partial)
         quality = _quality(fusion, market_state, partial)
         stability = _stability(fusion, market_state, partial)
+        if self._last_snapshot is not None and _should_preserve_previous_setup(
+            self._last_snapshot,
+            primary,
+            stability,
+            fusion,
+            market_state,
+            partial,
+        ):
+            primary = self._last_snapshot.primary_setup
+            secondary = self._last_snapshot.secondary_setup
+            strength = self._last_snapshot.setup_strength
+            quality = self._last_snapshot.setup_quality
+            stability = self._last_snapshot.setup_stability
         supporting = _supporting_evidence(fusion, market_state, primary, partial)
         conflicting = _conflicting_evidence(fusion, market_state, partial)
         payload = {
@@ -233,8 +246,6 @@ class ExpertSetupClassificationEngine(BaseEngine):
             "stability": stability.value,
             "supporting": supporting,
             "conflicting": conflicting,
-            "fusion": fusion.source_fingerprint,
-            "market_state": market_state.source_fingerprint,
             "partial": partial,
         }
         return ExpertSetupClassificationSnapshot(
@@ -416,6 +427,46 @@ def _is_partial(
         or market_state.evidence_quality in {MarketEvidenceQuality.LOW, MarketEvidenceQuality.INSUFFICIENT}
         or (timestamp - fusion.timestamp).total_seconds() > maximum_source_age_seconds
         or (timestamp - market_state.timestamp).total_seconds() > maximum_source_age_seconds
+    )
+
+
+_NOISY_TRANSITIONS = {
+    frozenset((ExpertSetup.BREAKOUT, ExpertSetup.FAILED_BREAKOUT)),
+    frozenset((ExpertSetup.TREND_CONTINUATION, ExpertSetup.PULLBACK_CONTINUATION)),
+    frozenset((ExpertSetup.TREND_DAY, ExpertSetup.RANGE_DAY)),
+}
+
+
+def _should_preserve_previous_setup(
+    previous: ExpertSetupClassificationSnapshot,
+    candidate: ExpertSetup,
+    candidate_stability: SetupStability,
+    fusion: MultiTimeframeEvidenceSnapshot,
+    market_state: MarketStateSnapshot,
+    partial: bool,
+) -> bool:
+    if partial:
+        return False
+    if previous.primary_setup is candidate:
+        return False
+    if previous.primary_setup is ExpertSetup.NO_QUALITY_SETUP:
+        return False
+    if _is_material_setup_change(fusion, market_state):
+        return False
+    pair = frozenset((previous.primary_setup, candidate))
+    if pair in _NOISY_TRANSITIONS:
+        return True
+    return previous.setup_stability is SetupStability.STABLE and candidate_stability is not SetupStability.STABLE
+
+
+def _is_material_setup_change(
+    fusion: MultiTimeframeEvidenceSnapshot,
+    market_state: MarketStateSnapshot,
+) -> bool:
+    return (
+        fusion.evidence_conflict is EvidenceConflict.MAJOR
+        and fusion.conflict_score >= 50
+        and market_state.volatility_state is VolatilityState.VOLATILE
     )
 
 
