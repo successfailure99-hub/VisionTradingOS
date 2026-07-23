@@ -67,6 +67,11 @@ MARKET_STATE_PARTIAL = "market_state_partial"
 MARKET_STATE_INVALID = "market_state_invalid"
 MARKET_STATE_FAILED = "market_state_failed"
 MARKET_STATE_STATE_UPDATED = "market_state_state_updated"
+SETUP_CLASSIFICATION_UPDATED = "setup_classification_updated"
+SETUP_CLASSIFICATION_PARTIAL = "setup_classification_partial"
+SETUP_CLASSIFICATION_INVALID = "setup_classification_invalid"
+SETUP_CLASSIFICATION_FAILED = "setup_classification_failed"
+SETUP_CLASSIFICATION_STATE_UPDATED = "setup_classification_state_updated"
 
 # ==================================================
 # Market Context Events

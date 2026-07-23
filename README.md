@@ -36,6 +36,10 @@ Multi-Timeframe Evidence Fusion Engine V1 is the first deterministic intelligenc
 
 Market State Engine V1 consumes only the immutable Multi-Timeframe Evidence Fusion snapshot for one instrument. It describes the current market environment, such as trending, ranging, transitioning, expanding, compressing, volatile, quiet, or balanced. It publishes structural context and evidence quality through the EventBus without calculating indicators, inferring trade intent, or calling strategy, risk, confidence, execution, or broker layers.
 
+## Expert Setup Classification
+
+Expert Setup Classification Engine V1 consumes only Multi-Timeframe Evidence Fusion and Market State snapshots. It classifies observable setups such as trend continuation, pullback continuation, breakout, failed breakout, range day, trend day, compression, expansion, traps, reversal attempts, liquidity sweeps, or no-quality setup. It remains descriptive only and never produces trade direction, entries, exits, risk, confidence scoring, execution requests, or broker calls.
+
 ## Execution Modes
 
 - Safety mode: `ANALYSIS_ONLY` by default.

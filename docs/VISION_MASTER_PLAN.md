@@ -46,6 +46,7 @@ tests/ docs/
 -   Volume Context Engine
 -   Multi-Timeframe Evidence Fusion Engine
 -   Market State Engine
+-   Expert Setup Classification Engine
 
 ## TradingView Evidence Assembly Coordinator V1
 
@@ -212,6 +213,41 @@ Market State lifecycle:
   `MARKET_STATE_FAILED` only for unexpected engine failures.
 - Suppress duplicate publication when the observable Market State snapshot is
   unchanged.
+
+## Expert Setup Classification Engine V1
+
+Expert Setup Classification is a deterministic intelligence engine, not a
+strategy engine, risk engine, confidence engine, or execution component. It is
+owned once per `SymbolRuntime` instrument and consumes only the latest immutable
+`MultiTimeframeEvidenceSnapshot` and `MarketStateSnapshot`.
+
+Runtime ownership:
+
+- One `ExpertSetupClassificationEngine` per instrument runtime.
+- No market-data ownership, tick processing, historical downloads, indicator
+  calculations, trade decisions, confidence scoring, risk evaluation, or order
+  execution.
+- Price Action, CPR, Camarilla, VWAP, ADR, Moving Average Context, Momentum
+  Context, Volume Context, Option Chain, and Market Context remain upstream
+  responsibilities and are never consumed directly by Setup Classification.
+
+Event flow:
+
+Tick -> Market Data Engine -> Candle Engine -> closed Candle -> per-timeframe
+analysis engines -> TradingView Evidence Assembly Coordinator -> TradingView
+Evidence Mapping Engine -> Multi-Timeframe Evidence Fusion Engine -> Market
+State Engine -> Expert Setup Classification Engine.
+
+Setup Classification lifecycle:
+
+- Publish `SETUP_CLASSIFICATION_UPDATED` when complete Fusion and Market State
+  inputs produce a new observable setup classification.
+- Publish `SETUP_CLASSIFICATION_PARTIAL` when Fusion or Market State is missing,
+  stale, or partial.
+- Publish `SETUP_CLASSIFICATION_INVALID` for malformed setup input and
+  `SETUP_CLASSIFICATION_FAILED` only for unexpected engine failures.
+- Suppress duplicate publication when the observable setup classification
+  snapshot is unchanged.
 
 ## Current Milestone
 
