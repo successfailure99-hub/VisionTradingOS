@@ -913,6 +913,7 @@ class SymbolRuntime:
             market_state=self.market_state_engine.snapshot(),
             setup_classification=self.setup_classification_engine.snapshot(),
             chart_explanation=self.chart_explanation_engine.snapshot(),
+            ai_reasoning_v2=self.ai_reasoning_v2_engine.snapshot,
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:

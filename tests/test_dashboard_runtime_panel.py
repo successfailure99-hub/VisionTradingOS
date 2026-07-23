@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from dashboard.models import DashboardRuntimeView
+from dashboard.models import DashboardRuntimeComponentHealthView, DashboardRuntimeView
 from dashboard.panels.runtime_panel import RuntimePanel
 
 
@@ -63,3 +63,18 @@ def test_last_error_and_missing_timestamps_render_safely():
     assert panel._labels["Last Error"].text() == "boom"
     assert panel._labels["Started At"].text() == "-"
     assert panel._labels["Stopped At"].text() == "-"
+
+
+def test_runtime_component_health_renders_as_status_badges():
+    panel = RuntimePanel()
+    panel.render(
+        runtime_view(
+            component_health=(
+                DashboardRuntimeComponentHealthView("AI Reasoning", "Ready"),
+                DashboardRuntimeComponentHealthView("Fusion", "Waiting"),
+            ),
+        )
+    )
+    assert panel._labels["Health: AI Reasoning"].text() == "Ready"
+    assert panel._labels["Health: AI Reasoning"].property("status") == "positive"
+    assert panel._labels["Health: Fusion"].text() == "Waiting"

@@ -26,6 +26,7 @@ from dashboard.models import (
     DashboardOptionChainView,
     DashboardPriceActionView,
     DashboardPositionView,
+    DashboardRuntimeComponentHealthView,
     DashboardRuntimeView,
     DashboardStrategyView,
     DashboardView,
@@ -221,6 +222,42 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
         replay_outcome=_enum_text(getattr(replay, "final_outcome", None)),
         replay_findings=len(tuple(getattr(replay, "active_findings", ()) or ())),
         replay_failure_summary=getattr(replay, "failure_reason", None),
+        component_health=_runtime_component_health(orchestrator),
+    )
+
+
+def _runtime_component_health(orchestrator) -> tuple[DashboardRuntimeComponentHealthView, ...]:
+    snapshots = tuple(getattr(orchestrator, "runtime_snapshots", ()) or ())
+
+    def any_snapshot(field_name: str) -> bool:
+        return any(getattr(snapshot, field_name, None) is not None for snapshot in snapshots)
+
+    def ready_row(name: str, ready: bool, detail: str = "-") -> DashboardRuntimeComponentHealthView:
+        return DashboardRuntimeComponentHealthView(
+            name=name,
+            status="Ready" if ready else "Waiting",
+            detail=detail,
+        )
+
+    return (
+        ready_row("Candle", any_snapshot("latest_candle")),
+        ready_row("Market Data", bool(getattr(orchestrator, "shared_market_data_ready", False))),
+        ready_row("CPR", any_snapshot("cpr")),
+        ready_row("Camarilla", any_snapshot("camarilla")),
+        ready_row("VWAP", any_snapshot("vwap")),
+        ready_row("ADR", any_snapshot("adr")),
+        ready_row("Price Action", any_snapshot("price_action")),
+        ready_row("Option Chain", any_snapshot("option_chain")),
+        ready_row("TradingView Evidence", any_snapshot("tradingview_evidence")),
+        ready_row("Fusion", any_snapshot("multi_timeframe_evidence")),
+        ready_row("Market State", any_snapshot("market_state")),
+        ready_row("Expert Setup", any_snapshot("setup_classification")),
+        ready_row("Chart Explanation", any_snapshot("chart_explanation")),
+        ready_row("AI Reasoning", any_snapshot("ai_reasoning_v2") or any_snapshot("ai_reasoning")),
+        ready_row("Strategy", any_snapshot("strategy")),
+        ready_row("Risk", any_snapshot("risk")),
+        ready_row("Lifecycle", bool(snapshots)),
+        ready_row("Journal", bool(getattr(orchestrator, "shared_trade_journal_ready", False))),
     )
 
 

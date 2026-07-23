@@ -21,6 +21,20 @@ def _require_aware(value: datetime | None, field_name: str) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class DashboardRuntimeComponentHealthView:
+    name: str
+    status: str
+    detail: str = "-"
+
+    def __post_init__(self) -> None:
+        for field_name in ("name", "status", "detail"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{field_name} must be non-empty text")
+            object.__setattr__(self, field_name, value.strip())
+
+
+@dataclass(frozen=True, slots=True)
 class DashboardRuntimeView:
     application_status: str
     broker_mode: str
@@ -56,6 +70,14 @@ class DashboardRuntimeView:
     replay_outcome: str = "-"
     replay_findings: int = 0
     replay_failure_summary: str | None = None
+    component_health: tuple[DashboardRuntimeComponentHealthView, ...] = ()
+
+    def __post_init__(self) -> None:
+        rows = tuple(self.component_health)
+        for row in rows:
+            if not isinstance(row, DashboardRuntimeComponentHealthView):
+                raise TypeError("component_health must contain DashboardRuntimeComponentHealthView values")
+        object.__setattr__(self, "component_health", rows)
 
 
 @dataclass(frozen=True, slots=True)

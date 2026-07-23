@@ -66,6 +66,7 @@ def test_runtime_executes_ai_reasoning_v2_after_chart_explanation():
 
     assert runtime.chart_explanation_engine.snapshot().last_snapshot is not None
     assert runtime.ai_reasoning_v2_engine.snapshot is not None
+    assert runtime.snapshot().ai_reasoning_v2 is runtime.ai_reasoning_v2_engine.snapshot
     assert events.index("chart_explanation") < events.index("ai_reasoning_v2")
 
 

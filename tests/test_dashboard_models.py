@@ -12,6 +12,7 @@ from dashboard.models import (
     DashboardMarketView,
     DashboardPositionView,
     DashboardPriceActionView,
+    DashboardRuntimeComponentHealthView,
     DashboardRuntimeView,
     DashboardStrategyView,
     DashboardView,
@@ -94,3 +95,26 @@ def test_models_do_not_contain_engine_objects():
     runtime = DashboardRuntimeView("Created", "Dry Run", "Analysis Only", ("NIFTY",), False, False, 0, 0, 0, None, None, None)
     values = tuple(getattr(runtime, field.name) for field in fields(runtime))
     assert all("Engine" not in type(value).__name__ for value in values)
+
+
+def test_runtime_component_health_rows_are_frozen_and_tupled():
+    health = DashboardRuntimeComponentHealthView("AI Reasoning", "Ready", "V2")
+    runtime = DashboardRuntimeView(
+        "Created",
+        "Dry Run",
+        "Analysis Only",
+        ("NIFTY",),
+        False,
+        False,
+        0,
+        0,
+        0,
+        None,
+        None,
+        None,
+        component_health=[health],
+    )
+
+    assert runtime.component_health == (health,)
+    with pytest.raises(FrozenInstanceError):
+        health.status = "Waiting"

@@ -2,7 +2,9 @@
 Tests for dashboard presenters.
 """
 
+from dataclasses import replace
 from datetime import date, datetime
+from pathlib import Path
 
 from application.enums import ExecutionSafetyMode, RuntimeInstrument, RuntimeStatus
 from application.lifecycle_manager import LifecycleSnapshot
@@ -237,3 +239,36 @@ def test_runtime_view_maps_lifecycle_metadata():
     assert view.application_status == "Running"
     assert view.configured_instruments == ("NIFTY",)
     assert view.market_data_ready is True
+
+
+def test_runtime_view_exposes_deterministic_pipeline_health_from_snapshots():
+    runtime = replace(
+        full_runtime(),
+        tradingview_evidence=object(),
+        adr=object(),
+        multi_timeframe_evidence=object(),
+        market_state=object(),
+        setup_classification=object(),
+        chart_explanation=object(),
+        ai_reasoning_v2=object(),
+    )
+    health = {item.name: item.status for item in build_runtime_view(lifecycle(runtime)).component_health}
+
+    assert health["Candle"] == "Ready"
+    assert health["Market Data"] == "Ready"
+    assert health["TradingView Evidence"] == "Ready"
+    assert health["ADR"] == "Ready"
+    assert health["Fusion"] == "Ready"
+    assert health["Market State"] == "Ready"
+    assert health["Expert Setup"] == "Ready"
+    assert health["Chart Explanation"] == "Ready"
+    assert health["AI Reasoning"] == "Ready"
+    assert health["Lifecycle"] == "Ready"
+
+
+def test_dashboard_package_has_no_market_context_v2_dependency():
+    dashboard_root = Path(__file__).resolve().parents[1] / "dashboard"
+    source = "\n".join(path.read_text(encoding="utf-8") for path in dashboard_root.rglob("*.py"))
+
+    assert "MarketContextV2" not in source
+    assert "market_context_v2" not in source

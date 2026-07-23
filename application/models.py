@@ -13,6 +13,7 @@ from core.models.building_candle import BuildingCandle
 from core.models.candle import Candle
 from core.models.tick import Tick
 from engines.ai_reasoning.models import AIReasoningState
+from engines.ai_reasoning_v2.models import AIReasoningV2Snapshot
 from engines.ai_confidence_calibration.models import ConfidenceCalibrationSnapshot
 from engines.adr.models import ADRDiagnosticSnapshot, ADRSnapshot
 from engines.camarilla.levels import CamarillaLevels
@@ -282,6 +283,7 @@ class RuntimeSnapshot:
     market_state: MarketStateEngineSnapshot | None = None
     setup_classification: ExpertSetupClassificationEngineSnapshot | None = None
     chart_explanation: ChartExplanationEngineSnapshot | None = None
+    ai_reasoning_v2: AIReasoningV2Snapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)

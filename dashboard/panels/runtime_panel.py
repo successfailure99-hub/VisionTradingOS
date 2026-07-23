@@ -10,6 +10,29 @@ from dashboard.models import DashboardRuntimeView
 from dashboard.widgets import FieldGrid, MetricCard, StatusBadge
 
 
+RUNTIME_COMPONENT_HEALTH_LABELS = (
+    "Candle",
+    "Market Data",
+    "CPR",
+    "Camarilla",
+    "VWAP",
+    "ADR",
+    "Price Action",
+    "Option Chain",
+    "TradingView Evidence",
+    "Fusion",
+    "Market State",
+    "Expert Setup",
+    "Chart Explanation",
+    "AI Reasoning",
+    "Strategy",
+    "Risk",
+    "Lifecycle",
+    "Journal",
+)
+RUNTIME_COMPONENT_HEALTH_FIELDS = tuple(f"Health: {label}" for label in RUNTIME_COMPONENT_HEALTH_LABELS)
+
+
 class RuntimePanel(QGroupBox):
     def __init__(self, parent=None):
         super().__init__("Runtime", parent)
@@ -60,6 +83,7 @@ class RuntimePanel(QGroupBox):
                 "Replay Outcome",
                 "Replay Findings",
                 "Replay Failure",
+                *RUNTIME_COMPONENT_HEALTH_FIELDS,
             )
         )
         layout.addWidget(grid)
@@ -73,6 +97,10 @@ class RuntimePanel(QGroupBox):
         grid.labels["Market Data"].deleteLater()
         detail_grid.replaceWidget(grid.labels["Journal"], self._labels["Journal"])
         grid.labels["Journal"].deleteLater()
+        for field in RUNTIME_COMPONENT_HEALTH_FIELDS:
+            self._labels[field] = StatusBadge()
+            detail_grid.replaceWidget(grid.labels[field], self._labels[field])
+            grid.labels[field].deleteLater()
 
     def render(self, view: DashboardRuntimeView) -> None:
         self._cards["Application"].set_value(view.application_status)
@@ -108,3 +136,8 @@ class RuntimePanel(QGroupBox):
         self._labels["Replay Outcome"].setText(formatters.text(view.replay_outcome))
         self._labels["Replay Findings"].setText(formatters.integer(view.replay_findings))
         self._labels["Replay Failure"].setText(formatters.text(view.replay_failure_summary))
+        health = {item.name: item for item in view.component_health}
+        for name, field in zip(RUNTIME_COMPONENT_HEALTH_LABELS, RUNTIME_COMPONENT_HEALTH_FIELDS):
+            item = health.get(name)
+            status = item.status if item is not None else "Waiting"
+            self._labels[field].set_status_text(status)
