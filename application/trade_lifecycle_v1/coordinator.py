@@ -26,11 +26,10 @@ from core.events import (
     TRADE_LIFECYCLE_V1_READY,
     TRADE_LIFECYCLE_V1_UPDATED,
 )
-from engines.ai_reasoning_v2 import AIReasoningV2Engine
-from engines.market_context_v2.models import SUPPORTED_INSTRUMENTS
 from engines.position_management_v1 import PositionChange, PositionDecision, PositionExitReason, PositionManagementV1Engine, PositionPriceUpdate
-from engines.risk_management_v2 import RiskDecision, RiskManagementV2Engine, RiskManagementV2Input
-from engines.strategy_decision_v2 import StrategyAction, StrategyDecisionV2Engine, StrategyDecisionV2Input
+from engines.risk_management_v2 import RiskDecision
+from engines.risk_management_v2.models import SUPPORTED_INSTRUMENTS
+from engines.strategy_decision_v2 import StrategyAction
 
 
 class TradeLifecycleCoordinatorV1:
@@ -38,9 +37,6 @@ class TradeLifecycleCoordinatorV1:
         self,
         *,
         instrument: Instrument,
-        ai_reasoning_engine: AIReasoningV2Engine,
-        strategy_engine: StrategyDecisionV2Engine,
-        risk_engine: RiskManagementV2Engine,
         execution_runtime: ExecutionRuntimeV1,
         position_engine: PositionManagementV1Engine,
         configuration: TradeLifecycleV1Configuration | None = None,
@@ -49,23 +45,14 @@ class TradeLifecycleCoordinatorV1:
     ):
         if instrument not in SUPPORTED_INSTRUMENTS:
             raise ValueError("instrument must be NIFTY, BANKNIFTY or SENSEX")
-        if not isinstance(ai_reasoning_engine, AIReasoningV2Engine):
-            raise TypeError("ai_reasoning_engine must be AIReasoningV2Engine")
-        if not isinstance(strategy_engine, StrategyDecisionV2Engine):
-            raise TypeError("strategy_engine must be StrategyDecisionV2Engine")
-        if not isinstance(risk_engine, RiskManagementV2Engine):
-            raise TypeError("risk_engine must be RiskManagementV2Engine")
         if not isinstance(execution_runtime, ExecutionRuntimeV1):
             raise TypeError("execution_runtime must be ExecutionRuntimeV1")
         if not isinstance(position_engine, PositionManagementV1Engine):
             raise TypeError("position_engine must be PositionManagementV1Engine")
-        for dependency in (ai_reasoning_engine, strategy_engine, risk_engine, execution_runtime, position_engine):
+        for dependency in (execution_runtime, position_engine):
             if dependency.instrument is not instrument:
                 raise ValueError("all trade lifecycle dependencies must use the same instrument")
         self.instrument = instrument
-        self._ai_reasoning_engine = ai_reasoning_engine
-        self._strategy_engine = strategy_engine
-        self._risk_engine = risk_engine
         self._execution_runtime = execution_runtime
         self._position_engine = position_engine
         self._configuration = configuration or TradeLifecycleV1Configuration()
@@ -77,8 +64,6 @@ class TradeLifecycleCoordinatorV1:
         self._outcome = TradeLifecycleOutcome.IN_PROGRESS
         self._change = TradeLifecycleChange.INITIAL
         self._block_source = TradeLifecycleBlockSource.NONE
-        self._market_context = None
-        self._ai_reasoning = None
         self._strategy_decision = None
         self._risk_decision = None
         self._execution_result = None
@@ -99,18 +84,6 @@ class TradeLifecycleCoordinatorV1:
         self._last_stopped_at = None
         self._last_processed_at = None
         self._last_error = None
-
-    @property
-    def ai_reasoning_engine(self) -> AIReasoningV2Engine:
-        return self._ai_reasoning_engine
-
-    @property
-    def strategy_engine(self) -> StrategyDecisionV2Engine:
-        return self._strategy_engine
-
-    @property
-    def risk_engine(self) -> RiskManagementV2Engine:
-        return self._risk_engine
 
     @property
     def execution_runtime(self) -> ExecutionRuntimeV1:
@@ -172,7 +145,7 @@ class TradeLifecycleCoordinatorV1:
         with self._lock:
             if self._status is not TradeLifecycleStatus.RUNNING:
                 raise RuntimeError("trade lifecycle coordinator must be running")
-            if request.market_context.instrument is not self.instrument:
+            if request.instrument is not self.instrument:
                 raise ValueError("request instrument mismatch")
             if self._last_request == request and self._last_request_snapshot is not None:
                 if self._execution_result is not None or self._position_result is not None:
@@ -183,30 +156,15 @@ class TradeLifecycleCoordinatorV1:
             if self._configuration.require_no_active_position_before_new_trade and self._position_engine.snapshot().has_open_position:
                 raise RuntimeError("active position blocks new lifecycle processing")
             self._processing_count += 1
-            self._market_context = request.market_context
+            self._strategy_decision = request.strategy_decision
+            self._risk_decision = request.risk_decision
             self._stage_records = ()
-            self._record(TradeLifecycleStage.CONTEXT_RECEIVED, TradeLifecycleOutcome.IN_PROGRESS, "Market Context V2 snapshot received.")
-            self._ai_reasoning = self._ai_reasoning_engine.process(request.market_context)
-            self._record(TradeLifecycleStage.REASONING_COMPLETED, TradeLifecycleOutcome.IN_PROGRESS, "AI Reasoning V2 completed.")
-            strategy_input = StrategyDecisionV2Input(self._ai_reasoning, request.current_price, request.camarilla, request.cpr, request.vwap)
-            self._strategy_decision = self._strategy_engine.process(strategy_input)
+            self._record(TradeLifecycleStage.CONTEXT_RECEIVED, TradeLifecycleOutcome.IN_PROGRESS, "Finalized strategy and risk decisions received.")
             self._record(TradeLifecycleStage.STRATEGY_COMPLETED, TradeLifecycleOutcome.IN_PROGRESS, "Strategy Decision V2 completed.")
             gate = self._strategy_gate()
             if gate is not None:
                 snapshot = self._finish_request(request, *gate)
                 return snapshot
-            risk_input = RiskManagementV2Input(
-                self._strategy_decision,
-                request.account_risk_state,
-                request.session_risk_state,
-                request.instrument_exposure_state,
-                request.proposed_entry_price,
-                request.proposed_invalidation_price,
-                request.proposed_objective_price,
-                request.quantity_step,
-                request.contract_multiplier,
-            )
-            self._risk_decision = self._risk_engine.process(risk_input)
             self._record(TradeLifecycleStage.RISK_COMPLETED, TradeLifecycleOutcome.IN_PROGRESS, "Risk Management V2 completed.")
             gate = self._risk_gate()
             if gate is not None:
@@ -288,8 +246,6 @@ class TradeLifecycleCoordinatorV1:
             outcome=self._outcome,
             change=self._change,
             block_source=self._block_source,
-            market_context=self._market_context,
-            ai_reasoning=self._ai_reasoning,
             strategy_decision=self._strategy_decision,
             risk_decision=self._risk_decision,
             execution_result=self._execution_result,

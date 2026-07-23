@@ -28,7 +28,7 @@ class TradeLifecycleRoutingRequest:
             raise ValueError("instrument must be NIFTY, BANKNIFTY or SENSEX")
         if not isinstance(self.lifecycle_request, TradeLifecycleV1Request):
             raise TypeError("lifecycle_request must be TradeLifecycleV1Request")
-        if self.lifecycle_request.market_context.instrument is not self.instrument:
+        if self.lifecycle_request.instrument is not self.instrument:
             raise ValueError("routing instrument must match lifecycle request")
 
 
