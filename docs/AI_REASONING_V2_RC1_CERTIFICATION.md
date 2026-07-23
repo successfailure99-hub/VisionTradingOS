@@ -61,7 +61,8 @@ Findings:
 - `LegacyAI`: no occurrences.
 - `TODO`: no source occurrences.
 - `FIXME`: no source occurrences.
-- `deprecated`: one generated tree entry in `repository_tree.txt`; no source dependency.
+- `deprecated`: no active source dependency was certified. Generated repository
+  tree exports are not part of the tracked V1 repository boundary.
 - `MarketContextV2`: limited to the legacy `engines/market_context_v2` package, its tests, legacy event constants in `core/events.py`, and documentation notes describing migration history.
 - `market_context`: still appears in the canonical V1 Market Context evidence engine, TradingView evidence assembly, dashboard presentation, tests, and one lifecycle integration compatibility field named `require_ready_market_context`. That field is configuration naming only; it does not import or consume MarketContextV2.
 

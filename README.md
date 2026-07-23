@@ -64,6 +64,8 @@ Evidence Engines
 ```
 
 The RC1 certification report is maintained in `docs/AI_REASONING_V2_RC1_CERTIFICATION.md`.
+The active, compatibility, and legacy-tested package boundaries are maintained
+in `docs/V1_RELEASE_BOUNDARY.md`.
 
 ## Execution Modes
 

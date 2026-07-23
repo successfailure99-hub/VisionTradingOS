@@ -320,22 +320,24 @@ Migration contract:
 - TradeJournalV1 records lifecycle outcomes and does not participate in
   reasoning, strategy, risk, or lifecycle state management.
 
-## Current Milestone
+## Current Release Boundary
 
-Milestone 7: Candle Engine V1
+Version 1 is a protected deterministic analysis workstation. It includes the
+evidence, intelligence, explanation, AI Reasoning V2, strategy-decision, risk,
+lifecycle, journal, paper-trading, replay, backtest, live-validation, dashboard,
+and read-only Zerodha market-data layers required for the current architecture.
 
-Goals: - Receive Tick - Build 1-minute candle - Publish CANDLE_OPENED -
-Publish CANDLE_UPDATED - Publish CANDLE_CLOSED - Unit Test - Git Commit
+Live broker order placement is disabled by design. Broker holdings, broker
+position synchronization, and broker margin synchronization are not complete V1
+capabilities. Dashboard views are functional but remain a partial product
+surface. Voice support remains partial/legacy.
 
-## Next Milestones
+The active and retained compatibility package boundaries are documented in
+`docs/V1_RELEASE_BOUNDARY.md`.
 
-1.  Candle Engine
-2.  VWAP Engine
-3.  Price Action Engine
-4.  Market Context Engine
-5.  Option Chain Engine
-6.  AI Reasoning Engine
-7.  Risk Manager
-8.  Execution Manager
-9.  Dashboard
-10. Live Trading
+## Future Milestones
+
+Future milestones should extend the canonical architecture without introducing
+duplicate engines or reverse dependencies. Known future areas are Price Action
+V2, Option Chain V2, dashboard/runtime exposure polish, broker synchronization,
+and product-surface hardening.

@@ -12,6 +12,8 @@ venv/
 
 # Environment Variables
 .env
+.env.*
+!.env.example
 
 # IDE
 .vscode/
@@ -30,6 +32,7 @@ logs/
 
 # Coverage
 .coverage
+coverage.xml
 htmlcov/
 
 # Distribution
@@ -39,3 +42,7 @@ dist/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Generated audit/export artifacts
+/repository_tree.txt
+/price_action_engine_v1.patch
