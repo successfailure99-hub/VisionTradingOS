@@ -72,6 +72,11 @@ SETUP_CLASSIFICATION_PARTIAL = "setup_classification_partial"
 SETUP_CLASSIFICATION_INVALID = "setup_classification_invalid"
 SETUP_CLASSIFICATION_FAILED = "setup_classification_failed"
 SETUP_CLASSIFICATION_STATE_UPDATED = "setup_classification_state_updated"
+CHART_EXPLANATION_UPDATED = "chart_explanation_updated"
+CHART_EXPLANATION_PARTIAL = "chart_explanation_partial"
+CHART_EXPLANATION_INVALID = "chart_explanation_invalid"
+CHART_EXPLANATION_FAILED = "chart_explanation_failed"
+CHART_EXPLANATION_STATE_UPDATED = "chart_explanation_state_updated"
 
 # ==================================================
 # Market Context Events

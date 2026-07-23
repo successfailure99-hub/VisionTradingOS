@@ -47,6 +47,7 @@ tests/ docs/
 -   Multi-Timeframe Evidence Fusion Engine
 -   Market State Engine
 -   Expert Setup Classification Engine
+-   Chart Explanation Engine
 
 ## TradingView Evidence Assembly Coordinator V1
 
@@ -248,6 +249,42 @@ Setup Classification lifecycle:
   `SETUP_CLASSIFICATION_FAILED` only for unexpected engine failures.
 - Suppress duplicate publication when the observable setup classification
   snapshot is unchanged.
+
+## Chart Explanation Engine V1
+
+Chart Explanation is a deterministic explanation engine, not an AI engine,
+strategy engine, signal generator, risk engine, or execution component. It is
+owned once per `SymbolRuntime` instrument and consumes only immutable
+`MultiTimeframeEvidenceSnapshot`, `MarketStateSnapshot`, and
+`ExpertSetupClassificationSnapshot` values.
+
+Runtime ownership:
+
+- One `ChartExplanationEngine` per instrument runtime.
+- No market-data ownership, tick processing, historical downloads, indicator
+  calculations, trade decisions, confidence scoring, risk evaluation, or order
+  execution.
+- Chart Explanation translates deterministic intelligence into fixed,
+  reproducible text for downstream AI consumers. It never invents market
+  understanding and never consumes raw evidence engines directly.
+
+Event flow:
+
+Tick -> Market Data Engine -> Candle Engine -> closed Candle -> per-timeframe
+analysis engines -> TradingView Evidence Assembly Coordinator -> TradingView
+Evidence Mapping Engine -> Multi-Timeframe Evidence Fusion Engine -> Market
+State Engine -> Expert Setup Classification Engine -> Chart Explanation Engine.
+
+Chart Explanation lifecycle:
+
+- Publish `CHART_EXPLANATION_UPDATED` when complete intelligence inputs produce
+  a new observable explanation.
+- Publish `CHART_EXPLANATION_PARTIAL` when Fusion, Market State, or Expert
+  Setup Classification is missing, stale, or partial.
+- Publish `CHART_EXPLANATION_INVALID` for malformed explanation input and
+  `CHART_EXPLANATION_FAILED` only for unexpected engine failures.
+- Suppress duplicate publication when the observable explanation snapshot is
+  unchanged.
 
 ## Current Milestone
 

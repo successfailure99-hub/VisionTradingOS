@@ -16,6 +16,7 @@ from engines.ai_reasoning.models import AIReasoningState
 from engines.ai_confidence_calibration.models import ConfidenceCalibrationSnapshot
 from engines.adr.models import ADRDiagnosticSnapshot, ADRSnapshot
 from engines.camarilla.levels import CamarillaLevels
+from engines.chart_explanation.models import ChartExplanationEngineSnapshot
 from engines.cpr.levels import CPRLevels
 from engines.market_context.models import MarketContextState
 from engines.moving_average_context.models import (
@@ -280,6 +281,7 @@ class RuntimeSnapshot:
     multi_timeframe_evidence: MultiTimeframeEvidenceFusionSnapshot | None = None
     market_state: MarketStateEngineSnapshot | None = None
     setup_classification: ExpertSetupClassificationEngineSnapshot | None = None
+    chart_explanation: ChartExplanationEngineSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
