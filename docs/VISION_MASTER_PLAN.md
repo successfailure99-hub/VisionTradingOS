@@ -286,6 +286,32 @@ Chart Explanation lifecycle:
 - Suppress duplicate publication when the observable explanation snapshot is
   unchanged.
 
+## AI Reasoning V2 Model Contract
+
+AI Reasoning V2 is the downstream consumer of deterministic market
+intelligence. Its model contract is no longer based on `MarketContextV2Snapshot`
+and does not consume raw indicator engines.
+
+Model inputs:
+
+- `MultiTimeframeEvidenceSnapshot`
+- `MarketStateSnapshot`
+- `ExpertSetupClassificationSnapshot`
+- `ChartExplanationSnapshot`
+- optional previous `AIReasoningV2Snapshot`
+
+Model contract:
+
+- All upstream snapshots must be immutable deterministic intelligence snapshots.
+- All upstream snapshots must share the same instrument, trading date, and
+  timezone-aware timestamp.
+- AI Reasoning V2 snapshots store deterministic upstream intelligence references
+  and source fingerprints instead of legacy Market Context V2 state.
+- AI Reasoning V2 confidence is not inherited directly from Market Context V2.
+- Runtime, engine, interpreter, composer, strategy, lifecycle, risk, and journal
+  migration are intentionally deferred to later AI Reasoning V2 migration
+  stages.
+
 ## Current Milestone
 
 Milestone 7: Candle Engine V1
