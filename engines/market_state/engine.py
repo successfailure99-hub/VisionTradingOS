@@ -59,7 +59,7 @@ class MarketStateEngine(BaseEngine):
         self._maximum_fusion_age_seconds = maximum_fusion_age_seconds
         self._lifecycle_state = MarketStateLifecycle.CREATED
         self._last_snapshot: MarketStateSnapshot | None = None
-        self._last_fingerprint: str | None = None
+        self._last_observable_fingerprint: str | None = None
         self._evaluation_count = 0
         self._updated_count = 0
         self._partial_count = 0
@@ -106,7 +106,7 @@ class MarketStateEngine(BaseEngine):
                     fusion.evidence_completeness is not EvidenceCompleteness.COMPLETE
                 )
                 snapshot = self._build_snapshot(fusion, timestamp, partial=partial)
-            if snapshot.source_fingerprint == self._last_fingerprint and self._last_snapshot is not None:
+            if snapshot.source_fingerprint == self._last_observable_fingerprint and self._last_snapshot is not None:
                 return self._last_snapshot
         except (TypeError, ValueError):
             if self._last_error is None:
@@ -122,7 +122,7 @@ class MarketStateEngine(BaseEngine):
             raise
 
         self._last_snapshot = snapshot
-        self._last_fingerprint = snapshot.source_fingerprint
+        self._last_observable_fingerprint = snapshot.source_fingerprint
         self._data = snapshot
         self._last_error = None
         self._evaluation_count += 1
@@ -153,7 +153,7 @@ class MarketStateEngine(BaseEngine):
         super().clear()
         self._lifecycle_state = MarketStateLifecycle.READY
         self._last_snapshot = None
-        self._last_fingerprint = None
+        self._last_observable_fingerprint = None
         self._evaluation_count = 0
         self._updated_count = 0
         self._partial_count = 0
@@ -178,7 +178,7 @@ class MarketStateEngine(BaseEngine):
         payload = {
             "instrument": self._instrument.value,
             "missing": "multi_timeframe_evidence",
-            "timestamp": timestamp.isoformat(),
+            "partial": True,
         }
         return MarketStateSnapshot(
             trading_date=timestamp.date(),
@@ -207,9 +207,19 @@ class MarketStateEngine(BaseEngine):
         stability = _market_stability(fusion, market_state, partial)
         volatility = _volatility_state(fusion, market_state)
         confidence = _confidence(quality, stability)
+        if self._last_snapshot is not None and _should_preserve_previous_state(
+            self._last_snapshot,
+            market_state,
+            fusion,
+            partial,
+        ):
+            market_state = self._last_snapshot.market_state
+            phase = self._last_snapshot.market_phase
+            stability = self._last_snapshot.market_stability
+            volatility = self._last_snapshot.volatility_state
+            quality = self._last_snapshot.evidence_quality
+            confidence = self._last_snapshot.confidence_level
         payload = {
-            "fusion": fusion.source_fingerprint,
-            "trigger": timestamp.isoformat(),
             "market_state": market_state.value,
             "market_phase": phase.value,
             "stability": stability.value,
@@ -320,6 +330,25 @@ def _confidence(
     if quality in {MarketEvidenceQuality.HIGH, MarketEvidenceQuality.MEDIUM}:
         return StructuralConfidence.MEDIUM_STRUCTURE
     return StructuralConfidence.LOW_STRUCTURE
+
+
+def _should_preserve_previous_state(
+    previous: MarketStateSnapshot,
+    candidate: MarketState,
+    fusion: MultiTimeframeEvidenceSnapshot,
+    partial: bool,
+) -> bool:
+    if partial:
+        return False
+    if previous.evidence_quality is MarketEvidenceQuality.INSUFFICIENT:
+        return False
+    if previous.market_state not in {MarketState.TRENDING, MarketState.RANGING}:
+        return False
+    if candidate not in {MarketState.TRANSITION, MarketState.EXPANSION, MarketState.COMPRESSION}:
+        return False
+    if fusion.evidence_conflict is EvidenceConflict.MAJOR:
+        return False
+    return True
 
 
 def _is_stale(
