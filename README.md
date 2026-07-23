@@ -40,6 +40,10 @@ Market State Engine V1 consumes only the immutable Multi-Timeframe Evidence Fusi
 
 Expert Setup Classification Engine V1 consumes only Multi-Timeframe Evidence Fusion and Market State snapshots. It classifies observable setups such as trend continuation, pullback continuation, breakout, failed breakout, range day, trend day, compression, expansion, traps, reversal attempts, liquidity sweeps, or no-quality setup. It remains descriptive only and never produces trade direction, entries, exits, risk, confidence scoring, execution requests, or broker calls.
 
+## Chart Explanation
+
+Chart Explanation Engine V1 consumes only Multi-Timeframe Evidence Fusion, Market State, and Expert Setup Classification snapshots. It converts deterministic intelligence into stable human-readable explanations: headline, market summary, setup explanation, supporting evidence, conflicting evidence, and caution notes. It uses fixed wording templates, publishes through the EventBus, and never calculates indicators, creates signals, or recommends orders.
+
 ## Execution Modes
 
 - Safety mode: `ANALYSIS_ONLY` by default.

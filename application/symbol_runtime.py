@@ -14,6 +14,7 @@ from engines.ai_confidence_calibration.engine import AIConfidenceCalibrationEngi
 from engines.ai_confidence_calibration.models import ConfidenceCalibrationRequest
 from engines.camarilla.camarilla_engine import CamarillaEngine
 from engines.camarilla.levels import CamarillaLevels
+from engines.chart_explanation.engine import ChartExplanationEngine
 from engines.candle.candle_engine import CandleEngine
 from engines.cpr.cpr_engine import CPREngine
 from engines.cpr.levels import CPRLevels
@@ -251,6 +252,10 @@ class SymbolRuntime:
             event_bus,
             instrument=instrument,
         )
+        self.chart_explanation_engine = ChartExplanationEngine(
+            event_bus,
+            instrument=instrument,
+        )
 
     @property
     def instrument(self) -> RuntimeInstrument:
@@ -276,6 +281,7 @@ class SymbolRuntime:
         self.multi_timeframe_evidence_fusion_engine.start()
         self.market_state_engine.start()
         self.setup_classification_engine.start()
+        self.chart_explanation_engine.start()
         self.execution_policy_engine.start()
         self.trade_authorization_engine.start()
         self.paper_execution_coordinator.start()
@@ -289,6 +295,7 @@ class SymbolRuntime:
         self.paper_execution_coordinator.stop()
         self.trade_authorization_engine.stop()
         self.execution_policy_engine.stop()
+        self.chart_explanation_engine.stop()
         self.setup_classification_engine.stop()
         self.market_state_engine.stop()
         self.multi_timeframe_evidence_fusion_engine.stop()
@@ -817,6 +824,7 @@ class SymbolRuntime:
         self.multi_timeframe_evidence_fusion_engine.reset()
         self.market_state_engine.reset()
         self.setup_classification_engine.reset()
+        self.chart_explanation_engine.reset()
         self.risk_engine.reset()
         self.execution_policy_engine.reset_session()
         self.trade_authorization_engine.reset()
@@ -898,6 +906,7 @@ class SymbolRuntime:
             multi_timeframe_evidence=self.multi_timeframe_evidence_fusion_engine.snapshot(),
             market_state=self.market_state_engine.snapshot(),
             setup_classification=self.setup_classification_engine.snapshot(),
+            chart_explanation=self.chart_explanation_engine.snapshot(),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
@@ -1022,7 +1031,8 @@ class SymbolRuntime:
         try:
             fusion = self.multi_timeframe_evidence_fusion_engine.fuse(snapshots, timestamp=timestamp)
             market_state = self.market_state_engine.process(fusion, timestamp=timestamp)
-            self.setup_classification_engine.process(fusion, market_state, timestamp=timestamp)
+            setup = self.setup_classification_engine.process(fusion, market_state, timestamp=timestamp)
+            self.chart_explanation_engine.process(fusion, market_state, setup, timestamp=timestamp)
         except Exception:
             return
 
