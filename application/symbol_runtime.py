@@ -39,6 +39,7 @@ from engines.position.models import PositionFill, PositionMark, PositionState
 from engines.position.position_engine import PositionEngine
 from engines.execution_reconciliation.engine import ExecutionReconciliationEngine
 from engines.execution_reconciliation.models import ExecutionReconciliationRequest, ExecutionReconciliationReport
+from engines.expert_setup_classification.engine import ExpertSetupClassificationEngine
 from engines.shadow_trading_session.engine import ShadowTradingSessionEngine
 from engines.shadow_trading_session.models import ShadowTradingSessionRequest, ShadowTradingSessionSummary
 from engines.price_action.price_action_engine import PriceActionEngine
@@ -246,6 +247,10 @@ class SymbolRuntime:
             event_bus,
             instrument=instrument,
         )
+        self.setup_classification_engine = ExpertSetupClassificationEngine(
+            event_bus,
+            instrument=instrument,
+        )
 
     @property
     def instrument(self) -> RuntimeInstrument:
@@ -270,6 +275,7 @@ class SymbolRuntime:
             engine.start()
         self.multi_timeframe_evidence_fusion_engine.start()
         self.market_state_engine.start()
+        self.setup_classification_engine.start()
         self.execution_policy_engine.start()
         self.trade_authorization_engine.start()
         self.paper_execution_coordinator.start()
@@ -283,6 +289,7 @@ class SymbolRuntime:
         self.paper_execution_coordinator.stop()
         self.trade_authorization_engine.stop()
         self.execution_policy_engine.stop()
+        self.setup_classification_engine.stop()
         self.market_state_engine.stop()
         self.multi_timeframe_evidence_fusion_engine.stop()
         for engine in self.tradingview_evidence_engines.values():
@@ -809,6 +816,7 @@ class SymbolRuntime:
             coordinator.reset()
         self.multi_timeframe_evidence_fusion_engine.reset()
         self.market_state_engine.reset()
+        self.setup_classification_engine.reset()
         self.risk_engine.reset()
         self.execution_policy_engine.reset_session()
         self.trade_authorization_engine.reset()
@@ -889,6 +897,7 @@ class SymbolRuntime:
             volume_context_diagnostics=self.volume_context_engine.snapshot(),
             multi_timeframe_evidence=self.multi_timeframe_evidence_fusion_engine.snapshot(),
             market_state=self.market_state_engine.snapshot(),
+            setup_classification=self.setup_classification_engine.snapshot(),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
@@ -1012,7 +1021,8 @@ class SymbolRuntime:
             return
         try:
             fusion = self.multi_timeframe_evidence_fusion_engine.fuse(snapshots, timestamp=timestamp)
-            self.market_state_engine.process(fusion, timestamp=timestamp)
+            market_state = self.market_state_engine.process(fusion, timestamp=timestamp)
+            self.setup_classification_engine.process(fusion, market_state, timestamp=timestamp)
         except Exception:
             return
 

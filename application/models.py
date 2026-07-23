@@ -28,6 +28,7 @@ from engines.momentum_context.models import (
     MomentumContextProfile,
     MomentumContextSnapshot,
 )
+from engines.expert_setup_classification.models import ExpertSetupClassificationEngineSnapshot
 from engines.market_state.models import MarketStateEngineSnapshot
 from engines.multi_timeframe_evidence_fusion.models import MultiTimeframeEvidenceFusionSnapshot
 from engines.volume_context.models import (
@@ -278,6 +279,7 @@ class RuntimeSnapshot:
     volume_context_diagnostics: VolumeContextDiagnosticSnapshot | None = None
     multi_timeframe_evidence: MultiTimeframeEvidenceFusionSnapshot | None = None
     market_state: MarketStateEngineSnapshot | None = None
+    setup_classification: ExpertSetupClassificationEngineSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
