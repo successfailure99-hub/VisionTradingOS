@@ -2,6 +2,8 @@
 Immutable Application Orchestrator V1 models.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import date, datetime
 
@@ -53,7 +55,11 @@ from application.authorized_paper_execution.models import AuthorizedPaperHandoff
 from engines.position.models import PositionState
 from engines.price_action.models import PriceActionState
 from engines.risk.models import RiskConfiguration, RiskDecisionState
+from engines.risk_management_v2.models import RiskManagementV2Snapshot
 from engines.strategy.models import StrategyDecisionState
+from engines.strategy_decision_v2.models import StrategyDecisionV2Snapshot
+from application.trade_lifecycle_v1.models import TradeLifecycleV1Snapshot
+from engines.trade_journal_v1.models import TradeJournalV1Snapshot
 from engines.trade_decision_authorization.models import TradeAuthorizationSnapshot
 from engines.trade_journal.models import TradeJournalRecord
 from engines.trade_execution_policy.models import ExecutionEngineSnapshot
@@ -284,6 +290,24 @@ class RuntimeSnapshot:
     setup_classification: ExpertSetupClassificationEngineSnapshot | None = None
     chart_explanation: ChartExplanationEngineSnapshot | None = None
     ai_reasoning_v2: AIReasoningV2Snapshot | None = None
+    strategy_decision_v2: StrategyDecisionV2Snapshot | None = None
+    risk_management_v2: RiskManagementV2Snapshot | None = None
+    trade_lifecycle_v1: TradeLifecycleV1Snapshot | None = None
+    trade_journal_v1: TradeJournalV1Snapshot | None = None
+    decision_audit: "RuntimeDecisionAudit" | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeDecisionAudit:
+    instrument: RuntimeInstrument
+    timestamp: datetime
+    rejected: bool
+    rejected_at: str
+    reason: str
+    ai_reasoning_v2: AIReasoningV2Snapshot | None = None
+    strategy_decision_v2: StrategyDecisionV2Snapshot | None = None
+    risk_management_v2: RiskManagementV2Snapshot | None = None
+    trade_lifecycle_v1: TradeLifecycleV1Snapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -254,10 +254,10 @@ def _runtime_component_health(orchestrator) -> tuple[DashboardRuntimeComponentHe
         ready_row("Expert Setup", any_snapshot("setup_classification")),
         ready_row("Chart Explanation", any_snapshot("chart_explanation")),
         ready_row("AI Reasoning", any_snapshot("ai_reasoning_v2") or any_snapshot("ai_reasoning")),
-        ready_row("Strategy", any_snapshot("strategy")),
-        ready_row("Risk", any_snapshot("risk")),
-        ready_row("Lifecycle", bool(snapshots)),
-        ready_row("Journal", bool(getattr(orchestrator, "shared_trade_journal_ready", False))),
+        ready_row("Strategy", any_snapshot("strategy_decision_v2") or any_snapshot("strategy")),
+        ready_row("Risk", any_snapshot("risk_management_v2") or any_snapshot("risk")),
+        ready_row("Lifecycle", any_snapshot("trade_lifecycle_v1") or bool(snapshots)),
+        ready_row("Journal", any_snapshot("trade_journal_v1") or bool(getattr(orchestrator, "shared_trade_journal_ready", False))),
     )
 
 
@@ -427,43 +427,150 @@ def build_option_chain_view(
 
 def build_ai_view(runtime_snapshot: RuntimeSnapshot) -> DashboardAIView:
     ai = runtime_snapshot.ai_reasoning
+    if ai is None:
+        ai = runtime_snapshot.ai_reasoning_v2
     return DashboardAIView(
         symbol=_enum_text(runtime_snapshot.symbol),
-        market_summary=_enum_text(getattr(ai, "market_summary", None)),
-        confidence=_enum_text(getattr(ai, "confidence", None)),
-        agreement=_enum_text(getattr(ai, "agreement_summary", None)),
-        conflict=_enum_text(getattr(ai, "conflict_summary", None)),
-        trading_suitability=_enum_text(getattr(ai, "trading_suitability", None)),
-        explanation=getattr(ai, "explanation", None) or MISSING,
-        missing_information=tuple(getattr(ai, "missing_information", ()) or ()),
+        market_summary=_ai_market_summary(ai),
+        confidence=_ai_confidence(ai),
+        agreement=_ai_agreement(ai),
+        conflict=_ai_conflict(ai),
+        trading_suitability=_ai_suitability(ai),
+        explanation=_ai_explanation(ai),
+        missing_information=_ai_missing_information(ai),
     )
 
 
+def _ai_market_summary(ai) -> str:
+    return _enum_text(getattr(ai, "market_summary", None) or getattr(ai, "summary", None))
+
+
+def _ai_confidence(ai) -> str:
+    conviction = getattr(ai, "conviction", None)
+    if conviction is not None:
+        return _enum_text(conviction)
+    return _enum_text(getattr(ai, "confidence", None))
+
+
+def _ai_agreement(ai) -> str:
+    legacy = getattr(ai, "agreement_summary", None)
+    if legacy is not None:
+        return _enum_text(legacy)
+    fusion = getattr(ai, "multi_timeframe_evidence", None)
+    return _enum_text(getattr(fusion, "evidence_agreement", None))
+
+
+def _ai_conflict(ai) -> str:
+    legacy = getattr(ai, "conflict_summary", None)
+    if legacy is not None:
+        return _enum_text(legacy)
+    fusion = getattr(ai, "multi_timeframe_evidence", None)
+    return _enum_text(getattr(fusion, "evidence_conflict", None))
+
+
+def _ai_suitability(ai) -> str:
+    suitability = getattr(ai, "trading_suitability", None)
+    if suitability is not None:
+        return _enum_text(suitability)
+    return _enum_text(getattr(ai, "reasoning_state", None))
+
+
+def _ai_explanation(ai) -> str:
+    return (
+        getattr(ai, "explanation", None)
+        or getattr(ai, "primary_thesis", None)
+        or getattr(ai, "summary", None)
+        or MISSING
+    )
+
+
+def _ai_missing_information(ai) -> tuple[str, ...]:
+    missing = getattr(ai, "missing_information", None)
+    if missing is not None:
+        return tuple(missing or ())
+    cautions = tuple(getattr(ai, "cautions", ()) or ())
+    return tuple(getattr(item, "message", str(item)) for item in cautions)
+
+
+def _strategy_reference_text(strategy, kind: str) -> str:
+    if kind == "entry":
+        legacy = getattr(strategy, "entry_reference", None)
+        if legacy is not None:
+            return _enum_text(legacy)
+        reference = getattr(strategy, "primary_reference", None)
+    elif kind == "stop":
+        legacy = getattr(strategy, "stop_reference", None)
+        if legacy is not None:
+            return _enum_text(legacy)
+        reference = getattr(strategy, "invalidation_reference", None)
+    else:
+        legacy = getattr(strategy, "target_reference", None)
+        if legacy is not None:
+            return _enum_text(legacy)
+        objectives = tuple(getattr(strategy, "objectives", ()) or ())
+        reference = getattr(objectives[0], "reference", None) if objectives else None
+    label = getattr(reference, "label", None)
+    return _enum_text(label or getattr(reference, "reference_type", None))
+
+
+def _strategy_block_reason(strategy) -> str:
+    legacy = getattr(strategy, "block_reason", None)
+    if legacy is not None:
+        return _enum_text(legacy)
+    warnings = tuple(getattr(strategy, "warnings", ()) or ())
+    if warnings:
+        return str(warnings[0])
+    rationale = tuple(getattr(strategy, "rationale", ()) or ())
+    if getattr(strategy, "eligible", None) is False and rationale:
+        return str(rationale[0])
+    return MISSING
+
+
+def _risk_reason(risk) -> str:
+    if risk is None:
+        return MISSING
+    warnings = tuple(getattr(risk, "warnings", ()) or ())
+    if warnings:
+        return str(warnings[0])
+    failed = next(
+        (
+            item
+            for item in tuple(getattr(risk, "rule_evaluations", ()) or ())
+            if _enum_text(getattr(item, "result", None)) == "Failed"
+        ),
+        None,
+    )
+    if failed is not None:
+        return str(getattr(failed, "message", MISSING))
+    rationale = tuple(getattr(risk, "rationale", ()) or ())
+    return str(rationale[0]) if rationale else MISSING
+
+
 def build_strategy_view(runtime_snapshot: RuntimeSnapshot) -> DashboardStrategyView:
-    strategy = runtime_snapshot.strategy
-    risk = runtime_snapshot.risk
+    strategy = runtime_snapshot.strategy or runtime_snapshot.strategy_decision_v2
+    risk = runtime_snapshot.risk or runtime_snapshot.risk_management_v2
     order = runtime_snapshot.latest_order
     return DashboardStrategyView(
         symbol=_enum_text(runtime_snapshot.symbol),
-        decision=_enum_text(getattr(strategy, "decision", None)),
+        decision=_enum_text(getattr(strategy, "decision", None) or getattr(strategy, "action", None)),
         direction=_enum_text(getattr(strategy, "direction", None)),
-        setup_quality=_enum_text(getattr(strategy, "setup_quality", None)),
-        entry_reference=_enum_text(getattr(strategy, "entry_reference", None)),
-        stop_reference=_enum_text(getattr(strategy, "stop_reference", None)),
-        target_reference=_enum_text(getattr(strategy, "target_reference", None)),
-        block_reason=_enum_text(getattr(strategy, "block_reason", None)),
+        setup_quality=_enum_text(getattr(strategy, "setup_quality", None) or getattr(strategy, "quality", None)),
+        entry_reference=_strategy_reference_text(strategy, "entry"),
+        stop_reference=_strategy_reference_text(strategy, "stop"),
+        target_reference=_strategy_reference_text(strategy, "target"),
+        block_reason=_strategy_block_reason(strategy),
         risk_decision=_enum_text(getattr(risk, "decision", None)),
         approved_quantity=getattr(risk, "approved_quantity", None),
-        risk_amount=getattr(risk, "estimated_risk_amount", None),
+        risk_amount=getattr(risk, "estimated_risk_amount", None) or getattr(risk, "approved_risk_amount", None),
         reward_risk=getattr(risk, "reward_risk_ratio", None),
         entry_price=getattr(risk, "entry_price", None),
-        stop_price=getattr(risk, "stop_price", None),
-        target_price=getattr(risk, "target_price", None),
+        stop_price=getattr(risk, "stop_price", None) or getattr(risk, "invalidation_price", None),
+        target_price=getattr(risk, "target_price", None) or getattr(risk, "objective_price", None),
         lot_size=getattr(risk, "lot_size", None),
         approved_lots=getattr(risk, "approved_lots", None),
-        plan_status=getattr(risk, "plan_status", None) or MISSING,
+        plan_status=getattr(risk, "plan_status", None) or _enum_text(getattr(risk, "status", None)),
         plan_valid_until=getattr(risk, "valid_until", None),
-        risk_reason=getattr(risk, "risk_reason", None) or MISSING,
+        risk_reason=getattr(risk, "risk_reason", None) or _risk_reason(risk),
         latest_order_status="Trade Plan Ready" if bool(getattr(risk, "trade_plan_ready", False)) else _enum_text(getattr(order, "status", None)),
     )
 

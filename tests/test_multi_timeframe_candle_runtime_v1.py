@@ -253,10 +253,11 @@ def test_closed_candle_triggers_primary_analysis_exactly_once():
     assert calls == {"context": 0, "evidence": 0, "ai": 0, "strategy": 0}
 
     orchestrator.process_tick(tick(datetime(2026, 7, 21, 9, 16, 0), price=101.0))
-    assert calls == {"context": 1, "evidence": 1, "ai": 1, "strategy": 1}
+    assert calls == {"context": 1, "evidence": 1, "ai": 0, "strategy": 0}
+    assert runtime.ai_reasoning_v2_engine.snapshot is None
 
     orchestrator.process_tick(tick(datetime(2026, 7, 21, 9, 16, 30), price=102.0))
-    assert calls == {"context": 1, "evidence": 1, "ai": 1, "strategy": 1}
+    assert calls == {"context": 1, "evidence": 1, "ai": 0, "strategy": 0}
 
 
 def test_one_hundred_ticks_inside_one_candle_do_not_recompute_analysis():

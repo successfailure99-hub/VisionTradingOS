@@ -281,8 +281,10 @@ def test_process_tick_returns_immutable_runtime_snapshot_with_dashboard_state():
     assert snapshot.market_context.current_price == 101.0
     assert snapshot.market_context.session_high == 101.0
     assert snapshot.market_context.session_low == 101.0
-    assert snapshot.ai_reasoning is not None
-    assert snapshot.strategy is not None
+    assert snapshot.ai_reasoning is None
+    assert snapshot.strategy is None
+    assert snapshot.ai_reasoning_v2 is None
+    assert snapshot.strategy_decision_v2 is None
     assert snapshot.risk is None
     assert snapshot.latest_order is None
     with pytest.raises(FrozenInstanceError):
@@ -292,8 +294,8 @@ def test_process_tick_returns_immutable_runtime_snapshot_with_dashboard_state():
     assert isinstance(duplicate, RuntimeSnapshot)
     assert duplicate.latest_tick == snapshot.latest_tick
     assert duplicate.market_context == snapshot.market_context
-    assert duplicate.ai_reasoning == snapshot.ai_reasoning
-    assert duplicate.strategy == snapshot.strategy
+    assert duplicate.ai_reasoning_v2 == snapshot.ai_reasoning_v2
+    assert duplicate.strategy_decision_v2 == snapshot.strategy_decision_v2
 
 
 def test_option_chain_update_refreshes_dashboard_analysis_after_spot_tick():
@@ -314,8 +316,10 @@ def test_option_chain_update_refreshes_dashboard_analysis_after_spot_tick():
     assert snapshot.market_context is not None
     assert snapshot.market_context != first_context
     assert snapshot.market_context.option_chain_direction is not EvidenceDirection.UNKNOWN
-    assert snapshot.ai_reasoning is not None
-    assert snapshot.strategy is not None
+    assert snapshot.ai_reasoning is None
+    assert snapshot.strategy is None
+    assert snapshot.ai_reasoning_v2 is None
+    assert snapshot.strategy_decision_v2 is None
     assert snapshot.latest_order is None
 
 def test_build_market_context_uses_explicit_session_high_and_low():

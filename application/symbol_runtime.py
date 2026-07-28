@@ -8,6 +8,8 @@ from core.enums.timeframe import TimeFrame
 from core.models.candle import Candle
 from core.models.daily_ohlc import DailyOHLC
 from core.models.tick import Tick
+from application.execution_runtime_v1 import ExecutionFillPolicy, ExecutionOrderType, ExecutionRuntimeV1, ExecutionRuntimeV1Configuration
+from application.trade_lifecycle_v1 import TradeLifecycleCoordinatorV1, TradeLifecycleV1Request
 from engines.adr.engine import ADREngine
 from engines.ai_reasoning.ai_reasoning_engine import AIReasoningEngine
 from engines.ai_reasoning_v2.engine import AIReasoningV2Engine
@@ -39,6 +41,7 @@ from engines.paper_execution_coordinator.models import PaperExecutionReceipt, Pa
 from engines.paper_trading.engine import PaperTradingEngine
 from engines.position.models import PositionFill, PositionMark, PositionState
 from engines.position.position_engine import PositionEngine
+from engines.position_management_v1 import PositionManagementV1Engine, PositionPriceUpdate
 from engines.execution_reconciliation.engine import ExecutionReconciliationEngine
 from engines.execution_reconciliation.models import ExecutionReconciliationRequest, ExecutionReconciliationReport
 from engines.expert_setup_classification.engine import ExpertSetupClassificationEngine
@@ -48,8 +51,18 @@ from engines.price_action.price_action_engine import PriceActionEngine
 from engines.risk.models import AccountRiskState, RiskDecisionState, RiskPolicy, RiskSnapshot, TradeRiskPlan
 from engines.risk.risk_engine import RiskEngine
 from engines.risk.trade_plan_engine import RiskTradePlanEngine
+from engines.risk_management_v2 import (
+    AccountRiskState as AccountRiskStateV2,
+    InstrumentExposureState,
+    RiskDecision as RiskDecisionV2,
+    RiskManagementV2Engine,
+    RiskManagementV2Input,
+    SessionRiskState,
+)
 from engines.strategy.models import StrategyDecisionState, StrategySnapshot
 from engines.strategy.strategy_engine import StrategyEngine
+from engines.strategy_decision_v2 import StrategyDecisionV2Engine, StrategyDecisionV2Input
+from engines.strategy_decision_v2.enums import StrategyDirection
 from engines.trade_decision_authorization.engine import TradeDecisionAuthorizationEngine
 from engines.trade_decision_authorization.models import TradeAuthorizationRequest
 from engines.trade_execution_policy.engine import TradeExecutionPolicyEngine
@@ -57,10 +70,11 @@ from engines.trade_execution_policy.enums import ExecutionMode, ExecutionPlanSta
 from engines.trade_execution_policy.models import ExecutionRequest, TradeExecutionPlan
 from engines.tradingview_evidence.engine import TradingViewEvidenceMappingEngine
 from engines.tradingview_evidence.models import TradingViewEvidenceRequest
+from engines.trade_journal_v1 import TradeJournalV1Engine
 from engines.vwap.vwap_engine import VWAPEngine
 
 from application.enums import RuntimeInstrument, RuntimeStatus
-from application.models import RuntimeConfiguration, RuntimeSnapshot, RuntimeVWAPSource
+from application.models import RuntimeConfiguration, RuntimeDecisionAudit, RuntimeSnapshot, RuntimeVWAPSource
 from application.tradingview_evidence_assembly import (
     TradingViewEvidenceAssemblyCoordinator,
     TradingViewEvidenceAssemblyInput,
@@ -261,6 +275,35 @@ class SymbolRuntime:
             instrument=self._core_instrument,
             event_bus=event_bus,
         )
+        self.strategy_decision_v2_engine = StrategyDecisionV2Engine(
+            instrument=self._core_instrument,
+            event_bus=event_bus,
+        )
+        self.risk_management_v2_engine = RiskManagementV2Engine(
+            instrument=self._core_instrument,
+            event_bus=event_bus,
+        )
+        self.execution_runtime_v1 = ExecutionRuntimeV1(
+            instrument=self._core_instrument,
+            configuration=ExecutionRuntimeV1Configuration(
+                order_type=ExecutionOrderType.MARKET,
+                fill_policy=ExecutionFillPolicy.IMMEDIATE_FULL,
+                require_manual_fill_confirmation=False,
+            ),
+            event_bus=event_bus,
+        )
+        self.position_management_v1_engine = PositionManagementV1Engine(
+            instrument=self._core_instrument,
+            event_bus=event_bus,
+        )
+        self.trade_lifecycle_v1 = TradeLifecycleCoordinatorV1(
+            instrument=self._core_instrument,
+            execution_runtime=self.execution_runtime_v1,
+            position_engine=self.position_management_v1_engine,
+            event_bus=event_bus,
+        )
+        self.trade_journal_v1_engine = TradeJournalV1Engine(event_bus=event_bus)
+        self._decision_audit: RuntimeDecisionAudit | None = None
 
     @property
     def instrument(self) -> RuntimeInstrument:
@@ -287,6 +330,9 @@ class SymbolRuntime:
         self.market_state_engine.start()
         self.setup_classification_engine.start()
         self.chart_explanation_engine.start()
+        self.execution_runtime_v1.start()
+        self.trade_lifecycle_v1.start()
+        self.trade_journal_v1_engine.start()
         self.execution_policy_engine.start()
         self.trade_authorization_engine.start()
         self.paper_execution_coordinator.start()
@@ -300,6 +346,11 @@ class SymbolRuntime:
         self.paper_execution_coordinator.stop()
         self.trade_authorization_engine.stop()
         self.execution_policy_engine.stop()
+        if self.trade_journal_v1_engine.snapshot().running:
+            self.trade_journal_v1_engine.stop()
+        lifecycle_snapshot = self.trade_lifecycle_v1.snapshot()
+        if lifecycle_snapshot.running and not lifecycle_snapshot.execution_snapshot.open_intent_count and not lifecycle_snapshot.position_snapshot.has_open_position:
+            self.trade_lifecycle_v1.stop()
         self.chart_explanation_engine.stop()
         self.setup_classification_engine.stop()
         self.market_state_engine.stop()
@@ -831,6 +882,8 @@ class SymbolRuntime:
         self.setup_classification_engine.reset()
         self.chart_explanation_engine.reset()
         self.ai_reasoning_v2_engine.reset()
+        self.strategy_decision_v2_engine.reset()
+        self.risk_management_v2_engine.reset()
         self.risk_engine.reset()
         self.execution_policy_engine.reset_session()
         self.trade_authorization_engine.reset()
@@ -841,6 +894,7 @@ class SymbolRuntime:
         self.paper_trading_engine.reset()
         self.order_engine.reset()
         self.position_engine.reset()
+        self._decision_audit = None
         self._last_tick = None
         self._updated_at = None
         self._daily_ohlc_history = ()
@@ -914,14 +968,22 @@ class SymbolRuntime:
             setup_classification=self.setup_classification_engine.snapshot(),
             chart_explanation=self.chart_explanation_engine.snapshot(),
             ai_reasoning_v2=self.ai_reasoning_v2_engine.snapshot,
+            strategy_decision_v2=self.strategy_decision_v2_engine.snapshot,
+            risk_management_v2=self.risk_management_v2_engine.snapshot,
+            trade_lifecycle_v1=self.trade_lifecycle_v1.snapshot(),
+            trade_journal_v1=self.trade_journal_v1_engine.snapshot(),
+            decision_audit=self._decision_audit,
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
+        strategy = self.strategy_decision_v2_engine.snapshot or self.strategy_engine.state
+        risk = self.risk_management_v2_engine.snapshot or self.risk_engine.state
         record = self.paper_trading_engine.on_tick(
             tick,
-            strategy=None,
-            risk=None,
+            strategy=strategy,
+            risk=risk,
         )
+        self._process_trade_lifecycle_price(tick)
         if record is not None:
             updated = self.trade_plan_engine.record_paper_trade_close(realized_pnl=record.net_pnl)
             if updated is not None:
@@ -983,9 +1045,6 @@ class SymbolRuntime:
                 self._assemble_tradingview_evidence(timestamp, current_price, timeframe=timeframe)
             except Exception:
                 pass
-
-            if timeframe is self._primary_timeframe:
-                self._refresh_primary_closed_candle_analysis(context)
         self._fuse_multi_timeframe_evidence(timestamp)
 
     def _refresh_primary_closed_candle_analysis(self, context: MarketContextState) -> None:
@@ -1040,9 +1099,219 @@ class SymbolRuntime:
             market_state = self.market_state_engine.process(fusion, timestamp=timestamp)
             setup = self.setup_classification_engine.process(fusion, market_state, timestamp=timestamp)
             explanation = self.chart_explanation_engine.process(fusion, market_state, setup, timestamp=timestamp)
-            self.ai_reasoning_v2_engine.process(fusion, market_state, setup, explanation, timestamp=timestamp)
+            reasoning = self.ai_reasoning_v2_engine.process(fusion, market_state, setup, explanation, timestamp=timestamp)
+            self._process_v2_execution_chain(reasoning)
         except Exception:
+            self._record_decision_audit("AI", "AI Reasoning V2 runtime handoff failed.")
             return
+
+    def _process_v2_execution_chain(self, reasoning) -> None:
+        try:
+            strategy = self.strategy_decision_v2_engine.process(StrategyDecisionV2Input(reasoning))
+        except Exception:
+            self._record_decision_audit("Strategy", "Strategy Decision V2 input was rejected.", ai_reasoning_v2=reasoning)
+            return
+        if not strategy.eligible:
+            self._record_decision_audit(
+                "Strategy",
+                _strategy_rejection_reason(strategy),
+                ai_reasoning_v2=reasoning,
+                strategy_decision_v2=strategy,
+            )
+            return
+        try:
+            risk_input = self._build_risk_management_v2_input(strategy)
+            risk = self.risk_management_v2_engine.process(risk_input)
+        except Exception as exc:
+            self._record_decision_audit(
+                "Risk",
+                f"Risk Management V2 input unavailable: {_safe_error(exc)}",
+                ai_reasoning_v2=reasoning,
+                strategy_decision_v2=strategy,
+            )
+            return
+        if risk.decision not in {RiskDecisionV2.APPROVED, RiskDecisionV2.APPROVED_REDUCED} or not risk.execution_eligible:
+            self._record_decision_audit(
+                "Risk",
+                _risk_rejection_reason(risk),
+                ai_reasoning_v2=reasoning,
+                strategy_decision_v2=strategy,
+                risk_management_v2=risk,
+            )
+            return
+        try:
+            lifecycle = self.trade_lifecycle_v1.process(TradeLifecycleV1Request(strategy, risk))
+        except Exception as exc:
+            self._record_decision_audit(
+                "Lifecycle",
+                f"Trade Lifecycle V1 rejected the handoff: {_safe_error(exc)}",
+                ai_reasoning_v2=reasoning,
+                strategy_decision_v2=strategy,
+                risk_management_v2=risk,
+            )
+            return
+        if lifecycle.block_source.value != "none":
+            self._record_decision_audit(
+                "Lifecycle",
+                _lifecycle_rejection_reason(lifecycle),
+                ai_reasoning_v2=reasoning,
+                strategy_decision_v2=strategy,
+                risk_management_v2=risk,
+                trade_lifecycle_v1=lifecycle,
+            )
+            return
+        self._record_decision_audit(
+            "NONE",
+            "V2 runtime chain accepted the opportunity.",
+            rejected=False,
+            ai_reasoning_v2=reasoning,
+            strategy_decision_v2=strategy,
+            risk_management_v2=risk,
+            trade_lifecycle_v1=lifecycle,
+        )
+
+    def _build_risk_management_v2_input(self, strategy) -> RiskManagementV2Input:
+        entry = _positive_price(getattr(strategy, "current_price", None))
+        if entry is None and self._last_tick is not None:
+            entry = _positive_price(self._last_tick.last_price)
+        if entry is None:
+            raise ValueError("entry price is unavailable")
+
+        invalidation = self._risk_invalidation_price(strategy, entry)
+        objective = self._risk_objective_price(strategy, entry, invalidation)
+        account_equity = self._runtime_account_equity()
+        account = AccountRiskStateV2(
+            strategy.timestamp,
+            account_equity,
+            account_equity,
+            account_equity,
+            account_equity,
+            0.0,
+            0.0,
+            self._current_notional_exposure(entry),
+        )
+        previous_risk = self.risk_management_v2_engine.snapshot
+        if previous_risk is not None and previous_risk.session.trading_date == strategy.timestamp.date():
+            session = previous_risk.session
+        else:
+            session = SessionRiskState(strategy.timestamp.date(), 0, 0, 0, 0, 0.0)
+        exposure = InstrumentExposureState(
+            self._core_instrument,
+            self._current_position_quantity(),
+            self._current_notional_exposure(entry),
+            self._current_open_risk(entry),
+        )
+        return RiskManagementV2Input(
+            strategy=strategy,
+            account=account,
+            session=session,
+            instrument_exposure=exposure,
+            proposed_entry_price=entry,
+            proposed_invalidation_price=invalidation,
+            proposed_objective_price=objective,
+        )
+
+    def _risk_invalidation_price(self, strategy, entry: float) -> float:
+        reference = getattr(getattr(strategy, "invalidation_reference", None), "price", None)
+        candidate = _positive_price(reference)
+        if _valid_invalidation(strategy.direction, entry, candidate):
+            return candidate
+        closed = self._latest_closed_primary_candle()
+        if closed is not None:
+            candidate = closed.low if strategy.direction is StrategyDirection.LONG else closed.high
+            if _valid_invalidation(strategy.direction, entry, candidate):
+                return float(candidate)
+        offset = max(entry * 0.005, 0.05)
+        return round(entry - offset, 4) if strategy.direction is StrategyDirection.LONG else round(entry + offset, 4)
+
+    def _risk_objective_price(self, strategy, entry: float, invalidation: float) -> float:
+        for objective in getattr(strategy, "objectives", ()) or ():
+            candidate = _positive_price(getattr(getattr(objective, "reference", None), "price", None))
+            if _valid_objective(strategy.direction, entry, candidate):
+                return candidate
+        risk_distance = abs(entry - invalidation)
+        ratio = getattr(getattr(self.risk_management_v2_engine, "_configuration", None), "minimum_reward_risk_ratio", 1.5)
+        reward_distance = risk_distance * ratio
+        if strategy.direction is StrategyDirection.LONG:
+            return round(entry + reward_distance, 4)
+        return round(entry - reward_distance, 4)
+
+    def _latest_closed_primary_candle(self):
+        history = self.candle_engine.get_history(self._core_instrument)
+        return history[-1] if history else None
+
+    def _runtime_account_equity(self) -> float:
+        risk_configuration = self._configuration.risk_configuration
+        capital = getattr(risk_configuration, "capital", None)
+        return float(capital) if capital is not None else 100000.0
+
+    def _current_position_quantity(self) -> int:
+        position = self.position_management_v1_engine.snapshot().active_position
+        return position.open_quantity if position is not None else 0
+
+    def _current_notional_exposure(self, price: float) -> float:
+        position = self.position_management_v1_engine.snapshot().active_position
+        if position is None:
+            return 0.0
+        return round(position.open_quantity * price, 4)
+
+    def _current_open_risk(self, price: float) -> float:
+        position = self.position_management_v1_engine.snapshot().active_position
+        if position is None:
+            return 0.0
+        return round(position.open_quantity * abs(price - position.invalidation_price), 4)
+
+    def _process_trade_lifecycle_price(self, tick: Tick) -> None:
+        if not self.trade_lifecycle_v1.snapshot().position_snapshot.has_open_position:
+            return
+        try:
+            lifecycle = self.trade_lifecycle_v1.update_position_price(
+                PositionPriceUpdate(self._core_instrument, tick.timestamp, tick.last_price)
+            )
+        except Exception as exc:
+            self._record_decision_audit("Lifecycle", f"Trade Lifecycle V1 price update failed: {_safe_error(exc)}")
+            return
+        if lifecycle.stage.value == "position_closed":
+            try:
+                self.trade_journal_v1_engine.record(lifecycle)
+            except Exception as exc:
+                self._record_decision_audit(
+                    "Journal",
+                    f"Trade Journal V1 rejected the closed lifecycle: {_safe_error(exc)}",
+                    trade_lifecycle_v1=lifecycle,
+                )
+
+    def _record_decision_audit(
+        self,
+        rejected_at: str,
+        reason: str,
+        *,
+        rejected: bool = True,
+        ai_reasoning_v2=None,
+        strategy_decision_v2=None,
+        risk_management_v2=None,
+        trade_lifecycle_v1=None,
+    ) -> None:
+        timestamp = (
+            getattr(trade_lifecycle_v1, "timestamp", None)
+            or getattr(risk_management_v2, "timestamp", None)
+            or getattr(strategy_decision_v2, "timestamp", None)
+            or getattr(ai_reasoning_v2, "timestamp", None)
+            or getattr(self._last_tick, "timestamp", None)
+        )
+        if timestamp is None:
+            return
+        self._decision_audit = RuntimeDecisionAudit(
+            instrument=self._instrument,
+            timestamp=timestamp,
+            rejected=rejected,
+            rejected_at=str(rejected_at).strip() or "UNKNOWN",
+            reason=str(reason).strip() or "No decision reason supplied.",
+            ai_reasoning_v2=ai_reasoning_v2 or self.ai_reasoning_v2_engine.snapshot,
+            strategy_decision_v2=strategy_decision_v2 or self.strategy_decision_v2_engine.snapshot,
+            risk_management_v2=risk_management_v2 or self.risk_management_v2_engine.snapshot,
+            trade_lifecycle_v1=trade_lifecycle_v1 or self.trade_lifecycle_v1.snapshot(),
+        )
 
     def _append_daily_ohlc(self, daily_ohlc: DailyOHLC) -> None:
         existing = {item.trading_date: item for item in self._daily_ohlc_history}
@@ -1165,3 +1434,56 @@ def _non_negative_int(value: int, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{field_name} must be a non-negative integer")
     return value
+
+
+def _positive_price(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if number > 0.0 else None
+
+
+def _valid_invalidation(direction, entry: float, candidate: float | None) -> bool:
+    if candidate is None:
+        return False
+    if direction is StrategyDirection.LONG:
+        return candidate < entry
+    if direction is StrategyDirection.SHORT:
+        return candidate > entry
+    return False
+
+
+def _valid_objective(direction, entry: float, candidate: float | None) -> bool:
+    if candidate is None:
+        return False
+    if direction is StrategyDirection.LONG:
+        return candidate > entry
+    if direction is StrategyDirection.SHORT:
+        return candidate < entry
+    return False
+
+
+def _strategy_rejection_reason(strategy) -> str:
+    notes = tuple(getattr(strategy, "rationale", ()) or ())
+    warnings = tuple(getattr(strategy, "warnings", ()) or ())
+    detail = next((item for item in (*notes, *warnings) if str(item).strip()), None)
+    if detail:
+        return str(detail)
+    return f"Strategy Decision V2 rejected at {strategy.setup_status.value}."
+
+
+def _risk_rejection_reason(risk) -> str:
+    failed = next((item for item in risk.rule_evaluations if item.result.value == "failed"), None)
+    if failed is not None:
+        return failed.message
+    return f"Risk Management V2 rejected at {risk.status.value}."
+
+
+def _lifecycle_rejection_reason(lifecycle) -> str:
+    if lifecycle.stage_records:
+        return lifecycle.stage_records[-1].message
+    return f"Trade Lifecycle V1 stopped at {lifecycle.stage.value}."
+
+
+def _safe_error(exc: Exception) -> str:
+    return str(exc).replace("token", "[redacted]").replace("credential", "[redacted]")
