@@ -4,6 +4,7 @@ Tests for the dashboard main window.
 
 import ast
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -76,6 +77,64 @@ def test_render_updates_all_panels():
     assert window._instrument_panels[symbol]["option_chain"]._labels["Symbol"].text() == view.option_chains[0].symbol
     assert window._instrument_panels[symbol]["ai"]._labels["Summary"].text() == view.ai[0].market_summary
     assert window._instrument_panels[symbol]["journal"]._analytics_panel._status.text() == view.analytics[0].status
+
+
+def test_unchanged_dashboard_model_suppresses_redundant_panel_rendering(monkeypatch):
+    lifecycle = ApplicationBootstrap().create_application()
+    window = VisionMainWindow(lifecycle)
+    window.refresh()
+    calls = {"runtime": 0, "market": 0}
+    original_runtime = window._runtime_panel.render
+    original_market = window._instrument_panels["NIFTY"]["market"].render
+
+    def count_runtime(view):
+        calls["runtime"] += 1
+        return original_runtime(view)
+
+    def count_market(view):
+        calls["market"] += 1
+        return original_market(view)
+
+    monkeypatch.setattr(window._runtime_panel, "render", count_runtime)
+    monkeypatch.setattr(window._instrument_panels["NIFTY"]["market"], "render", count_market)
+
+    window.refresh()
+
+    assert calls == {"runtime": 0, "market": 0}
+
+
+def test_changed_refresh_renders_visible_panel_only(monkeypatch):
+    lifecycle = ApplicationBootstrap(
+        RuntimeConfiguration(
+            instruments=(RuntimeInstrument.SENSEX, RuntimeInstrument.BANKNIFTY, RuntimeInstrument.NIFTY)
+        )
+    ).create_application()
+    window = VisionMainWindow(lifecycle)
+    first = window.refresh()
+    window._tabs.setCurrentWidget(window._instrument_panels["NIFTY"]["tab"])
+    window._instrument_panels["NIFTY"]["sections"].setCurrentIndex(0)
+    calls = {"market": 0, "price_action": 0, "banknifty_market": 0}
+
+    def count_market(view):
+        calls["market"] += 1
+
+    def count_price_action(view):
+        calls["price_action"] += 1
+
+    def count_banknifty_market(view):
+        calls["banknifty_market"] += 1
+
+    monkeypatch.setattr(window._instrument_panels["NIFTY"]["market"], "render", count_market)
+    monkeypatch.setattr(window._instrument_panels["NIFTY"]["price_action"], "render", count_price_action)
+    monkeypatch.setattr(window._instrument_panels["BANKNIFTY"]["market"], "render", count_banknifty_market)
+
+    changed = replace(
+        first,
+        runtime=replace(first.runtime, last_error="connection was closed uncleanly"),
+    )
+    window.render(changed)
+
+    assert calls == {"market": 1, "price_action": 0, "banknifty_market": 0}
 
 
 def test_selected_tab_is_preserved_across_refreshes():

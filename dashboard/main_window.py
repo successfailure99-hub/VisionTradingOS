@@ -65,6 +65,8 @@ class VisionMainWindow(QMainWindow):
         self._historical_replay_driver = historical_replay_driver
         self._deterministic_backtest_driver = deterministic_backtest_driver
         self._current_view: DashboardView | None = None
+        self._last_rendered_view: DashboardView | None = None
+        self._rendering = False
         self._clock = clock or _default_clock
         self._runtime_panel = RuntimePanel()
         self._live_market_data_panel = LiveMarketDataPanel()
@@ -92,10 +94,19 @@ class VisionMainWindow(QMainWindow):
             self._timer.stop()
 
     def refresh(self) -> DashboardView:
+        if self._rendering:
+            return self._current_view if self._current_view is not None else self._build_view()
         if self._historical_replay_driver is not None:
             self._historical_replay_driver.poll()
         if self._deterministic_backtest_driver is not None:
             self._deterministic_backtest_driver.poll()
+        view = self._build_view()
+        self._current_view = view
+        if view != self._last_rendered_view:
+            self.render(view)
+        return view
+
+    def _build_view(self) -> DashboardView:
         lifecycle_snapshot = self._lifecycle.snapshot()
         live_snapshot = (
             self._live_market_data_runtime.snapshot()
@@ -113,17 +124,61 @@ class VisionMainWindow(QMainWindow):
             live_option_chain_snapshot=option_chain_snapshot,
             clock=self._clock,
         )
-        self.render(view)
-        self._current_view = view
         return view
 
     def render(self, view: DashboardView) -> None:
+        if self._rendering:
+            return
+        self._rendering = True
+        try:
+            first_render = self._last_rendered_view is None
+            self._header_status.set_status_text(view.runtime.application_status)
+            self._header_mode.set_status_text(view.runtime.safety_mode)
+            self._sync_tabs(view)
+            if first_render:
+                self._render_all_panels(view)
+            else:
+                self._render_visible_panels(view)
+            self.statusBar().showMessage(f"Application {view.runtime.application_status}")
+            self._last_rendered_view = view
+        finally:
+            self._rendering = False
+
+    def current_view(self) -> DashboardView | None:
+        return self._current_view
+
+    def _render_current_view(self, *_args) -> None:
+        if self._current_view is not None:
+            self._render_visible_panels(self._current_view)
+
+    def _render_all_panels(self, view: DashboardView) -> None:
         self._runtime_panel.render(view.runtime)
         self._live_market_data_panel.render(view.live_market_data)
         self._backtest_panel.render(view.backtest)
-        self._header_status.set_status_text(view.runtime.application_status)
-        self._header_mode.set_status_text(view.runtime.safety_mode)
-        self._sync_tabs(view)
+        for market in view.markets:
+            self._render_instrument_panels(view, market.symbol, all_sections=True)
+
+    def _render_visible_panels(self, view: DashboardView) -> None:
+        if self._main_tabs.currentWidget() is self._main_tabs.widget(1):
+            current_system = self._system_tabs.currentWidget()
+            if current_system is self._system_tabs.widget(0):
+                self._runtime_panel.render(view.runtime)
+            elif current_system is self._system_tabs.widget(1):
+                self._live_market_data_panel.render(view.live_market_data)
+            elif current_system is self._system_tabs.widget(2):
+                self._backtest_panel.render(view.backtest)
+            return
+        if self._tabs.currentIndex() < 0:
+            return
+        symbol = self._tabs.tabText(self._tabs.currentIndex())
+        self._render_instrument_panels(view, symbol, all_sections=False)
+
+    def _render_instrument_panels(self, view: DashboardView, symbol: str, *, all_sections: bool) -> None:
+        if symbol not in self._instrument_panels:
+            return
+        markets = {item.symbol: item for item in view.markets}
+        if symbol not in markets:
+            return
         price_actions = {item.symbol: item for item in view.price_actions}
         option_chains = {item.symbol: item for item in view.option_chains}
         ai_views = {item.symbol: item for item in view.ai}
@@ -131,20 +186,23 @@ class VisionMainWindow(QMainWindow):
         positions = {item.symbol: item for item in view.positions}
         journals = {item.symbol: item for item in view.journals}
         analytics = {item.symbol: item for item in view.analytics}
-        for market in view.markets:
-            panels = self._instrument_panels[market.symbol]
-            panels["market"].render(market)
-            panels["price_action"].render(price_actions[market.symbol])
-            panels["option_chain"].render(option_chains[market.symbol])
-            panels["ai"].render(ai_views[market.symbol])
-            panels["strategy"].render(strategies[market.symbol])
-            panels["position"].render(positions[market.symbol])
-            panels["journal"].render(journals[market.symbol])
-            panels["journal"].render_analytics(analytics[market.symbol])
-        self.statusBar().showMessage(f"Application {view.runtime.application_status}")
-
-    def current_view(self) -> DashboardView | None:
-        return self._current_view
+        panels = self._instrument_panels[symbol]
+        active_section = panels["sections"].tabText(panels["sections"].currentIndex())
+        if all_sections or active_section == "Market":
+            panels["market"].render(markets[symbol])
+        if all_sections or active_section == "Price Action":
+            panels["price_action"].render(price_actions[symbol])
+        if all_sections or active_section == "Option Chain":
+            panels["option_chain"].render(option_chains[symbol])
+        if all_sections or active_section == "AI":
+            panels["ai"].render(ai_views[symbol])
+        if all_sections or active_section == "Strategy":
+            panels["strategy"].render(strategies[symbol])
+        if all_sections or active_section == "Position":
+            panels["position"].render(positions[symbol])
+        if all_sections or active_section == "Journal":
+            panels["journal"].render(journals[symbol])
+            panels["journal"].render_analytics(analytics[symbol])
 
     def closeEvent(self, event):
         self.stop_refresh()

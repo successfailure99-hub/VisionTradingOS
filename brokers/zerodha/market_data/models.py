@@ -64,6 +64,10 @@ class ZerodhaWebSocketSnapshot:
     last_disconnected_at: datetime | None
     last_tick_at: datetime | None
     last_error: str | None
+    retry_count: int = 0
+    reconnect_delay_seconds: int = 0
+    suppressed_error_count: int = 0
+    reconnect_due_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, ZerodhaWebSocketStatus):
@@ -77,12 +81,16 @@ class ZerodhaWebSocketSnapshot:
             "normalized_tick_count",
             "delivered_tick_count",
             "rejected_tick_count",
+            "retry_count",
+            "reconnect_delay_seconds",
+            "suppressed_error_count",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
         _require_aware(self.last_connected_at, "last_connected_at")
         _require_aware(self.last_disconnected_at, "last_disconnected_at")
+        _require_aware(self.reconnect_due_at, "reconnect_due_at")
         _require_aware(self.last_tick_at, "last_tick_at")
 
 

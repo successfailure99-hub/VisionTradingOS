@@ -720,6 +720,7 @@ def _live_market_data_active(runtime: LiveMarketDataRuntime | None) -> bool:
                 ZerodhaWebSocketStatus.CONNECTED,
                 ZerodhaWebSocketStatus.CONNECTING,
                 ZerodhaWebSocketStatus.RECONNECTING,
+                ZerodhaWebSocketStatus.RECONNECT_WAIT,
                 ZerodhaWebSocketStatus.DISCONNECTING,
             }
         )

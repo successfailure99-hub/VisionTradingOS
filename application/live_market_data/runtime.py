@@ -177,11 +177,15 @@ class LiveMarketDataRuntime:
         websocket = self._websocket_manager.snapshot()
         if websocket.status is ZerodhaWebSocketStatus.CONNECTED and websocket.connected:
             self._status = LiveMarketDataRuntimeStatus.RUNNING
-        elif websocket.status in {ZerodhaWebSocketStatus.CONNECTING, ZerodhaWebSocketStatus.RECONNECTING}:
+        elif websocket.status in {
+            ZerodhaWebSocketStatus.CONNECTING,
+            ZerodhaWebSocketStatus.RECONNECTING,
+            ZerodhaWebSocketStatus.RECONNECT_WAIT,
+        }:
             self._status = LiveMarketDataRuntimeStatus.STARTING
         elif websocket.status is ZerodhaWebSocketStatus.DISCONNECTING:
             self._status = LiveMarketDataRuntimeStatus.STOPPING
-        elif websocket.status is ZerodhaWebSocketStatus.DISCONNECTED:
+        elif websocket.status in {ZerodhaWebSocketStatus.DISCONNECTED, ZerodhaWebSocketStatus.STOPPED}:
             self._status = LiveMarketDataRuntimeStatus.STOPPED
         elif websocket.status is ZerodhaWebSocketStatus.ERROR:
             self._status = LiveMarketDataRuntimeStatus.ERROR

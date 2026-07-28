@@ -69,14 +69,15 @@ def sub(token=101, instrument=Instrument.NIFTY, mode=ZerodhaSubscriptionMode.FUL
     return ZerodhaInstrumentSubscription(token, instrument, Exchange.NSE, mode)
 
 
-def manager(client=None, subscriptions=(), consumer=None):
+def manager(client=None, subscriptions=(), consumer=None, clock=None, **kwargs):
     return ZerodhaWebSocketManager(
         api_key="api_secret",
         session=session(),
         tick_consumer=consumer or (lambda tick: tick),
         subscriptions=subscriptions,
         client=client or FakeTickerClient(),
-        clock=lambda: NOW,
+        clock=clock or (lambda: NOW),
+        **kwargs,
     )
 
 
@@ -118,19 +119,19 @@ def test_connect_sets_connecting_double_connect_idempotent_and_on_connect_applie
     assert ("quote", [102]) in client.modes
 
 
-def test_disconnect_callbacks_reconnect_and_noreconnect():
+def test_disconnect_stops_and_ignores_late_reconnect_callbacks():
     client = FakeTickerClient()
     subject = manager(client)
     subject.connect()
     client.callbacks["on_connect"](None, {})
 
-    assert subject.disconnect().status is ZerodhaWebSocketStatus.DISCONNECTED
-    assert subject.disconnect().status is ZerodhaWebSocketStatus.DISCONNECTED
+    assert subject.disconnect().status is ZerodhaWebSocketStatus.STOPPED
+    assert subject.disconnect().status is ZerodhaWebSocketStatus.STOPPED
     client.callbacks["on_reconnect"](None, 1)
-    assert subject.status is ZerodhaWebSocketStatus.RECONNECTING
-    assert subject.snapshot().reconnect_count == 1
+    assert subject.status is ZerodhaWebSocketStatus.STOPPED
+    assert subject.snapshot().reconnect_count == 0
     client.callbacks["on_noreconnect"](None)
-    assert subject.status is ZerodhaWebSocketStatus.ERROR
+    assert subject.status is ZerodhaWebSocketStatus.STOPPED
 
 
 def test_synchronous_on_close_during_client_close_counts_one_disconnect():
@@ -142,7 +143,7 @@ def test_synchronous_on_close_during_client_close_counts_one_disconnect():
 
     snapshot = subject.disconnect()
 
-    assert snapshot.status is ZerodhaWebSocketStatus.DISCONNECTED
+    assert snapshot.status is ZerodhaWebSocketStatus.STOPPED
     assert snapshot.disconnection_count == 1
     assert snapshot.last_disconnected_at == NOW
 
@@ -172,7 +173,7 @@ def test_manual_disconnect_with_no_callback_counts_once_and_double_disconnect_is
 
     assert first.disconnection_count == 1
     assert second.disconnection_count == 1
-    assert second.status is ZerodhaWebSocketStatus.DISCONNECTED
+    assert second.status is ZerodhaWebSocketStatus.STOPPED
 
 
 def test_remote_on_close_counts_once_and_duplicate_callback_is_idempotent():
@@ -187,6 +188,7 @@ def test_remote_on_close_counts_once_and_duplicate_callback_is_idempotent():
 
     assert subject.snapshot().disconnection_count == 1
     assert subject.snapshot().last_disconnected_at == first_disconnected_at
+    assert subject.snapshot().status is ZerodhaWebSocketStatus.RECONNECT_WAIT
 
 
 def test_reconnect_followed_by_another_close_permits_new_disconnection_count():
@@ -201,6 +203,76 @@ def test_reconnect_followed_by_another_close_permits_new_disconnection_count():
 
     assert subject.snapshot().connection_count == 2
     assert subject.snapshot().disconnection_count == 2
+
+
+def test_reconnect_wait_uses_bounded_backoff_and_prevents_overlapping_connects():
+    client = FakeTickerClient()
+    current = [NOW]
+    subject = manager(
+        client,
+        clock=lambda: current[0],
+        reconnect_initial_delay_seconds=2,
+        reconnect_max_delay_seconds=5,
+    )
+    subject.connect()
+    client.callbacks["on_connect"](None, {})
+
+    client.callbacks["on_close"](None, 1006, "connection was closed uncleanly")
+    first = subject.snapshot()
+    assert first.status is ZerodhaWebSocketStatus.RECONNECT_WAIT
+    assert first.retry_count == 1
+    assert first.reconnect_delay_seconds == 2
+    assert first.reconnect_due_at == NOW + timedelta(seconds=2)
+    assert client.connect_calls == [True]
+
+    subject.connect()
+    assert client.connect_calls == [True]
+
+    current[0] = NOW + timedelta(seconds=2)
+    subject.retry_connect_if_due()
+    assert subject.snapshot().status is ZerodhaWebSocketStatus.CONNECTING
+    assert client.connect_calls == [True, True]
+
+    client.callbacks["on_error"](None, 1006, "connection was closed uncleanly")
+    second = subject.snapshot()
+    assert second.status is ZerodhaWebSocketStatus.RECONNECT_WAIT
+    assert second.retry_count == 2
+    assert second.reconnect_delay_seconds == 4
+
+    current[0] = NOW + timedelta(seconds=6)
+    subject.retry_connect_if_due()
+    client.callbacks["on_error"](None, 1006, "connection was closed uncleanly")
+    assert subject.snapshot().reconnect_delay_seconds == 5
+
+
+def test_duplicate_1006_errors_are_suppressed_without_reconnect_storm():
+    client = FakeTickerClient()
+    subject = manager(client)
+    subject.connect()
+    client.callbacks["on_connect"](None, {})
+
+    client.callbacks["on_error"](None, 1006, "peer dropped the TCP connection without previous WebSocket closing handshake")
+    first = subject.snapshot()
+    client.callbacks["on_error"](None, 1006, "peer dropped the TCP connection without previous WebSocket closing handshake")
+    second = subject.snapshot()
+
+    assert first.status is ZerodhaWebSocketStatus.RECONNECT_WAIT
+    assert second.reconnect_count == first.reconnect_count
+    assert second.retry_count == first.retry_count
+    assert second.suppressed_error_count == 1
+    assert client.connect_calls == [True]
+
+
+def test_duplicate_connect_callbacks_do_not_resubscribe_same_connection():
+    client = FakeTickerClient()
+    subject = manager(client, (sub(101), sub(102, Instrument.BANKNIFTY)))
+    subject.connect()
+
+    client.callbacks["on_connect"](None, {})
+    client.callbacks["on_connect"](None, {})
+
+    assert subject.snapshot().connection_count == 1
+    assert client.subscribed == [[101, 102]]
 
 
 def test_subscribe_unsubscribe_disconnected_and_connected_failure_paths():

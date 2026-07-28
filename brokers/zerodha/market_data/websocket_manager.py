@@ -4,7 +4,7 @@ Zerodha live market-data WebSocket manager.
 
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from threading import RLock
 
 from brokers.zerodha.auth.models import ZerodhaSession
@@ -43,12 +43,24 @@ class ZerodhaWebSocketManager:
         subscriptions: tuple[ZerodhaInstrumentSubscription, ...] = (),
         client: ZerodhaTickerClientProtocol | None = None,
         clock=None,
+        reconnect_initial_delay_seconds: int = 1,
+        reconnect_max_delay_seconds: int = 60,
     ):
         self._api_key = _require_text(api_key, "api_key")
         if not isinstance(session, ZerodhaSession):
             raise TypeError("session must be ZerodhaSession")
         self._session = session
         self._clock = clock or _default_clock
+        self._reconnect_initial_delay_seconds = self._require_positive_int(
+            reconnect_initial_delay_seconds,
+            "reconnect_initial_delay_seconds",
+        )
+        self._reconnect_max_delay_seconds = self._require_positive_int(
+            reconnect_max_delay_seconds,
+            "reconnect_max_delay_seconds",
+        )
+        if self._reconnect_initial_delay_seconds > self._reconnect_max_delay_seconds:
+            raise ValueError("reconnect_initial_delay_seconds must be <= reconnect_max_delay_seconds")
         if session.is_expired(self._now()):
             raise ValueError("Zerodha session is expired")
         if not callable(tick_consumer):
@@ -56,7 +68,12 @@ class ZerodhaWebSocketManager:
         self._tick_consumer = tick_consumer
         self._registry = ZerodhaSubscriptionRegistry(subscriptions)
         self._normalizer = ZerodhaTickNormalizer(self._registry, clock=self._clock)
-        self._client = client or KiteTickerClient(api_key=self._api_key, access_token=session.access_token)
+        self._client = client or KiteTickerClient(
+            api_key=self._api_key,
+            access_token=session.access_token,
+            reconnect=False,
+            reconnect_max_delay=self._reconnect_max_delay_seconds,
+        )
         self._lock = RLock()
         self._status = ZerodhaWebSocketStatus.CREATED
         self._connection_count = 0
@@ -71,6 +88,12 @@ class ZerodhaWebSocketManager:
         self._last_tick_at: datetime | None = None
         self._last_error: str | None = None
         self._disconnect_count_available = False
+        self._retry_count = 0
+        self._reconnect_delay_seconds = 0
+        self._reconnect_due_at: datetime | None = None
+        self._suppressed_error_count = 0
+        self._last_error_fingerprint: str | None = None
+        self._subscriptions_applied_for_connection = False
         self._client.set_callbacks(
             on_connect=self._on_connect,
             on_ticks=self._on_ticks,
@@ -92,30 +115,47 @@ class ZerodhaWebSocketManager:
     def connect(self) -> ZerodhaWebSocketSnapshot:
         with self._lock:
             self._reject_expired_session()
-            if self._status in {ZerodhaWebSocketStatus.CONNECTED, ZerodhaWebSocketStatus.CONNECTING}:
+            if self._status in {
+                ZerodhaWebSocketStatus.CONNECTED,
+                ZerodhaWebSocketStatus.CONNECTING,
+                ZerodhaWebSocketStatus.DISCONNECTING,
+            }:
+                return self.snapshot()
+            if self._status is ZerodhaWebSocketStatus.RECONNECT_WAIT and not self._retry_due_unlocked():
                 return self.snapshot()
             self._status = ZerodhaWebSocketStatus.CONNECTING
+            self._subscriptions_applied_for_connection = False
             try:
                 self._client.connect(threaded=True)
             except Exception as exc:
-                self._status = ZerodhaWebSocketStatus.ERROR
-                self._last_error = self._safe_error(exc)
+                self._record_error_unlocked(exc)
+                self._schedule_reconnect_unlocked()
                 raise
             return self.snapshot()
 
+    def retry_connect_if_due(self) -> ZerodhaWebSocketSnapshot:
+        with self._lock:
+            if self._status is not ZerodhaWebSocketStatus.RECONNECT_WAIT:
+                return self.snapshot()
+            if not self._retry_due_unlocked():
+                return self.snapshot()
+        return self.connect()
+
     def disconnect(self) -> ZerodhaWebSocketSnapshot:
         with self._lock:
-            if self._status in {ZerodhaWebSocketStatus.CREATED, ZerodhaWebSocketStatus.DISCONNECTED}:
-                self._status = ZerodhaWebSocketStatus.DISCONNECTED
+            if self._status in {ZerodhaWebSocketStatus.CREATED, ZerodhaWebSocketStatus.DISCONNECTED, ZerodhaWebSocketStatus.STOPPED}:
+                self._status = ZerodhaWebSocketStatus.STOPPED
+                self._clear_retry_unlocked()
                 return self.snapshot()
             self._status = ZerodhaWebSocketStatus.DISCONNECTING
             try:
                 self._client.close()
             except Exception as exc:
                 self._status = ZerodhaWebSocketStatus.ERROR
-                self._last_error = self._safe_error(exc)
+                self._record_error_unlocked(exc)
                 raise
-            self._status = ZerodhaWebSocketStatus.DISCONNECTED
+            self._status = ZerodhaWebSocketStatus.STOPPED
+            self._clear_retry_unlocked()
             self._account_disconnect()
             return self.snapshot()
 
@@ -132,7 +172,7 @@ class ZerodhaWebSocketManager:
                 except Exception as exc:
                     self._registry.remove_by_token(subscription.instrument_token)
                     self._status = ZerodhaWebSocketStatus.ERROR
-                    self._last_error = self._safe_error(exc)
+                    self._record_error_unlocked(exc)
                     raise
             return self.snapshot()
 
@@ -148,7 +188,7 @@ class ZerodhaWebSocketManager:
                     self._client.unsubscribe([instrument_token])
                 except Exception as exc:
                     self._status = ZerodhaWebSocketStatus.ERROR
-                    self._last_error = self._safe_error(exc)
+                    self._record_error_unlocked(exc)
                     raise
             self._registry.remove_by_token(instrument_token)
             return self.snapshot()
@@ -185,7 +225,7 @@ class ZerodhaWebSocketManager:
                 except Exception as exc:
                     self._registry.replace(previous)
                     self._status = ZerodhaWebSocketStatus.ERROR
-                    self._last_error = self._safe_error(exc)
+                    self._record_error_unlocked(exc)
                     raise
             self._registry.replace(proposed.all())
             return self.snapshot()
@@ -211,7 +251,7 @@ class ZerodhaWebSocketManager:
                 except Exception as exc:
                     rejected += 1
                     self._rejected_tick_count += 1
-                    self._last_error = self._safe_error(exc)
+                    self._record_error_unlocked(exc)
                     continue
                 try:
                     self._tick_consumer(tick)
@@ -220,7 +260,7 @@ class ZerodhaWebSocketManager:
                 except Exception as exc:
                     rejected += 1
                     self._rejected_tick_count += 1
-                    self._last_error = self._safe_error(exc)
+                    self._record_error_unlocked(exc)
                     continue
             return ZerodhaTickBatchResult(
                 received_count=len(batch),
@@ -242,8 +282,12 @@ class ZerodhaWebSocketManager:
                 normalized_tick_count=self._normalized_tick_count,
                 delivered_tick_count=self._delivered_tick_count,
                 rejected_tick_count=self._rejected_tick_count,
+                retry_count=self._retry_count,
+                reconnect_delay_seconds=self._reconnect_delay_seconds,
+                suppressed_error_count=self._suppressed_error_count,
                 last_connected_at=self._last_connected_at,
                 last_disconnected_at=self._last_disconnected_at,
+                reconnect_due_at=self._reconnect_due_at,
                 last_tick_at=self._last_tick_at,
                 last_error=self._last_error,
             )
@@ -254,20 +298,26 @@ class ZerodhaWebSocketManager:
 
     def _on_connect(self, ws, response) -> None:
         with self._lock:
+            if self._status is ZerodhaWebSocketStatus.CONNECTED and self._subscriptions_applied_for_connection:
+                return
             self._status = ZerodhaWebSocketStatus.CONNECTED
             self._connection_count += 1
             self._disconnect_count_available = True
             self._last_connected_at = self._now()
             self._last_error = None
+            self._last_error_fingerprint = None
+            self._suppressed_error_count = 0
+            self._clear_retry_unlocked()
             tokens = list(self._registry.tokens())
             try:
                 if tokens:
                     self._client.subscribe(tokens)
                 for mode, mode_tokens in self._mode_groups(self._registry.all()).items():
                     self._client.set_mode(self._mode_value(mode), list(mode_tokens))
+                self._subscriptions_applied_for_connection = True
             except Exception as exc:
                 self._status = ZerodhaWebSocketStatus.ERROR
-                self._last_error = self._safe_error(exc)
+                self._record_error_unlocked(exc)
                 raise
 
     def _on_ticks(self, ws, ticks) -> None:
@@ -275,23 +325,34 @@ class ZerodhaWebSocketManager:
 
     def _on_close(self, ws, code, reason) -> None:
         with self._lock:
-            self._status = ZerodhaWebSocketStatus.DISCONNECTED
+            if self._status in {ZerodhaWebSocketStatus.DISCONNECTING, ZerodhaWebSocketStatus.STOPPED}:
+                self._status = ZerodhaWebSocketStatus.STOPPED
+                self._clear_retry_unlocked()
+                self._account_disconnect()
+                return
             self._account_disconnect()
+            self._record_error_unlocked(RuntimeError(f"WebSocket closed: {code} {reason}"))
+            self._schedule_reconnect_unlocked()
 
     def _on_error(self, ws, code, reason) -> None:
         with self._lock:
-            self._status = ZerodhaWebSocketStatus.ERROR
-            self._last_error = self._safe_error(RuntimeError(f"WebSocket error: {code}"))
+            if self._status in {ZerodhaWebSocketStatus.DISCONNECTING, ZerodhaWebSocketStatus.STOPPED}:
+                return
+            self._record_error_unlocked(RuntimeError(f"WebSocket error: {code} {reason}"))
+            self._schedule_reconnect_unlocked()
 
     def _on_reconnect(self, ws, attempts_count) -> None:
         with self._lock:
-            self._status = ZerodhaWebSocketStatus.RECONNECTING
-            self._reconnect_count += 1
+            if self._status in {ZerodhaWebSocketStatus.DISCONNECTING, ZerodhaWebSocketStatus.STOPPED}:
+                return
+            self._schedule_reconnect_unlocked()
 
     def _on_noreconnect(self, ws) -> None:
         with self._lock:
+            if self._status in {ZerodhaWebSocketStatus.DISCONNECTING, ZerodhaWebSocketStatus.STOPPED}:
+                return
             self._status = ZerodhaWebSocketStatus.ERROR
-            self._last_error = "Zerodha WebSocket reconnect attempts exhausted"
+            self._record_error_unlocked(RuntimeError("Zerodha WebSocket reconnect attempts exhausted"))
 
     def _mode_groups(
         self,
@@ -326,6 +387,7 @@ class ZerodhaWebSocketManager:
             ZerodhaWebSocketStatus.CONNECTING,
             ZerodhaWebSocketStatus.CONNECTED,
             ZerodhaWebSocketStatus.RECONNECTING,
+            ZerodhaWebSocketStatus.RECONNECT_WAIT,
             ZerodhaWebSocketStatus.DISCONNECTING,
         }
 
@@ -343,3 +405,40 @@ class ZerodhaWebSocketManager:
         if "{" in message or "}" in message:
             message = message.split("{", 1)[0].strip()
         return message
+
+    def _record_error_unlocked(self, exc: Exception) -> None:
+        message = self._safe_error(exc)
+        if message == self._last_error_fingerprint:
+            self._suppressed_error_count += 1
+            return
+        self._last_error_fingerprint = message
+        self._last_error = message
+
+    def _schedule_reconnect_unlocked(self) -> None:
+        if self._status in {ZerodhaWebSocketStatus.DISCONNECTING, ZerodhaWebSocketStatus.STOPPED}:
+            return
+        if self._status is ZerodhaWebSocketStatus.RECONNECT_WAIT:
+            return
+        self._status = ZerodhaWebSocketStatus.RECONNECT_WAIT
+        self._reconnect_count += 1
+        self._retry_count += 1
+        delay = min(
+            self._reconnect_initial_delay_seconds * (2 ** (self._retry_count - 1)),
+            self._reconnect_max_delay_seconds,
+        )
+        self._reconnect_delay_seconds = delay
+        self._reconnect_due_at = self._now() + timedelta(seconds=delay)
+        self._subscriptions_applied_for_connection = False
+
+    def _retry_due_unlocked(self) -> bool:
+        return self._reconnect_due_at is None or self._now() >= self._reconnect_due_at
+
+    def _clear_retry_unlocked(self) -> None:
+        self._retry_count = 0
+        self._reconnect_delay_seconds = 0
+        self._reconnect_due_at = None
+
+    def _require_positive_int(self, value: int, field_name: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{field_name} must be a positive integer")
+        return value
