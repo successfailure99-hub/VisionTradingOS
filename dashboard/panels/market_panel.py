@@ -39,7 +39,9 @@ class MarketPanel(QGroupBox):
             "CPR Pivot", "CPR BC",
             "CPR TC", "Cam H3", "Cam H4", "Cam H5", "Cam H6",
             "Cam L3", "Cam L4", "Cam L5", "Cam L6", "Bias",
-            "Phase", "Strength", "Options", "Updated",
+            "Phase", "Strength", "Options", "Live Tick", "Closed Candle",
+            "Analysis Updated", "Snapshot Created", "Dashboard Rendered",
+            "Feed Delay", "Analysis Basis",
         )
         grid = FieldGrid(self._fields)
         layout.addWidget(grid)
@@ -100,7 +102,13 @@ class MarketPanel(QGroupBox):
             "Phase": view.market_phase,
             "Strength": view.context_strength,
             "Options": view.option_chain_direction,
-            "Updated": formatters.timestamp(view.updated_at),
+            "Live Tick": formatters.timestamp(view.live_tick_at),
+            "Closed Candle": formatters.timestamp(view.closed_candle_at),
+            "Analysis Updated": formatters.timestamp(view.analysis_updated_at),
+            "Snapshot Created": formatters.timestamp(view.snapshot_created_at),
+            "Dashboard Rendered": formatters.timestamp(view.dashboard_rendered_at),
+            "Feed Delay": view.feed_delay_text,
+            "Analysis Basis": view.analysis_basis,
         }
         for field, value in values.items():
             if isinstance(self._labels[field], StatusBadge):

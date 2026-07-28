@@ -234,6 +234,8 @@ def test_reconnect_wait_uses_bounded_backoff_and_prevents_overlapping_connects()
     assert client.connect_calls == [True, True]
 
     client.callbacks["on_error"](None, 1006, "connection was closed uncleanly")
+    assert subject.snapshot().status is ZerodhaWebSocketStatus.CONNECTING
+    client.callbacks["on_close"](None, 1006, "connection was closed uncleanly")
     second = subject.snapshot()
     assert second.status is ZerodhaWebSocketStatus.RECONNECT_WAIT
     assert second.retry_count == 2
@@ -242,6 +244,8 @@ def test_reconnect_wait_uses_bounded_backoff_and_prevents_overlapping_connects()
     current[0] = NOW + timedelta(seconds=6)
     subject.retry_connect_if_due()
     client.callbacks["on_error"](None, 1006, "connection was closed uncleanly")
+    assert subject.snapshot().reconnect_delay_seconds == 4
+    client.callbacks["on_close"](None, 1006, "connection was closed uncleanly")
     assert subject.snapshot().reconnect_delay_seconds == 5
 
 
@@ -256,11 +260,20 @@ def test_duplicate_1006_errors_are_suppressed_without_reconnect_storm():
     client.callbacks["on_error"](None, 1006, "peer dropped the TCP connection without previous WebSocket closing handshake")
     second = subject.snapshot()
 
-    assert first.status is ZerodhaWebSocketStatus.RECONNECT_WAIT
+    assert first.status is ZerodhaWebSocketStatus.CONNECTED
     assert second.reconnect_count == first.reconnect_count
     assert second.retry_count == first.retry_count
     assert second.suppressed_error_count == 1
+    assert second.error_callbacks == 2
+    assert second.disconnect_callbacks == 0
+    assert second.retry_scheduled == 0
     assert client.connect_calls == [True]
+
+    client.callbacks["on_close"](None, 1006, "peer dropped the TCP connection without previous WebSocket closing handshake")
+    closed = subject.snapshot()
+    assert closed.status is ZerodhaWebSocketStatus.RECONNECT_WAIT
+    assert closed.retry_scheduled == 1
+    assert closed.reconnect_owner == "on_close"
 
 
 def test_duplicate_connect_callbacks_do_not_resubscribe_same_connection():
@@ -339,6 +352,13 @@ def test_process_raw_ticks_serialized_delivery_counts_and_errors():
     assert result.rejected_count == 2
     assert subject.snapshot().rejected_tick_count == 2
     assert subject.snapshot().last_tick_at == NOW
+    assert subject.snapshot().broker_received_at == NOW
+    assert subject.snapshot().tick_exchange_timestamp == NOW
+    assert subject.snapshot().tick_normalized_at == NOW
+    assert subject.snapshot().event_published_at == NOW
+    assert subject.snapshot().runtime_processed_at == NOW
+    assert subject.snapshot().latest_tick_latency_ms is not None
+    assert subject.snapshot().max_tick_latency_ms is not None
     assert subject.status is ZerodhaWebSocketStatus.CREATED
 
 

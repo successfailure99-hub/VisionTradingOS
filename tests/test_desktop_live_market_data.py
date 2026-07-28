@@ -421,6 +421,30 @@ def test_auto_connect_starts_runtime_exactly_once_and_run_does_not_duplicate_sta
     monkeypatch.setattr(dashboard._qt_app, "exec", lambda: 0)
     assert dashboard.run() == 0
     assert ticker.connect_calls == 1
+    dashboard.shutdown()
+
+
+def test_desktop_composition_creates_shared_ticker_with_kite_reconnect_disabled(monkeypatch):
+    qt_app()
+    created = []
+
+    class CapturingTicker(FakeTickerClient):
+        def __init__(self, *, api_key, access_token, reconnect=True, **_kwargs):
+            super().__init__()
+            created.append((api_key, access_token, reconnect))
+
+    monkeypatch.setattr("application.desktop_live_data.KiteTickerClient", CapturingTicker)
+
+    dashboard = create_dashboard_application(
+        environ=live_env(LIVE_MARKET_DATA_AUTO_CONNECT="false", REFERENCE_DATA_BOOTSTRAP_ENABLED="false"),
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: NOW),
+        clock=lambda: NOW,
+    )
+
+    assert created == [("desktop_api_key", "desktop_access_token", False)]
+    assert dashboard.live_market_data_runtime.websocket_manager.snapshot().client_instances_created == 1
+    dashboard.shutdown()
 
 
 def test_configured_mode_exposes_three_subscription_rows_and_preserves_safety_modes():
@@ -779,6 +803,9 @@ def test_tick_delivery_reaches_orchestrator_and_rejected_tick_sets_safe_error_st
     )
     view = dashboard.main_window.refresh()
     assert view.markets[0].last_price == 25000.0
+    assert view.markets[0].live_tick_at == NOW
+    assert view.markets[0].closed_candle_at is None
+    assert view.markets[0].analysis_updated_at is None
     assert view.markets[0].market_bias == "-"
 
     ticker.callbacks["on_ticks"](
@@ -795,6 +822,10 @@ def test_tick_delivery_reaches_orchestrator_and_rejected_tick_sets_safe_error_st
     )
     view = dashboard.main_window.refresh()
     assert view.markets[0].market_bias != "-"
+    assert view.markets[0].live_tick_at == NOW + timedelta(minutes=1)
+    assert view.markets[0].closed_candle_at is not None
+    assert view.markets[0].analysis_updated_at == NOW + timedelta(minutes=1)
+    assert view.markets[0].feed_delay_text == "0 ms"
     assert view.ai[0].market_summary != "-"
     assert view.strategies[0].decision != "-"
     assert view.strategies[0].risk_decision == "-"

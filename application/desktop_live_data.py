@@ -356,7 +356,11 @@ def create_dashboard_application(
         session = session_manager.session
         if session is None:
             raise DesktopLiveDataConfigurationError("authenticated Zerodha session is required")
-        shared_ticker = ticker_client or KiteTickerClient(api_key=settings.api_key, access_token=session.access_token)
+        shared_ticker = ticker_client or KiteTickerClient(
+            api_key=settings.api_key,
+            access_token=session.access_token,
+            reconnect=False,
+        )
         ticker_router = _DesktopTickerRouter(
             shared_ticker,
             spot_tokens=tuple(subscription.instrument_token for subscription in settings.subscriptions),

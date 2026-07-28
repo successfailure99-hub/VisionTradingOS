@@ -267,6 +267,10 @@ class RuntimeSnapshot:
     position: PositionState | None
     latest_journal_record: TradeJournalRecord | None
     updated_at: datetime | None
+    latest_tick_at: datetime | None = None
+    latest_closed_candle_at: datetime | None = None
+    latest_analysis_at: datetime | None = None
+    snapshot_created_at: datetime | None = None
     vwap_source: RuntimeVWAPSource | None = None
     paper_trading: PaperTradingSnapshot | None = None
     performance_analytics: AnalyticsSnapshot | None = None

@@ -3,6 +3,7 @@ Vision Trading OS desktop main window.
 """
 
 from datetime import UTC, datetime
+from time import perf_counter
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -39,6 +40,10 @@ def _default_clock() -> datetime:
     return datetime.now(UTC)
 
 
+def _bind_signal(signal, callback) -> None:
+    getattr(signal, "connect")(callback)
+
+
 class VisionMainWindow(QMainWindow):
     def __init__(
         self,
@@ -67,6 +72,15 @@ class VisionMainWindow(QMainWindow):
         self._current_view: DashboardView | None = None
         self._last_rendered_view: DashboardView | None = None
         self._rendering = False
+        self._slow_threshold_ms = 100.0
+        self._diagnostics = {
+            "snapshot_retrieval_ms": 0.0,
+            "presenter_construction_ms": 0.0,
+            "active_panel_render_ms": 0.0,
+            "tab_change_ms": 0.0,
+            "dashboard_render_ms": 0.0,
+            "slow_operations": (),
+        }
         self._clock = clock or _default_clock
         self._runtime_panel = RuntimePanel()
         self._live_market_data_panel = LiveMarketDataPanel()
@@ -77,7 +91,10 @@ class VisionMainWindow(QMainWindow):
         self._instrument_panels = {}
         self._timer = QTimer(self)
         self._timer.setInterval(refresh_interval_ms)
-        self._timer.timeout.connect(self.refresh)
+        _bind_signal(self._timer.timeout, self.refresh)
+        _bind_signal(self._main_tabs.currentChanged, self._profile_tab_change)
+        _bind_signal(self._tabs.currentChanged, self._profile_tab_change)
+        _bind_signal(self._system_tabs.currentChanged, self._profile_tab_change)
 
         self.setWindowTitle("Vision Trading OS")
         self.setMinimumSize(1100, 680)
@@ -107,6 +124,7 @@ class VisionMainWindow(QMainWindow):
         return view
 
     def _build_view(self) -> DashboardView:
+        started = perf_counter()
         lifecycle_snapshot = self._lifecycle.snapshot()
         live_snapshot = (
             self._live_market_data_runtime.snapshot()
@@ -118,38 +136,57 @@ class VisionMainWindow(QMainWindow):
             if self._live_option_chain_runtime is not None
             else None
         )
+        self._record_duration("snapshot_retrieval_ms", started)
+        started = perf_counter()
         view = build_dashboard_view(
             lifecycle_snapshot,
             live_snapshot,
             live_option_chain_snapshot=option_chain_snapshot,
             clock=self._clock,
         )
+        self._record_duration("presenter_construction_ms", started)
         return view
 
     def render(self, view: DashboardView) -> None:
         if self._rendering:
             return
         self._rendering = True
+        started = perf_counter()
         try:
             first_render = self._last_rendered_view is None
             self._header_status.set_status_text(view.runtime.application_status)
             self._header_mode.set_status_text(view.runtime.safety_mode)
             self._sync_tabs(view)
+            panel_started = perf_counter()
             if first_render:
                 self._render_all_panels(view)
             else:
                 self._render_visible_panels(view)
+            self._record_duration("active_panel_render_ms", panel_started)
             self.statusBar().showMessage(f"Application {view.runtime.application_status}")
             self._last_rendered_view = view
         finally:
+            self._record_duration("dashboard_render_ms", started)
             self._rendering = False
 
     def current_view(self) -> DashboardView | None:
         return self._current_view
 
+    def diagnostics(self) -> dict[str, object]:
+        return dict(self._diagnostics)
+
     def _render_current_view(self, *_args) -> None:
         if self._current_view is not None:
+            started = perf_counter()
             self._render_visible_panels(self._current_view)
+            self._record_duration("active_panel_render_ms", started)
+
+    def _profile_tab_change(self, *_args) -> None:
+        if self._current_view is None:
+            return
+        started = perf_counter()
+        self._render_visible_panels(self._current_view)
+        self._record_duration("tab_change_ms", started)
 
     def _render_all_panels(self, view: DashboardView) -> None:
         self._runtime_panel.render(view.runtime)
@@ -332,3 +369,10 @@ class VisionMainWindow(QMainWindow):
         widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
         scroll.setWidget(widget)
         return scroll
+
+    def _record_duration(self, field_name: str, started: float) -> None:
+        elapsed_ms = max(0.0, (perf_counter() - started) * 1000.0)
+        self._diagnostics[field_name] = elapsed_ms
+        if elapsed_ms >= self._slow_threshold_ms:
+            rows = tuple(self._diagnostics.get("slow_operations", ()))
+            self._diagnostics["slow_operations"] = rows[-15:] + ((field_name, elapsed_ms),)

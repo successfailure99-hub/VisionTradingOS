@@ -68,6 +68,22 @@ class ZerodhaWebSocketSnapshot:
     reconnect_delay_seconds: int = 0
     suppressed_error_count: int = 0
     reconnect_due_at: datetime | None = None
+    client_instances_created: int = 1
+    connect_attempts: int = 0
+    successful_connections: int = 0
+    disconnect_callbacks: int = 0
+    error_callbacks: int = 0
+    retry_scheduled: int = 0
+    subscriptions_applied: int = 0
+    duplicate_callbacks_suppressed: int = 0
+    reconnect_owner: str = "on_close"
+    broker_received_at: datetime | None = None
+    tick_exchange_timestamp: datetime | None = None
+    tick_normalized_at: datetime | None = None
+    event_published_at: datetime | None = None
+    runtime_processed_at: datetime | None = None
+    latest_tick_latency_ms: float | None = None
+    max_tick_latency_ms: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, ZerodhaWebSocketStatus):
@@ -84,6 +100,14 @@ class ZerodhaWebSocketSnapshot:
             "retry_count",
             "reconnect_delay_seconds",
             "suppressed_error_count",
+            "client_instances_created",
+            "connect_attempts",
+            "successful_connections",
+            "disconnect_callbacks",
+            "error_callbacks",
+            "retry_scheduled",
+            "subscriptions_applied",
+            "duplicate_callbacks_suppressed",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -92,6 +116,18 @@ class ZerodhaWebSocketSnapshot:
         _require_aware(self.last_disconnected_at, "last_disconnected_at")
         _require_aware(self.reconnect_due_at, "reconnect_due_at")
         _require_aware(self.last_tick_at, "last_tick_at")
+        for name in (
+            "broker_received_at",
+            "tick_exchange_timestamp",
+            "tick_normalized_at",
+            "event_published_at",
+            "runtime_processed_at",
+        ):
+            _require_aware(getattr(self, name), name)
+        for name in ("latest_tick_latency_ms", "max_tick_latency_ms"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, (int, float)) or value < 0):
+                raise ValueError(f"{name} must be a non-negative number or None")
 
 
 @dataclass(frozen=True, slots=True)

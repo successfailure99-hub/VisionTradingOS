@@ -57,7 +57,7 @@ def build_dashboard_view(
     all_option_statuses = tuple(option_status_by_symbol.get(symbol) for symbol in INSTRUMENT_ORDER)
     return DashboardView(
         runtime=build_runtime_view(lifecycle_snapshot),
-        markets=tuple(build_market_view(snapshot) for snapshot in runtime_snapshots),
+        markets=tuple(build_market_view(snapshot, clock=clock) for snapshot in runtime_snapshots),
         price_actions=tuple(build_price_action_view(snapshot) for snapshot in runtime_snapshots),
         ai=tuple(build_ai_view(snapshot) for snapshot in runtime_snapshots),
         strategies=tuple(build_strategy_view(snapshot) for snapshot in runtime_snapshots),
@@ -146,6 +146,8 @@ def build_live_market_data_view(
         last_started_at=snapshot.last_started_at,
         last_stopped_at=snapshot.last_stopped_at,
         last_error=_safe_error(snapshot.last_error or getattr(websocket, "last_error", None)),
+        feed_delay_text=_feed_delay_text(getattr(websocket, "last_tick_at", None), clock),
+        connection_state=_enum_text(getattr(websocket, "status", None)),
         market_session=build_market_session_view(snapshot, clock=clock),
     )
 
@@ -261,7 +263,7 @@ def _runtime_component_health(orchestrator) -> tuple[DashboardRuntimeComponentHe
     )
 
 
-def build_market_view(runtime_snapshot: RuntimeSnapshot) -> DashboardMarketView:
+def build_market_view(runtime_snapshot: RuntimeSnapshot, *, clock=None) -> DashboardMarketView:
     tick = runtime_snapshot.latest_tick
     candle = runtime_snapshot.latest_candle
     context = runtime_snapshot.market_context
@@ -318,6 +320,13 @@ def build_market_view(runtime_snapshot: RuntimeSnapshot) -> DashboardMarketView:
         context_strength=_enum_text(getattr(context, "context_strength", None)),
         option_chain_direction=_enum_text(getattr(context, "option_chain_direction", None)),
         updated_at=runtime_snapshot.updated_at,
+        live_tick_at=getattr(runtime_snapshot, "latest_tick_at", None) or getattr(tick, "timestamp", None),
+        closed_candle_at=getattr(runtime_snapshot, "latest_closed_candle_at", None),
+        analysis_updated_at=getattr(runtime_snapshot, "latest_analysis_at", None),
+        snapshot_created_at=getattr(runtime_snapshot, "snapshot_created_at", None),
+        dashboard_rendered_at=_safe_clock_now(clock),
+        feed_delay_text=_feed_delay_text(getattr(runtime_snapshot, "latest_tick_at", None) or getattr(tick, "timestamp", None), clock),
+        analysis_basis=f"Analysis based on latest closed {runtime_snapshot.timeframe} candle",
     )
 
 
@@ -1059,6 +1068,27 @@ def _option_runtime_message(status, runtime_status: str, error: str | None) -> s
     if runtime_status == "Starting":
         return "Starting live option-chain runtime"
     return runtime_status
+
+
+def _safe_clock_now(clock) -> datetime | None:
+    if clock is None:
+        return None
+    try:
+        return _clock_now(clock)
+    except Exception:
+        return None
+
+
+def _feed_delay_text(timestamp, clock) -> str:
+    now = _safe_clock_now(clock)
+    if timestamp is None or now is None:
+        return MISSING
+    if not isinstance(timestamp, datetime) or timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        return MISSING
+    delay_ms = max(0.0, (now - timestamp.astimezone(IST)).total_seconds() * 1000.0)
+    if delay_ms < 1000.0:
+        return f"{delay_ms:.0f} ms"
+    return f"{delay_ms / 1000.0:.1f} s"
 
 
 def _swing_price(swing) -> float | None:

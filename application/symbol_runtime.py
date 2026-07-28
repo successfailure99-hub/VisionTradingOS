@@ -2,6 +2,8 @@
 Per-symbol Application Orchestrator runtime.
 """
 
+from datetime import UTC, datetime
+
 from core.enums.instrument import Instrument
 from core.enums.exchange import Exchange
 from core.enums.timeframe import TimeFrame
@@ -102,6 +104,9 @@ class SymbolRuntime:
         self._primary_timeframe = self._timeframes[0]
         self._last_tick: Tick | None = None
         self._updated_at = None
+        self._latest_tick_at = None
+        self._latest_closed_candle_at = None
+        self._latest_analysis_at = None
         self._daily_ohlc_history: tuple[DailyOHLC, ...] = ()
         self._last_processed_history_counts = {timeframe: 0 for timeframe in self._timeframes}
         self._vwap_source_type = "-"
@@ -395,6 +400,7 @@ class SymbolRuntime:
         closed_timeframes = self._process_closed_candles()
         self._last_tick = tick
         self._updated_at = tick.timestamp
+        self._latest_tick_at = tick.timestamp
         self._refresh_adr(tick.timestamp, tick.last_price)
         self._refresh_closed_timeframe_analysis(closed_timeframes, tick.timestamp, tick.last_price)
         self._process_paper_tick(tick)
@@ -897,6 +903,9 @@ class SymbolRuntime:
         self._decision_audit = None
         self._last_tick = None
         self._updated_at = None
+        self._latest_tick_at = None
+        self._latest_closed_candle_at = None
+        self._latest_analysis_at = None
         self._daily_ohlc_history = ()
         self._last_processed_history_counts = {timeframe: 0 for timeframe in self._timeframes}
         self._vwap_source_type = "-"
@@ -949,6 +958,10 @@ class SymbolRuntime:
             position=self.position_engine.state,
             latest_journal_record=latest_journal_record,
             updated_at=self._updated_at,
+            latest_tick_at=self._latest_tick_at,
+            latest_closed_candle_at=self._latest_closed_candle_at,
+            latest_analysis_at=self._latest_analysis_at,
+            snapshot_created_at=datetime.now(UTC),
             vwap_source=self._vwap_source_snapshot(),
             paper_trading=self.paper_trading_engine.snapshot(),
             performance_analytics=performance_analytics,
@@ -1019,6 +1032,8 @@ class SymbolRuntime:
                     pass
             self._last_processed_history_counts[timeframe] = len(history)
             if new_candles:
+                if timeframe is self._primary_timeframe:
+                    self._latest_closed_candle_at = new_candles[-1].end_time
                 closed_timeframes.append(timeframe)
         return tuple(closed_timeframes)
 
@@ -1045,7 +1060,9 @@ class SymbolRuntime:
                 self._assemble_tradingview_evidence(timestamp, current_price, timeframe=timeframe)
             except Exception:
                 pass
-        self._fuse_multi_timeframe_evidence(timestamp)
+        if timeframes:
+            self._latest_analysis_at = timestamp
+            self._fuse_multi_timeframe_evidence(timestamp)
 
     def _refresh_primary_closed_candle_analysis(self, context: MarketContextState) -> None:
         try:

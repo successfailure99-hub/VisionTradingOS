@@ -66,7 +66,7 @@ def test_refresh_calls_lifecycle_snapshot_once_and_stores_view():
     assert window.current_view() is view
 
 
-def test_render_updates_all_panels():
+def test_first_render_initializes_all_panels_and_records_diagnostics():
     lifecycle = ApplicationBootstrap().create_application()
     window = VisionMainWindow(lifecycle)
     view = window.refresh()
@@ -77,30 +77,34 @@ def test_render_updates_all_panels():
     assert window._instrument_panels[symbol]["option_chain"]._labels["Symbol"].text() == view.option_chains[0].symbol
     assert window._instrument_panels[symbol]["ai"]._labels["Summary"].text() == view.ai[0].market_summary
     assert window._instrument_panels[symbol]["journal"]._analytics_panel._status.text() == view.analytics[0].status
+    assert window.current_view() is view
+    assert window.diagnostics()["active_panel_render_ms"] >= 0.0
 
 
-def test_unchanged_dashboard_model_suppresses_redundant_panel_rendering(monkeypatch):
+def test_cached_tab_change_renders_without_runtime_snapshot_or_broker_work(monkeypatch):
     lifecycle = ApplicationBootstrap().create_application()
     window = VisionMainWindow(lifecycle)
     window.refresh()
-    calls = {"runtime": 0, "market": 0}
-    original_runtime = window._runtime_panel.render
-    original_market = window._instrument_panels["NIFTY"]["market"].render
+    calls = {"snapshot": 0, "market": 0}
+    original_snapshot = lifecycle.snapshot
+    original_market = window._instrument_panels["NIFTY"]["price_action"].render
 
-    def count_runtime(view):
-        calls["runtime"] += 1
-        return original_runtime(view)
+    def count_snapshot():
+        calls["snapshot"] += 1
+        return original_snapshot()
 
     def count_market(view):
         calls["market"] += 1
         return original_market(view)
 
-    monkeypatch.setattr(window._runtime_panel, "render", count_runtime)
-    monkeypatch.setattr(window._instrument_panels["NIFTY"]["market"], "render", count_market)
+    monkeypatch.setattr(lifecycle, "snapshot", count_snapshot)
+    monkeypatch.setattr(window._instrument_panels["NIFTY"]["price_action"], "render", count_market)
 
-    window.refresh()
+    window._instrument_panels["NIFTY"]["sections"].setCurrentIndex(1)
+    window._profile_tab_change()
 
-    assert calls == {"runtime": 0, "market": 0}
+    assert calls == {"snapshot": 0, "market": 1}
+    assert window.diagnostics()["tab_change_ms"] >= 0.0
 
 
 def test_changed_refresh_renders_visible_panel_only(monkeypatch):

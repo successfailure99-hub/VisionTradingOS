@@ -70,6 +70,8 @@ class LiveMarketDataPanel(QGroupBox):
             "Reconnects",
             "Raw Ticks",
             "Normalized Ticks",
+            "Feed Delay",
+            "Connection State",
             "Starts",
             "Stops",
             "Last Connected",
@@ -114,6 +116,8 @@ class LiveMarketDataPanel(QGroupBox):
         self._labels["Reconnects"].setText(formatters.integer(view.reconnect_count))
         self._labels["Raw Ticks"].setText(formatters.integer(view.raw_tick_count))
         self._labels["Normalized Ticks"].setText(formatters.integer(view.normalized_tick_count))
+        self._labels["Feed Delay"].setText(formatters.text(view.feed_delay_text))
+        self._labels["Connection State"].setText(formatters.text(view.connection_state))
         self._labels["Starts"].setText(formatters.integer(view.start_count))
         self._labels["Stops"].setText(formatters.integer(view.stop_count))
         self._labels["Last Connected"].setText(formatters.timestamp(view.last_connected_at))

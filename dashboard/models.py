@@ -165,6 +165,8 @@ class DashboardLiveMarketDataView:
     last_started_at: datetime | None
     last_stopped_at: datetime | None
     last_error: str | None
+    feed_delay_text: str = "-"
+    connection_state: str = "Disconnected"
     market_session: DashboardMarketSessionView = field(default_factory=default_market_session_view)
 
     def __post_init__(self) -> None:
@@ -468,6 +470,13 @@ class DashboardMarketView:
     context_strength: str
     option_chain_direction: str
     updated_at: datetime | None
+    live_tick_at: datetime | None = None
+    closed_candle_at: datetime | None = None
+    analysis_updated_at: datetime | None = None
+    snapshot_created_at: datetime | None = None
+    dashboard_rendered_at: datetime | None = None
+    feed_delay_text: str = "-"
+    analysis_basis: str = "-"
 
 
 @dataclass(frozen=True, slots=True)
