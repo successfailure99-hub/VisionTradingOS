@@ -28,6 +28,8 @@ from .enums import (
     VisionPreviousDayRelation,
     VisionRangeLocation,
     VisionReversalState,
+    VisionSetupQuality,
+    VisionSetupType,
     VisionStructureEventPhase,
     VisionStructurePattern,
     VisionStructureState,
@@ -57,6 +59,7 @@ from .models import (
     VisionPreviousDayContext,
     VisionStructureContext,
     VisionStructureEventContext,
+    VisionSetupQualificationContext,
     VisionSwingPoint,
     VisionVWAPContext,
 )
@@ -80,6 +83,12 @@ from .structure_events import (
     assemble_vision_structure_event_context,
     validate_structure_event_context,
     validate_structure_event_request,
+)
+from .setup_qualification import (
+    VisionSetupQualificationRequest,
+    assemble_vision_setup_qualification_context,
+    validate_setup_qualification_context,
+    validate_setup_qualification_request,
 )
 from .validator import validate_vision_method_snapshot
 
@@ -123,6 +132,10 @@ __all__ = [
     "VisionPreviousDayContext",
     "VisionRangeLocation",
     "VisionReversalState",
+    "VisionSetupQuality",
+    "VisionSetupQualificationContext",
+    "VisionSetupQualificationRequest",
+    "VisionSetupType",
     "VisionStructureContext",
     "VisionStructureEventContext",
     "VisionStructureEventPhase",
@@ -139,11 +152,14 @@ __all__ = [
     "assemble_vision_level_context",
     "assemble_vision_liquidity_context",
     "assemble_vision_opening_range_context",
+    "assemble_vision_setup_qualification_context",
     "assemble_vision_structure_event_context",
     "assemble_vision_structure_context",
     "validate_level_context_request",
     "validate_liquidity_request",
     "validate_opening_range_request",
+    "validate_setup_qualification_context",
+    "validate_setup_qualification_request",
     "validate_structure_event_context",
     "validate_structure_event_request",
     "validate_structure_request",

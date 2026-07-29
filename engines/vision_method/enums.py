@@ -209,3 +209,20 @@ class VisionBreakStrength(str, Enum):
     NORMAL = "normal"
     STRONG = "strong"
     NONE = "none"
+
+
+class VisionSetupType(str, Enum):
+    TREND_CONTINUATION = "trend_continuation"
+    PULLBACK_CONTINUATION = "pullback_continuation"
+    BREAKOUT = "breakout"
+    FAILED_BREAKOUT = "failed_breakout"
+    LIQUIDITY_REVERSAL = "liquidity_reversal"
+    RANGE_FADE = "range_fade"
+    NO_QUALITY_SETUP = "no_quality_setup"
+
+
+class VisionSetupQuality(str, Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    INVALID = "invalid"

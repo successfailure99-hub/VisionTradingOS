@@ -35,6 +35,8 @@ from .enums import (
     VisionPreviousDayRelation,
     VisionRangeLocation,
     VisionReversalState,
+    VisionSetupQuality,
+    VisionSetupType,
     VisionMSS,
     VisionStructureEventPhase,
     VisionStructurePattern,
@@ -446,6 +448,35 @@ class VisionStructureEventContext:
 
 
 @dataclass(frozen=True, slots=True)
+class VisionSetupQualificationContext:
+    setup_type: VisionSetupType
+    setup_quality: VisionSetupQuality
+    blocking_reasons: tuple[str, ...]
+    supporting_reasons: tuple[str, ...]
+    eligible_for_option_confirmation: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.setup_type, VisionSetupType):
+            raise TypeError("setup_type must be VisionSetupType.")
+        if not isinstance(self.setup_quality, VisionSetupQuality):
+            raise TypeError("setup_quality must be VisionSetupQuality.")
+        blocking = _normalize_unique_text_tuple(self.blocking_reasons, "blocking_reasons")
+        supporting = _normalize_unique_text_tuple(self.supporting_reasons, "supporting_reasons")
+        if not isinstance(self.eligible_for_option_confirmation, bool):
+            raise TypeError("eligible_for_option_confirmation must be bool.")
+        if self.setup_type is VisionSetupType.NO_QUALITY_SETUP and self.eligible_for_option_confirmation:
+            raise ValueError("no quality setup cannot be eligible for option confirmation.")
+        if self.setup_quality is VisionSetupQuality.INVALID and self.eligible_for_option_confirmation:
+            raise ValueError("invalid setup cannot be eligible for option confirmation.")
+        if self.setup_quality is VisionSetupQuality.INVALID and not blocking:
+            raise ValueError("invalid setup requires blocking reasons.")
+        if self.eligible_for_option_confirmation and blocking:
+            raise ValueError("eligible setup cannot have blocking reasons.")
+        object.__setattr__(self, "blocking_reasons", blocking)
+        object.__setattr__(self, "supporting_reasons", supporting)
+
+
+@dataclass(frozen=True, slots=True)
 class VisionLevelContext:
     cpr_context: VisionCPRContext
     camarilla_context: VisionCamarillaContext
@@ -510,6 +541,17 @@ def _normalize_text_tuple(values: tuple[str, ...], field_name: str) -> tuple[str
     if not isinstance(values, tuple):
         raise TypeError(f"{field_name} must be a tuple.")
     return tuple(_normalize_text(item, field_name) for item in values)
+
+
+def _normalize_unique_text_tuple(values: tuple[str, ...], field_name: str) -> tuple[str, ...]:
+    normalized = _normalize_text_tuple(values, field_name)
+    lowered: set[str] = set()
+    for item in normalized:
+        key = item.casefold()
+        if key in lowered:
+            raise ValueError(f"{field_name} cannot contain duplicate reasons.")
+        lowered.add(key)
+    return normalized
 
 
 def _normalize_index_tuple(values: tuple[int, ...], field_name: str) -> tuple[int, ...]:

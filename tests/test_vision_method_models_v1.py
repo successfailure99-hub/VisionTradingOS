@@ -39,6 +39,8 @@ from engines.vision_method import (
     VisionOrderBlockDirection,
     VisionRangeLocation,
     VisionReversalState,
+    VisionSetupQuality,
+    VisionSetupType,
     VisionStructureEventPhase,
     VisionStructurePattern,
     VisionVWAPContext,
@@ -146,6 +148,10 @@ def test_enum_contracts_and_serialization_are_deterministic():
     assert VisionStructureEventPhase.CONTINUATION.value == "continuation"
     assert VisionReversalState.BULLISH_REVERSAL.value == "bullish_reversal"
     assert VisionBreakStrength.STRONG.value == "strong"
+    assert VisionSetupType.TREND_CONTINUATION.value == "trend_continuation"
+    assert VisionSetupType.LIQUIDITY_REVERSAL.value == "liquidity_reversal"
+    assert VisionSetupQuality.HIGH.value == "high"
+    assert VisionSetupQuality.INVALID.value == "invalid"
 
 
 def test_vision_method_snapshot_construction_equality_and_validation():

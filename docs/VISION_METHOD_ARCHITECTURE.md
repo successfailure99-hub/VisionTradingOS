@@ -232,3 +232,74 @@ AI, or risk. VM-06 remains non-repainting because it uses closed candles only.
 VM-06 intentionally does not create runtime integration, dashboard output, AI
 explanation, option confirmation, Vision Method Calculator, strategy, risk, or
 execution.
+
+## VM-07 Setup Qualification Boundary
+
+VM-07 introduces deterministic setup qualification. It answers one question:
+is there a setup worth evaluating further? It does not answer buy, sell,
+position size, entry, exit, risk, or execution.
+
+The setup qualification module consumes only existing immutable Vision Method
+contexts:
+
+- `VisionLevelContext` from VM-02;
+- `VisionOpeningRangeContext` from VM-03;
+- `VisionStructureContext` from VM-04;
+- `VisionLiquidityContext` from VM-05;
+- `VisionStructureEventContext` from VM-06.
+
+It does not consume option-chain snapshots, AI output, StrategyDecision,
+RiskManagement, runtime state, broker state, raw candles, or raw indicators.
+
+VM-07 classifies only descriptive setup candidates:
+
+- trend continuation;
+- pullback continuation;
+- breakout;
+- failed breakout;
+- liquidity reversal;
+- range fade;
+- no quality setup.
+
+Setup quality is deterministic and limited to:
+
+- high;
+- medium;
+- low;
+- invalid.
+
+The output is `VisionSetupQualificationContext`, an immutable context with:
+
+- setup type;
+- setup quality;
+- blocking reasons;
+- supporting reasons;
+- eligibility for later option-chain confirmation.
+
+Eligibility for option-chain confirmation is not trade eligibility. It only
+means the deterministic Vision Method context deserves the next confirmation
+layer. VM-07 intentionally leaves option-chain confirmation, Vision Method
+Calculator, runtime integration, dashboard output, AI explanation, strategy,
+risk, broker integration, and execution to later milestones.
+
+```text
+Level Context
+        |
+        v
+Opening Range
+        |
+        v
+Structure
+        |
+        v
+Liquidity
+        |
+        v
+Structure Events
+        |
+        v
+Setup Qualification
+        |
+        v
+Option Chain Confirmation (future)
+```
