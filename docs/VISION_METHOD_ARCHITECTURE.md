@@ -199,3 +199,36 @@ or produce trade decisions.
 VM-05 intentionally does not implement BOS, CHoCH, Market Structure Shift,
 Vision Method Calculator, runtime integration, dashboard output, AI explanation,
 strategy, risk, or execution. Those belong to later Vision Method milestones.
+
+## VM-06 Structure Events Boundary
+
+VM-06 introduces deterministic structure-event context. Structure explains what
+price did; structure events explain when the market changed. This module
+consumes:
+
+- `VisionStructureContext` from VM-04;
+- `VisionLiquidityContext` from VM-05;
+- canonical immutable closed `Candle` objects.
+
+It does not recalculate structure, liquidity, indicators, option-chain
+confirmation, strategy, or AI reasoning.
+
+The structure-event context classifies:
+
+- bullish BOS: continuation break above a confirmed swing high after bullish
+  HH/HL structure;
+- bearish BOS: continuation break below a confirmed swing low after bearish
+  LH/LL structure;
+- bullish CHoCH: first break above structure against bearish context;
+- bearish CHoCH: first break below structure against bullish context;
+- MSS: descriptive market structure shift attached to CHoCH only;
+- continuation, reversal, transition, or no event;
+- break strength: weak, normal, strong, or none.
+
+Break strength is deterministic and uses only structure distance, liquidity
+sweep support, and recent candle range. It does not use volume, option chain,
+AI, or risk. VM-06 remains non-repainting because it uses closed candles only.
+
+VM-06 intentionally does not create runtime integration, dashboard output, AI
+explanation, option confirmation, Vision Method Calculator, strategy, risk, or
+execution.

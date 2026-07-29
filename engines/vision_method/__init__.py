@@ -5,8 +5,11 @@ This package intentionally contains no engine or calculator in VM-01.
 """
 
 from .enums import (
+    VisionBOS,
     VisionBreakerBlockState,
+    VisionBreakStrength,
     VisionBreakDirection,
+    VisionCHoCH,
     VisionCPRRelation,
     VisionCamarillaZone,
     VisionCandidateState,
@@ -17,12 +20,15 @@ from .enums import (
     VisionLiquiditySweep,
     VisionMarketRegime,
     VisionMitigationState,
+    VisionMSS,
     VisionOpeningLocation,
     VisionOpeningRangeState,
     VisionOrderBlockDirection,
     VisionOptionConfirmation,
     VisionPreviousDayRelation,
     VisionRangeLocation,
+    VisionReversalState,
+    VisionStructureEventPhase,
     VisionStructurePattern,
     VisionStructureState,
     VisionStructureTrend,
@@ -50,6 +56,7 @@ from .models import (
     VisionOrderBlock,
     VisionPreviousDayContext,
     VisionStructureContext,
+    VisionStructureEventContext,
     VisionSwingPoint,
     VisionVWAPContext,
 )
@@ -68,12 +75,21 @@ from .structure import (
     assemble_vision_structure_context,
     validate_structure_request,
 )
+from .structure_events import (
+    VisionStructureEventRequest,
+    assemble_vision_structure_event_context,
+    validate_structure_event_context,
+    validate_structure_event_request,
+)
 from .validator import validate_vision_method_snapshot
 
 __all__ = [
+    "VisionBOS",
     "VisionBreakerBlock",
     "VisionBreakerBlockState",
+    "VisionBreakStrength",
     "VisionBreakDirection",
+    "VisionCHoCH",
     "VisionCandidateState",
     "VisionCPRContext",
     "VisionCPRRelation",
@@ -94,6 +110,7 @@ __all__ = [
     "VisionMarketRegime",
     "VisionMethodSnapshot",
     "VisionMitigationState",
+    "VisionMSS",
     "VisionOpeningContext",
     "VisionOpeningLocation",
     "VisionOpeningRangeContext",
@@ -105,7 +122,11 @@ __all__ = [
     "VisionPreviousDayRelation",
     "VisionPreviousDayContext",
     "VisionRangeLocation",
+    "VisionReversalState",
     "VisionStructureContext",
+    "VisionStructureEventContext",
+    "VisionStructureEventPhase",
+    "VisionStructureEventRequest",
     "VisionStructurePattern",
     "VisionStructureRequest",
     "VisionStructureState",
@@ -118,10 +139,13 @@ __all__ = [
     "assemble_vision_level_context",
     "assemble_vision_liquidity_context",
     "assemble_vision_opening_range_context",
+    "assemble_vision_structure_event_context",
     "assemble_vision_structure_context",
     "validate_level_context_request",
     "validate_liquidity_request",
     "validate_opening_range_request",
+    "validate_structure_event_context",
+    "validate_structure_event_request",
     "validate_structure_request",
     "validate_vision_method_snapshot",
 ]

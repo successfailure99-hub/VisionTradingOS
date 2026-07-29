@@ -14,8 +14,11 @@ from application.enums import RuntimeInstrument
 from core.enums.timeframe import TimeFrame
 
 from .enums import (
+    VisionBOS,
     VisionBreakerBlockState,
+    VisionBreakStrength,
     VisionBreakDirection,
+    VisionCHoCH,
     VisionCPRRelation,
     VisionCamarillaZone,
     VisionCandidateState,
@@ -31,6 +34,9 @@ from .enums import (
     VisionOrderBlockDirection,
     VisionPreviousDayRelation,
     VisionRangeLocation,
+    VisionReversalState,
+    VisionMSS,
+    VisionStructureEventPhase,
     VisionStructurePattern,
     VisionStructureTrend,
     VisionSweepDirection,
@@ -390,6 +396,53 @@ class VisionLiquidityContext:
             raise ValueError("sweeps require an identified liquidity pool.")
         if self.liquidity_sweep is VisionLiquiditySweep.NONE and self.sweep_direction is not VisionSweepDirection.NONE:
             raise ValueError("sweep_direction must be NONE when no liquidity sweep exists.")
+
+
+@dataclass(frozen=True, slots=True)
+class VisionStructureEventContext:
+    bos: VisionBOS
+    choch: VisionCHoCH
+    mss: VisionMSS
+    continuation: VisionStructureEventPhase
+    reversal: VisionReversalState
+    break_strength: VisionBreakStrength
+    quality: VisionLevelQuality
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.bos, VisionBOS):
+            raise TypeError("bos must be VisionBOS.")
+        if not isinstance(self.choch, VisionCHoCH):
+            raise TypeError("choch must be VisionCHoCH.")
+        if not isinstance(self.mss, VisionMSS):
+            raise TypeError("mss must be VisionMSS.")
+        if not isinstance(self.continuation, VisionStructureEventPhase):
+            raise TypeError("continuation must be VisionStructureEventPhase.")
+        if not isinstance(self.reversal, VisionReversalState):
+            raise TypeError("reversal must be VisionReversalState.")
+        if not isinstance(self.break_strength, VisionBreakStrength):
+            raise TypeError("break_strength must be VisionBreakStrength.")
+        if not isinstance(self.quality, VisionLevelQuality):
+            raise TypeError("quality must be VisionLevelQuality.")
+        if self.bos is not VisionBOS.NONE and self.choch is not VisionCHoCH.NONE:
+            raise ValueError("BOS and CHoCH cannot both be active.")
+        if self.bos is not VisionBOS.NONE and self.continuation is not VisionStructureEventPhase.CONTINUATION:
+            raise ValueError("BOS requires continuation state.")
+        if self.choch is not VisionCHoCH.NONE and self.continuation is not VisionStructureEventPhase.REVERSAL:
+            raise ValueError("CHoCH requires reversal state.")
+        if self.choch is VisionCHoCH.BULLISH_CHOCH and self.reversal is not VisionReversalState.BULLISH_REVERSAL:
+            raise ValueError("bullish CHoCH requires bullish reversal.")
+        if self.choch is VisionCHoCH.BEARISH_CHOCH and self.reversal is not VisionReversalState.BEARISH_REVERSAL:
+            raise ValueError("bearish CHoCH requires bearish reversal.")
+        if self.choch is VisionCHoCH.NONE and self.reversal is not VisionReversalState.NONE:
+            raise ValueError("reversal requires CHoCH.")
+        if self.mss is VisionMSS.MARKET_STRUCTURE_SHIFT and self.choch is VisionCHoCH.NONE:
+            raise ValueError("MSS requires CHoCH.")
+        if (
+            self.bos is VisionBOS.NONE
+            and self.choch is VisionCHoCH.NONE
+            and self.break_strength is not VisionBreakStrength.NONE
+        ):
+            raise ValueError("break strength requires a structure event.")
 
 
 @dataclass(frozen=True, slots=True)

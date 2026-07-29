@@ -13,8 +13,11 @@ from core.events import (
     VISION_METHOD_UPDATED,
 )
 from engines.vision_method import (
+    VisionBOS,
     VisionBreakerBlockState,
+    VisionBreakStrength,
     VisionBreakDirection,
+    VisionCHoCH,
     VisionADRContext,
     VisionCPRContext,
     VisionCPRRelation,
@@ -28,12 +31,15 @@ from engines.vision_method import (
     VisionLiquiditySweep,
     VisionMarketRegime,
     VisionMitigationState,
+    VisionMSS,
     VisionMethodSnapshot,
     VisionOpeningContext,
     VisionOpeningLocation,
     VisionOpeningRangeState,
     VisionOrderBlockDirection,
     VisionRangeLocation,
+    VisionReversalState,
+    VisionStructureEventPhase,
     VisionStructurePattern,
     VisionVWAPContext,
     VisionVWAPRelation,
@@ -134,6 +140,12 @@ def test_enum_contracts_and_serialization_are_deterministic():
     assert VisionOrderBlockDirection.BEARISH.value == "bearish"
     assert VisionBreakerBlockState.NOT_EVALUATED.value == "not_evaluated"
     assert VisionMitigationState.NOT_EVALUATED.value == "not_evaluated"
+    assert VisionBOS.BULLISH_BOS.value == "bullish_bos"
+    assert VisionCHoCH.BEARISH_CHOCH.value == "bearish_choch"
+    assert VisionMSS.MARKET_STRUCTURE_SHIFT.value == "market_structure_shift"
+    assert VisionStructureEventPhase.CONTINUATION.value == "continuation"
+    assert VisionReversalState.BULLISH_REVERSAL.value == "bullish_reversal"
+    assert VisionBreakStrength.STRONG.value == "strong"
 
 
 def test_vision_method_snapshot_construction_equality_and_validation():

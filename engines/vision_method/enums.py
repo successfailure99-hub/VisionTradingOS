@@ -172,3 +172,40 @@ class VisionBreakerBlockState(str, Enum):
 
 class VisionMitigationState(str, Enum):
     NOT_EVALUATED = "not_evaluated"
+
+
+class VisionBOS(str, Enum):
+    BULLISH_BOS = "bullish_bos"
+    BEARISH_BOS = "bearish_bos"
+    NONE = "none"
+
+
+class VisionCHoCH(str, Enum):
+    BULLISH_CHOCH = "bullish_choch"
+    BEARISH_CHOCH = "bearish_choch"
+    NONE = "none"
+
+
+class VisionMSS(str, Enum):
+    MARKET_STRUCTURE_SHIFT = "market_structure_shift"
+    NONE = "none"
+
+
+class VisionStructureEventPhase(str, Enum):
+    CONTINUATION = "continuation"
+    REVERSAL = "reversal"
+    TRANSITION = "transition"
+    NONE = "none"
+
+
+class VisionReversalState(str, Enum):
+    BULLISH_REVERSAL = "bullish_reversal"
+    BEARISH_REVERSAL = "bearish_reversal"
+    NONE = "none"
+
+
+class VisionBreakStrength(str, Enum):
+    WEAK = "weak"
+    NORMAL = "normal"
+    STRONG = "strong"
+    NONE = "none"
