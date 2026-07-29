@@ -28,11 +28,14 @@ from engines.vision_method import (
     VisionOpeningLocation,
     VisionOpeningRangeState,
     VisionRangeLocation,
+    VisionStructurePattern,
     VisionVWAPContext,
     VisionVWAPRelation,
     VisionOptionConfirmation,
     VisionPreviousDayContext,
     VisionStructureState,
+    VisionStructureTrend,
+    VisionSwingType,
     validate_vision_method_snapshot,
 )
 
@@ -113,6 +116,10 @@ def test_enum_contracts_and_serialization_are_deterministic():
     assert VisionOpeningRangeState.FALSE_BREAK.value == "false_break"
     assert VisionBreakDirection.UP.value == "up"
     assert VisionRangeLocation.INSIDE_RANGE.value == "inside_range"
+    assert VisionSwingType.HIGH.value == "high"
+    assert VisionStructureTrend.BEARISH.value == "bearish"
+    assert VisionStructurePattern.HH.value == "hh"
+    assert VisionStructurePattern.UNKNOWN.value == "unknown"
 
 
 def test_vision_method_snapshot_construction_equality_and_validation():

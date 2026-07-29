@@ -25,6 +25,9 @@ from .enums import (
     VisionOpeningRangeState,
     VisionPreviousDayRelation,
     VisionRangeLocation,
+    VisionStructurePattern,
+    VisionStructureTrend,
+    VisionSwingType,
     VisionVWAPRelation,
 )
 
@@ -193,6 +196,59 @@ class VisionOpeningRangeContext:
             raise TypeError("quality must be VisionLevelQuality.")
         object.__setattr__(self, "opening_high", high)
         object.__setattr__(self, "opening_low", low)
+
+
+@dataclass(frozen=True, slots=True)
+class VisionSwingPoint:
+    price: float
+    time: datetime
+    index: int
+    strength: int
+    type: VisionSwingType
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "price", _positive_number(self.price, "price"))
+        _validate_aware(self.time, "time")
+        if isinstance(self.index, bool) or not isinstance(self.index, int):
+            raise TypeError("index must be int.")
+        if self.index < 0:
+            raise ValueError("index cannot be negative.")
+        if isinstance(self.strength, bool) or not isinstance(self.strength, int):
+            raise TypeError("strength must be int.")
+        if self.strength <= 0:
+            raise ValueError("strength must be positive.")
+        if not isinstance(self.type, VisionSwingType):
+            raise TypeError("type must be VisionSwingType.")
+
+
+@dataclass(frozen=True, slots=True)
+class VisionStructureContext:
+    current_swing_high: VisionSwingPoint | None
+    current_swing_low: VisionSwingPoint | None
+    previous_swing_high: VisionSwingPoint | None
+    previous_swing_low: VisionSwingPoint | None
+    trend: VisionStructureTrend
+    structure_state: VisionStructurePattern
+    last_confirmed_swing: VisionSwingPoint | None
+    quality: VisionLevelQuality
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "current_swing_high",
+            "current_swing_low",
+            "previous_swing_high",
+            "previous_swing_low",
+            "last_confirmed_swing",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(value, VisionSwingPoint):
+                raise TypeError(f"{field_name} must be VisionSwingPoint or None.")
+        if not isinstance(self.trend, VisionStructureTrend):
+            raise TypeError("trend must be VisionStructureTrend.")
+        if not isinstance(self.structure_state, VisionStructurePattern):
+            raise TypeError("structure_state must be VisionStructurePattern.")
+        if not isinstance(self.quality, VisionLevelQuality):
+            raise TypeError("quality must be VisionLevelQuality.")
 
 
 @dataclass(frozen=True, slots=True)

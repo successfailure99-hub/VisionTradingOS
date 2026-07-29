@@ -28,6 +28,26 @@ class VisionStructureState(str, Enum):
     RANGING = "ranging"
 
 
+class VisionSwingType(str, Enum):
+    HIGH = "high"
+    LOW = "low"
+
+
+class VisionStructureTrend(str, Enum):
+    BULLISH = "bullish"
+    BEARISH = "bearish"
+    RANGING = "ranging"
+    UNKNOWN = "unknown"
+
+
+class VisionStructurePattern(str, Enum):
+    HH = "hh"
+    HL = "hl"
+    LH = "lh"
+    LL = "ll"
+    UNKNOWN = "unknown"
+
+
 class VisionOptionConfirmation(str, Enum):
     CONFIRMS = "confirms"
     PARTIAL = "partial"

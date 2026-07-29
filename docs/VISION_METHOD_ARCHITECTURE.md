@@ -142,3 +142,33 @@ or trade decisions.
 
 VM-03 still does not create a `VisionMethodEngine`, runtime integration,
 dashboard panels, AI integration, strategy integration, or trade decisions.
+
+## VM-04 Structure Boundary
+
+VM-04 introduces deterministic structural swing context. It consumes only
+canonical immutable closed `Candle` objects. Price structure is treated as the
+foundation of the Vision Method; CPR, Camarilla, VWAP, ADR, AI, and Option
+Chain are overlays or confirmations and do not create structure.
+
+The structure module confirms swing points with configurable left/right bars:
+
+- default left bars: 2;
+- default right bars: 2;
+- strict swing high: candidate high is greater than all left/right highs;
+- strict swing low: candidate low is lower than all left/right lows;
+- a candidate is not confirmed until the required right bars exist.
+
+This produces non-repainting confirmed swings. VM-04 records:
+
+- current swing high;
+- current swing low;
+- previous swing high;
+- previous swing low;
+- last confirmed swing;
+- structural trend: bullish, bearish, ranging, unknown;
+- latest structural pattern: HH, HL, LH, LL, unknown.
+
+VM-04 intentionally does not classify Break of Structure, Change of Character,
+Market Structure Shift, liquidity sweeps, equal highs/lows, Fair Value Gaps,
+order blocks, entries, exits, strategy, AI, runtime, or dashboard output. Those
+belong to later Vision Method milestones.
