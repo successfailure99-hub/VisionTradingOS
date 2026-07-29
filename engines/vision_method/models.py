@@ -14,6 +14,7 @@ from application.enums import RuntimeInstrument
 from core.enums.timeframe import TimeFrame
 
 from .enums import (
+    VisionBreakDirection,
     VisionCPRRelation,
     VisionCamarillaZone,
     VisionCandidateState,
@@ -21,7 +22,9 @@ from .enums import (
     VisionLevelQuality,
     VisionMarketRegime,
     VisionOpeningLocation,
+    VisionOpeningRangeState,
     VisionPreviousDayRelation,
+    VisionRangeLocation,
     VisionVWAPRelation,
 )
 
@@ -143,6 +146,53 @@ class VisionVWAPContext:
         object.__setattr__(self, "vwap", _positive_number(self.vwap, "vwap"))
         object.__setattr__(self, "distance", _finite_number(self.distance, "distance"))
         object.__setattr__(self, "distance_pct", _finite_number(self.distance_pct, "distance_pct"))
+
+
+@dataclass(frozen=True, slots=True)
+class VisionOpeningRangeContext:
+    opening_start_time: datetime
+    opening_end_time: datetime
+    opening_high: float
+    opening_low: float
+    opening_width: float
+    range_complete: bool
+    current_location: VisionRangeLocation
+    break_direction: VisionBreakDirection
+    retest_state: VisionOpeningRangeState
+    false_break: bool
+    elapsed_minutes: int
+    quality: VisionLevelQuality
+
+    def __post_init__(self) -> None:
+        _validate_aware(self.opening_start_time, "opening_start_time")
+        _validate_aware(self.opening_end_time, "opening_end_time")
+        if self.opening_end_time <= self.opening_start_time:
+            raise ValueError("opening_end_time must be after opening_start_time.")
+        high = _positive_number(self.opening_high, "opening_high")
+        low = _positive_number(self.opening_low, "opening_low")
+        if high < low:
+            raise ValueError("opening_high cannot be below opening_low.")
+        width = _finite_number(self.opening_width, "opening_width")
+        if width != high - low:
+            raise ValueError("opening_width must equal opening_high - opening_low.")
+        if not isinstance(self.range_complete, bool):
+            raise TypeError("range_complete must be bool.")
+        if not isinstance(self.current_location, VisionRangeLocation):
+            raise TypeError("current_location must be VisionRangeLocation.")
+        if not isinstance(self.break_direction, VisionBreakDirection):
+            raise TypeError("break_direction must be VisionBreakDirection.")
+        if not isinstance(self.retest_state, VisionOpeningRangeState):
+            raise TypeError("retest_state must be VisionOpeningRangeState.")
+        if not isinstance(self.false_break, bool):
+            raise TypeError("false_break must be bool.")
+        if isinstance(self.elapsed_minutes, bool) or not isinstance(self.elapsed_minutes, int):
+            raise TypeError("elapsed_minutes must be int.")
+        if self.elapsed_minutes < 0:
+            raise ValueError("elapsed_minutes cannot be negative.")
+        if not isinstance(self.quality, VisionLevelQuality):
+            raise TypeError("quality must be VisionLevelQuality.")
+        object.__setattr__(self, "opening_high", high)
+        object.__setattr__(self, "opening_low", low)
 
 
 @dataclass(frozen=True, slots=True)

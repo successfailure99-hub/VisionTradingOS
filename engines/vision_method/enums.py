@@ -93,3 +93,24 @@ class VisionLevelQuality(str, Enum):
     FULL = "full"
     PARTIAL = "partial"
     INSUFFICIENT = "insufficient"
+
+
+class VisionOpeningRangeState(str, Enum):
+    WAITING = "waiting"
+    INSIDE_RANGE = "inside_range"
+    BREAK_ABOVE = "break_above"
+    BREAK_BELOW = "break_below"
+    RETEST = "retest"
+    FALSE_BREAK = "false_break"
+
+
+class VisionBreakDirection(str, Enum):
+    NONE = "none"
+    UP = "up"
+    DOWN = "down"
+
+
+class VisionRangeLocation(str, Enum):
+    ABOVE_RANGE = "above_range"
+    INSIDE_RANGE = "inside_range"
+    BELOW_RANGE = "below_range"

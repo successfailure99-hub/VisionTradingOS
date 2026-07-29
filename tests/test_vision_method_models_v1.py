@@ -13,6 +13,7 @@ from core.events import (
     VISION_METHOD_UPDATED,
 )
 from engines.vision_method import (
+    VisionBreakDirection,
     VisionADRContext,
     VisionCPRContext,
     VisionCPRRelation,
@@ -25,6 +26,8 @@ from engines.vision_method import (
     VisionMethodSnapshot,
     VisionOpeningContext,
     VisionOpeningLocation,
+    VisionOpeningRangeState,
+    VisionRangeLocation,
     VisionVWAPContext,
     VisionVWAPRelation,
     VisionOptionConfirmation,
@@ -106,6 +109,10 @@ def test_enum_contracts_and_serialization_are_deterministic():
     assert VisionOptionConfirmation.CONTRADICTS.value == "contradicts"
     assert VisionCandidateState.PREPARE_LONG.value == "prepare_long"
     assert VisionCandidateState.INSUFFICIENT_DATA.value == "insufficient_data"
+    assert VisionOpeningRangeState.WAITING.value == "waiting"
+    assert VisionOpeningRangeState.FALSE_BREAK.value == "false_break"
+    assert VisionBreakDirection.UP.value == "up"
+    assert VisionRangeLocation.INSIDE_RANGE.value == "inside_range"
 
 
 def test_vision_method_snapshot_construction_equality_and_validation():

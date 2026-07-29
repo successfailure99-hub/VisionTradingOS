@@ -112,3 +112,33 @@ Level-context quality is deterministic:
 
 VM-02 still does not create a `VisionMethodEngine`, runtime integration,
 dashboard panels, AI integration, strategy integration, or trade decisions.
+
+## VM-03 Opening Range Boundary
+
+VM-03 introduces deterministic opening-range context. It consumes only
+canonical immutable closed `Candle` objects and observes the Vision Method
+opening window:
+
+- session open: 09:15;
+- opening range end: 09:30;
+- opening high: maximum candle high between 09:15 and 09:30;
+- opening low: minimum candle low between 09:15 and 09:30;
+- opening width: opening high minus opening low.
+
+Before 09:30, the opening range remains incomplete and the context is
+`WAITING`. After 09:30, the opening high and opening low are frozen for the
+trading day. Later candles can only classify where price is relative to that
+frozen range:
+
+- inside range;
+- break above;
+- break below;
+- retest;
+- false break.
+
+Opening Range is context only. It does not calculate structure, BOS, CHoCH,
+liquidity, FVG, order blocks, option confirmation, AI reasoning, strategy, risk,
+or trade decisions.
+
+VM-03 still does not create a `VisionMethodEngine`, runtime integration,
+dashboard panels, AI integration, strategy integration, or trade decisions.
