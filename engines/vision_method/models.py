@@ -13,7 +13,17 @@ from datetime import datetime
 from application.enums import RuntimeInstrument
 from core.enums.timeframe import TimeFrame
 
-from .enums import VisionCandidateState, VisionMarketRegime, VisionOpeningLocation
+from .enums import (
+    VisionCPRRelation,
+    VisionCamarillaZone,
+    VisionCandidateState,
+    VisionGapType,
+    VisionLevelQuality,
+    VisionMarketRegime,
+    VisionOpeningLocation,
+    VisionPreviousDayRelation,
+    VisionVWAPRelation,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +51,8 @@ class VisionPreviousDayContext:
     virgin_cpr: bool
     distance_previous_high: float
     distance_previous_low: float
+    previous_day_relation: VisionPreviousDayRelation | None = None
+    gap_type: VisionGapType | None = None
 
     def __post_init__(self) -> None:
         high = _positive_number(self.previous_high, "previous_high")
@@ -57,19 +69,106 @@ class VisionPreviousDayContext:
         object.__setattr__(self, "previous_close", close)
         object.__setattr__(self, "distance_previous_high", _finite_number(self.distance_previous_high, "distance_previous_high"))
         object.__setattr__(self, "distance_previous_low", _finite_number(self.distance_previous_low, "distance_previous_low"))
+        if self.previous_day_relation is not None and not isinstance(self.previous_day_relation, VisionPreviousDayRelation):
+            raise TypeError("previous_day_relation must be VisionPreviousDayRelation or None.")
+        if self.gap_type is not None and not isinstance(self.gap_type, VisionGapType):
+            raise TypeError("gap_type must be VisionGapType or None.")
+
+
+@dataclass(frozen=True, slots=True)
+class VisionCPRContext:
+    relation: VisionCPRRelation
+    bc: float
+    tc: float
+    pivot: float
+    width: float
+    width_percentage: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.relation, VisionCPRRelation):
+            raise TypeError("relation must be VisionCPRRelation.")
+        for field_name in ("bc", "tc", "pivot", "width", "width_percentage"):
+            object.__setattr__(self, field_name, _finite_number(getattr(self, field_name), field_name))
+
+
+@dataclass(frozen=True, slots=True)
+class VisionCamarillaContext:
+    zone: VisionCamarillaZone
+    h3: float
+    h4: float
+    h5: float
+    h6: float
+    l3: float
+    l4: float
+    l5: float
+    l6: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.zone, VisionCamarillaZone):
+            raise TypeError("zone must be VisionCamarillaZone.")
+        for field_name in ("h3", "h4", "h5", "h6", "l3", "l4", "l5", "l6"):
+            object.__setattr__(self, field_name, _finite_number(getattr(self, field_name), field_name))
+
+
+@dataclass(frozen=True, slots=True)
+class VisionADRContext:
+    range_consumed_pct: float
+    range_remaining_pct: float
+    near_adr_resistance: bool
+    near_adr_support: bool
+    expansion: str
+    exhaustion: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "range_consumed_pct", _finite_number(self.range_consumed_pct, "range_consumed_pct"))
+        object.__setattr__(self, "range_remaining_pct", _finite_number(self.range_remaining_pct, "range_remaining_pct"))
+        if not isinstance(self.near_adr_resistance, bool):
+            raise TypeError("near_adr_resistance must be bool.")
+        if not isinstance(self.near_adr_support, bool):
+            raise TypeError("near_adr_support must be bool.")
+        object.__setattr__(self, "expansion", _normalize_text(self.expansion, "expansion"))
+        object.__setattr__(self, "exhaustion", _normalize_text(self.exhaustion, "exhaustion"))
+
+
+@dataclass(frozen=True, slots=True)
+class VisionVWAPContext:
+    relation: VisionVWAPRelation
+    vwap: float
+    distance: float
+    distance_pct: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.relation, VisionVWAPRelation):
+            raise TypeError("relation must be VisionVWAPRelation.")
+        object.__setattr__(self, "vwap", _positive_number(self.vwap, "vwap"))
+        object.__setattr__(self, "distance", _finite_number(self.distance, "distance"))
+        object.__setattr__(self, "distance_pct", _finite_number(self.distance_pct, "distance_pct"))
 
 
 @dataclass(frozen=True, slots=True)
 class VisionLevelContext:
-    cpr_context: object
-    camarilla_context: object
-    adr_context: object
-    vwap_context: object
+    cpr_context: VisionCPRContext
+    camarilla_context: VisionCamarillaContext
+    previous_day_context: VisionPreviousDayContext
+    adr_context: VisionADRContext | None
+    vwap_context: VisionVWAPContext | None
+    quality: VisionLevelQuality
+    missing_evidence: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        for field_name in ("cpr_context", "camarilla_context", "adr_context", "vwap_context"):
-            if getattr(self, field_name) is None:
-                raise ValueError(f"{field_name} is required.")
+        if not isinstance(self.cpr_context, VisionCPRContext):
+            raise TypeError("cpr_context must be VisionCPRContext.")
+        if not isinstance(self.camarilla_context, VisionCamarillaContext):
+            raise TypeError("camarilla_context must be VisionCamarillaContext.")
+        if not isinstance(self.previous_day_context, VisionPreviousDayContext):
+            raise TypeError("previous_day_context must be VisionPreviousDayContext.")
+        if self.adr_context is not None and not isinstance(self.adr_context, VisionADRContext):
+            raise TypeError("adr_context must be VisionADRContext or None.")
+        if self.vwap_context is not None and not isinstance(self.vwap_context, VisionVWAPContext):
+            raise TypeError("vwap_context must be VisionVWAPContext or None.")
+        if not isinstance(self.quality, VisionLevelQuality):
+            raise TypeError("quality must be VisionLevelQuality.")
+        object.__setattr__(self, "missing_evidence", _normalize_text_tuple(self.missing_evidence, "missing_evidence"))
 
 
 @dataclass(frozen=True, slots=True)

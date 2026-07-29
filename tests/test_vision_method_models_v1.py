@@ -13,12 +13,20 @@ from core.events import (
     VISION_METHOD_UPDATED,
 )
 from engines.vision_method import (
+    VisionADRContext,
+    VisionCPRContext,
+    VisionCPRRelation,
+    VisionCamarillaContext,
+    VisionCamarillaZone,
     VisionCandidateState,
     VisionLevelContext,
+    VisionLevelQuality,
     VisionMarketRegime,
     VisionMethodSnapshot,
     VisionOpeningContext,
     VisionOpeningLocation,
+    VisionVWAPContext,
+    VisionVWAPRelation,
     VisionOptionConfirmation,
     VisionPreviousDayContext,
     VisionStructureState,
@@ -52,10 +60,22 @@ def previous_day_context() -> VisionPreviousDayContext:
 
 def level_context() -> VisionLevelContext:
     return VisionLevelContext(
-        cpr_context=("cpr", "above"),
-        camarilla_context=("camarilla", "h3"),
-        adr_context=("adr", "normal"),
-        vwap_context=("vwap", "above"),
+        cpr_context=VisionCPRContext(VisionCPRRelation.ABOVE_CPR, 100.0, 101.0, 100.5, 1.0, 0.5),
+        camarilla_context=VisionCamarillaContext(
+            VisionCamarillaZone.H3_H4,
+            h3=103.0,
+            h4=104.0,
+            h5=105.0,
+            h6=106.0,
+            l3=97.0,
+            l4=96.0,
+            l5=95.0,
+            l6=94.0,
+        ),
+        previous_day_context=previous_day_context(),
+        adr_context=VisionADRContext(50.0, 50.0, False, False, "normal", "not_exhausted"),
+        vwap_context=VisionVWAPContext(VisionVWAPRelation.ABOVE_VWAP, 100.0, 1.0, 1.0),
+        quality=VisionLevelQuality.FULL,
     )
 
 
@@ -123,12 +143,14 @@ def test_missing_mandatory_context_is_rejected():
         snapshot(previous_day_context=None)
     with pytest.raises(TypeError, match="level_context"):
         snapshot(level_context=None)
-    with pytest.raises(ValueError, match="adr_context"):
+    with pytest.raises(TypeError, match="adr_context"):
         VisionLevelContext(
-            cpr_context=("cpr",),
-            camarilla_context=("camarilla",),
-            adr_context=None,
-            vwap_context=("vwap",),
+            cpr_context=level_context().cpr_context,
+            camarilla_context=level_context().camarilla_context,
+            previous_day_context=level_context().previous_day_context,
+            adr_context=("adr",),
+            vwap_context=level_context().vwap_context,
+            quality=VisionLevelQuality.FULL,
         )
 
 
