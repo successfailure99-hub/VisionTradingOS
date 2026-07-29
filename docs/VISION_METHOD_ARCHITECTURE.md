@@ -172,3 +172,30 @@ VM-04 intentionally does not classify Break of Structure, Change of Character,
 Market Structure Shift, liquidity sweeps, equal highs/lows, Fair Value Gaps,
 order blocks, entries, exits, strategy, AI, runtime, or dashboard output. Those
 belong to later Vision Method milestones.
+
+## VM-05 Liquidity Boundary
+
+VM-05 introduces deterministic liquidity context. It consumes only canonical
+immutable closed `Candle` objects. Within the Vision Method, structure explains
+what price did, while liquidity explains why price may have moved.
+
+The liquidity module classifies:
+
+- equal highs using configurable tolerance, defaulting to 0.05%;
+- equal lows using the same tolerance;
+- buy-side, sell-side, or no visible liquidity pool;
+- buy-side and sell-side liquidity sweeps where price trades beyond an equal
+  high or equal low and then closes back inside;
+- three-candle Fair Value Gaps as descriptive imbalance context;
+- an initial order-block marker as the last opposite candle before an impulsive
+  move;
+- breaker block and mitigation fields as immutable placeholders only.
+
+VM-05 remains non-repainting because it uses closed candles only. It does not
+refine order blocks, evaluate mitigation, create setup eligibility, confirm
+with option chain data, publish runtime events, update dashboard panels, call AI,
+or produce trade decisions.
+
+VM-05 intentionally does not implement BOS, CHoCH, Market Structure Shift,
+Vision Method Calculator, runtime integration, dashboard output, AI explanation,
+strategy, risk, or execution. Those belong to later Vision Method milestones.

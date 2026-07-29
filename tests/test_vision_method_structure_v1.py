@@ -186,7 +186,7 @@ def test_structure_models_reject_duplicate_or_invalid_swing_identity():
         VisionSwingPoint(100.0, START, 0, 4, "high")
 
 
-def test_vm04_boundary_creates_no_bos_choch_liquidity_runtime_or_dashboard_code():
+def test_vm04_boundary_creates_no_bos_choch_runtime_or_dashboard_code():
     package = Path("engines/vision_method")
     source = (package / "structure.py").read_text(encoding="utf-8").lower()
 
@@ -194,8 +194,6 @@ def test_vm04_boundary_creates_no_bos_choch_liquidity_runtime_or_dashboard_code(
     assert not (package / "engine.py").exists()
     assert not (package / "bos.py").exists()
     assert not (package / "choch.py").exists()
-    assert not (package / "liquidity.py").exists()
     assert "def assemble_vision_bos" not in source
     assert "def assemble_vision_choch" not in source
     assert "class visionbos" not in source
-    assert "class visionliquidity" not in source

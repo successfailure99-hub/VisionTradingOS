@@ -13,6 +13,7 @@ from core.events import (
     VISION_METHOD_UPDATED,
 )
 from engines.vision_method import (
+    VisionBreakerBlockState,
     VisionBreakDirection,
     VisionADRContext,
     VisionCPRContext,
@@ -20,13 +21,18 @@ from engines.vision_method import (
     VisionCamarillaContext,
     VisionCamarillaZone,
     VisionCandidateState,
+    VisionFairValueGapDirection,
     VisionLevelContext,
     VisionLevelQuality,
+    VisionLiquidityPool,
+    VisionLiquiditySweep,
     VisionMarketRegime,
+    VisionMitigationState,
     VisionMethodSnapshot,
     VisionOpeningContext,
     VisionOpeningLocation,
     VisionOpeningRangeState,
+    VisionOrderBlockDirection,
     VisionRangeLocation,
     VisionStructurePattern,
     VisionVWAPContext,
@@ -35,6 +41,7 @@ from engines.vision_method import (
     VisionPreviousDayContext,
     VisionStructureState,
     VisionStructureTrend,
+    VisionSweepDirection,
     VisionSwingType,
     validate_vision_method_snapshot,
 )
@@ -120,6 +127,13 @@ def test_enum_contracts_and_serialization_are_deterministic():
     assert VisionStructureTrend.BEARISH.value == "bearish"
     assert VisionStructurePattern.HH.value == "hh"
     assert VisionStructurePattern.UNKNOWN.value == "unknown"
+    assert VisionLiquidityPool.BUY_SIDE.value == "buy_side"
+    assert VisionLiquiditySweep.SELL_SIDE_SWEEP.value == "sell_side_sweep"
+    assert VisionSweepDirection.NONE.value == "none"
+    assert VisionFairValueGapDirection.BULLISH.value == "bullish"
+    assert VisionOrderBlockDirection.BEARISH.value == "bearish"
+    assert VisionBreakerBlockState.NOT_EVALUATED.value == "not_evaluated"
+    assert VisionMitigationState.NOT_EVALUATED.value == "not_evaluated"
 
 
 def test_vision_method_snapshot_construction_equality_and_validation():

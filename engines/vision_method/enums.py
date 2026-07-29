@@ -134,3 +134,41 @@ class VisionRangeLocation(str, Enum):
     ABOVE_RANGE = "above_range"
     INSIDE_RANGE = "inside_range"
     BELOW_RANGE = "below_range"
+
+
+class VisionLiquidityPool(str, Enum):
+    BUY_SIDE = "buy_side"
+    SELL_SIDE = "sell_side"
+    NONE = "none"
+
+
+class VisionLiquiditySweep(str, Enum):
+    BUY_SIDE_SWEEP = "buy_side_sweep"
+    SELL_SIDE_SWEEP = "sell_side_sweep"
+    NONE = "none"
+
+
+class VisionSweepDirection(str, Enum):
+    BUY_SIDE = "buy_side"
+    SELL_SIDE = "sell_side"
+    NONE = "none"
+
+
+class VisionFairValueGapDirection(str, Enum):
+    BULLISH = "bullish"
+    BEARISH = "bearish"
+    NONE = "none"
+
+
+class VisionOrderBlockDirection(str, Enum):
+    BULLISH = "bullish"
+    BEARISH = "bearish"
+    NONE = "none"
+
+
+class VisionBreakerBlockState(str, Enum):
+    NOT_EVALUATED = "not_evaluated"
+
+
+class VisionMitigationState(str, Enum):
+    NOT_EVALUATED = "not_evaluated"

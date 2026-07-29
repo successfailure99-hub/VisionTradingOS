@@ -14,19 +14,26 @@ from application.enums import RuntimeInstrument
 from core.enums.timeframe import TimeFrame
 
 from .enums import (
+    VisionBreakerBlockState,
     VisionBreakDirection,
     VisionCPRRelation,
     VisionCamarillaZone,
     VisionCandidateState,
+    VisionFairValueGapDirection,
     VisionGapType,
     VisionLevelQuality,
+    VisionLiquidityPool,
+    VisionLiquiditySweep,
     VisionMarketRegime,
+    VisionMitigationState,
     VisionOpeningLocation,
     VisionOpeningRangeState,
+    VisionOrderBlockDirection,
     VisionPreviousDayRelation,
     VisionRangeLocation,
     VisionStructurePattern,
     VisionStructureTrend,
+    VisionSweepDirection,
     VisionSwingType,
     VisionVWAPRelation,
 )
@@ -252,6 +259,140 @@ class VisionStructureContext:
 
 
 @dataclass(frozen=True, slots=True)
+class VisionLiquidityLevel:
+    price: float
+    start_time: datetime
+    end_time: datetime
+    indexes: tuple[int, ...]
+    type: VisionSwingType
+    tolerance_pct: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "price", _positive_number(self.price, "price"))
+        _validate_aware(self.start_time, "start_time")
+        _validate_aware(self.end_time, "end_time")
+        if self.end_time < self.start_time:
+            raise ValueError("end_time cannot be before start_time.")
+        object.__setattr__(self, "indexes", _normalize_index_tuple(self.indexes, "indexes"))
+        if len(self.indexes) < 2:
+            raise ValueError("liquidity level requires at least two indexes.")
+        if not isinstance(self.type, VisionSwingType):
+            raise TypeError("type must be VisionSwingType.")
+        tolerance = _finite_number(self.tolerance_pct, "tolerance_pct")
+        if tolerance < 0:
+            raise ValueError("tolerance_pct cannot be negative.")
+        object.__setattr__(self, "tolerance_pct", tolerance)
+
+
+@dataclass(frozen=True, slots=True)
+class VisionFairValueGap:
+    direction: VisionFairValueGapDirection
+    start_time: datetime
+    end_time: datetime
+    lower_bound: float
+    upper_bound: float
+    candle_indexes: tuple[int, int, int]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.direction, VisionFairValueGapDirection):
+            raise TypeError("direction must be VisionFairValueGapDirection.")
+        if self.direction is VisionFairValueGapDirection.NONE:
+            raise ValueError("fair value gap direction cannot be NONE.")
+        _validate_aware(self.start_time, "start_time")
+        _validate_aware(self.end_time, "end_time")
+        if self.end_time <= self.start_time:
+            raise ValueError("end_time must be after start_time.")
+        lower = _positive_number(self.lower_bound, "lower_bound")
+        upper = _positive_number(self.upper_bound, "upper_bound")
+        if upper <= lower:
+            raise ValueError("upper_bound must be above lower_bound.")
+        if not isinstance(self.candle_indexes, tuple) or len(self.candle_indexes) != 3:
+            raise TypeError("candle_indexes must be a three-item tuple.")
+        object.__setattr__(self, "candle_indexes", _normalize_index_tuple(self.candle_indexes, "candle_indexes"))
+        object.__setattr__(self, "lower_bound", lower)
+        object.__setattr__(self, "upper_bound", upper)
+
+
+@dataclass(frozen=True, slots=True)
+class VisionOrderBlock:
+    direction: VisionOrderBlockDirection
+    candle_index: int
+    start_time: datetime
+    end_time: datetime
+    high: float
+    low: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.direction, VisionOrderBlockDirection):
+            raise TypeError("direction must be VisionOrderBlockDirection.")
+        if self.direction is VisionOrderBlockDirection.NONE:
+            raise ValueError("order block direction cannot be NONE.")
+        if isinstance(self.candle_index, bool) or not isinstance(self.candle_index, int):
+            raise TypeError("candle_index must be int.")
+        if self.candle_index < 0:
+            raise ValueError("candle_index cannot be negative.")
+        _validate_aware(self.start_time, "start_time")
+        _validate_aware(self.end_time, "end_time")
+        if self.end_time <= self.start_time:
+            raise ValueError("end_time must be after start_time.")
+        high = _positive_number(self.high, "high")
+        low = _positive_number(self.low, "low")
+        if high < low:
+            raise ValueError("high cannot be below low.")
+        object.__setattr__(self, "high", high)
+        object.__setattr__(self, "low", low)
+
+
+@dataclass(frozen=True, slots=True)
+class VisionBreakerBlock:
+    state: VisionBreakerBlockState = VisionBreakerBlockState.NOT_EVALUATED
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.state, VisionBreakerBlockState):
+            raise TypeError("state must be VisionBreakerBlockState.")
+
+
+@dataclass(frozen=True, slots=True)
+class VisionLiquidityContext:
+    equal_highs: tuple[VisionLiquidityLevel, ...]
+    equal_lows: tuple[VisionLiquidityLevel, ...]
+    liquidity_pool: VisionLiquidityPool
+    liquidity_sweep: VisionLiquiditySweep
+    sweep_direction: VisionSweepDirection
+    fair_value_gap: VisionFairValueGap | None
+    order_block: VisionOrderBlock | None
+    breaker_block: VisionBreakerBlock
+    mitigation: VisionMitigationState
+    quality: VisionLevelQuality
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "equal_highs", _normalize_liquidity_levels(self.equal_highs, "equal_highs"))
+        object.__setattr__(self, "equal_lows", _normalize_liquidity_levels(self.equal_lows, "equal_lows"))
+        if not isinstance(self.liquidity_pool, VisionLiquidityPool):
+            raise TypeError("liquidity_pool must be VisionLiquidityPool.")
+        if not isinstance(self.liquidity_sweep, VisionLiquiditySweep):
+            raise TypeError("liquidity_sweep must be VisionLiquiditySweep.")
+        if not isinstance(self.sweep_direction, VisionSweepDirection):
+            raise TypeError("sweep_direction must be VisionSweepDirection.")
+        if self.fair_value_gap is not None and not isinstance(self.fair_value_gap, VisionFairValueGap):
+            raise TypeError("fair_value_gap must be VisionFairValueGap or None.")
+        if self.order_block is not None and not isinstance(self.order_block, VisionOrderBlock):
+            raise TypeError("order_block must be VisionOrderBlock or None.")
+        if not isinstance(self.breaker_block, VisionBreakerBlock):
+            raise TypeError("breaker_block must be VisionBreakerBlock.")
+        if not isinstance(self.mitigation, VisionMitigationState):
+            raise TypeError("mitigation must be VisionMitigationState.")
+        if not isinstance(self.quality, VisionLevelQuality):
+            raise TypeError("quality must be VisionLevelQuality.")
+        if self.liquidity_pool is VisionLiquidityPool.NONE and (
+            self.liquidity_sweep is not VisionLiquiditySweep.NONE or self.sweep_direction is not VisionSweepDirection.NONE
+        ):
+            raise ValueError("sweeps require an identified liquidity pool.")
+        if self.liquidity_sweep is VisionLiquiditySweep.NONE and self.sweep_direction is not VisionSweepDirection.NONE:
+            raise ValueError("sweep_direction must be NONE when no liquidity sweep exists.")
+
+
+@dataclass(frozen=True, slots=True)
 class VisionLevelContext:
     cpr_context: VisionCPRContext
     camarilla_context: VisionCamarillaContext
@@ -316,6 +457,39 @@ def _normalize_text_tuple(values: tuple[str, ...], field_name: str) -> tuple[str
     if not isinstance(values, tuple):
         raise TypeError(f"{field_name} must be a tuple.")
     return tuple(_normalize_text(item, field_name) for item in values)
+
+
+def _normalize_index_tuple(values: tuple[int, ...], field_name: str) -> tuple[int, ...]:
+    if not isinstance(values, tuple):
+        raise TypeError(f"{field_name} must be a tuple.")
+    normalized: list[int] = []
+    previous: int | None = None
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"{field_name} must contain integers.")
+        if value < 0:
+            raise ValueError(f"{field_name} cannot contain negative indexes.")
+        if previous is not None and value <= previous:
+            raise ValueError(f"{field_name} must be strictly increasing.")
+        normalized.append(value)
+        previous = value
+    return tuple(normalized)
+
+
+def _normalize_liquidity_levels(values: tuple[VisionLiquidityLevel, ...], field_name: str) -> tuple[VisionLiquidityLevel, ...]:
+    if not isinstance(values, tuple):
+        raise TypeError(f"{field_name} must be a tuple.")
+    normalized: list[VisionLiquidityLevel] = []
+    identities: set[tuple[VisionSwingType, tuple[int, ...]]] = set()
+    for value in values:
+        if not isinstance(value, VisionLiquidityLevel):
+            raise TypeError(f"{field_name} must contain VisionLiquidityLevel objects.")
+        identity = (value.type, value.indexes)
+        if identity in identities:
+            raise ValueError("duplicate liquidity pool.")
+        identities.add(identity)
+        normalized.append(value)
+    return tuple(normalized)
 
 
 def _normalize_text(value: str, field_name: str) -> str:
