@@ -77,6 +77,11 @@ CHART_EXPLANATION_PARTIAL = "chart_explanation_partial"
 CHART_EXPLANATION_INVALID = "chart_explanation_invalid"
 CHART_EXPLANATION_FAILED = "chart_explanation_failed"
 CHART_EXPLANATION_STATE_UPDATED = "chart_explanation_state_updated"
+VISION_METHOD_UPDATED = "vision_method_updated"
+VISION_METHOD_PARTIAL = "vision_method_partial"
+VISION_METHOD_INVALID = "vision_method_invalid"
+VISION_METHOD_FAILED = "vision_method_failed"
+VISION_METHOD_READY = "vision_method_ready"
 
 # ==================================================
 # Market Context Events

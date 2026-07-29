@@ -1,0 +1,19 @@
+"""
+Vision Method V1 event names.
+"""
+
+from core.events import (
+    VISION_METHOD_FAILED,
+    VISION_METHOD_INVALID,
+    VISION_METHOD_PARTIAL,
+    VISION_METHOD_READY,
+    VISION_METHOD_UPDATED,
+)
+
+__all__ = [
+    "VISION_METHOD_FAILED",
+    "VISION_METHOD_INVALID",
+    "VISION_METHOD_PARTIAL",
+    "VISION_METHOD_READY",
+    "VISION_METHOD_UPDATED",
+]
