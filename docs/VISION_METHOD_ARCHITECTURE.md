@@ -346,3 +346,79 @@ context to evaluate; option-chain analytics can only confirm, contradict, mark
 mixed/partial, remain neutral, or be unavailable. VM-08 does not create trade
 direction, entries, exits, order instructions, paper trades, runtime events, AI
 reasoning, strategy decisions, risk decisions, or dashboard output.
+
+## VM-09 Calculator Boundary
+
+VM-09 introduces the Vision Method Calculator. The calculator is an assembly
+layer only. It consumes the immutable contexts produced by VM-02 through VM-08:
+
+- `VisionLevelContext`;
+- `VisionOpeningRangeContext`;
+- `VisionStructureContext`;
+- `VisionLiquidityContext`;
+- `VisionStructureEventContext`;
+- `VisionSetupQualificationContext`;
+- `VisionOptionConfirmationContext`.
+
+It produces one immutable `VisionMethodSnapshot`. It does not recalculate
+levels, opening range, structure, liquidity, structure events, setup
+qualification, or option-chain analytics.
+
+The calculator merges supporting and blocking reasons from the upstream
+contexts, suppresses duplicates, and preserves deterministic first-seen
+ordering. It classifies the existing candidate states:
+
+- observe;
+- wait;
+- prepare long;
+- prepare short;
+- long eligible;
+- short eligible;
+- avoid;
+- insufficient data.
+
+Candidate state is descriptive methodology state, not execution permission.
+`LONG_ELIGIBLE` and `SHORT_ELIGIBLE` mean the deterministic Vision Method
+context is complete enough for downstream review. They do not place trades,
+recommend orders, size positions, or enable broker activity.
+
+Method quality is deterministic:
+
+- `high`: complete contexts, high setup quality, and confirming option-chain
+  confirmation;
+- `medium`: partial or neutral confirmation, medium setup quality, or partial
+  non-mandatory context;
+- `low`: valid but weaker methodology context;
+- `invalid`: blocking reasons, avoid state, or insufficient methodology data.
+
+VM-09 intentionally still does not create runtime integration, dashboard
+output, AI explanation, strategy decisions, risk decisions, paper trades, broker
+integration, or execution. Those remain later milestones.
+
+```text
+Level Context
+        |
+        v
+Opening Range
+        |
+        v
+Structure
+        |
+        v
+Liquidity
+        |
+        v
+Structure Events
+        |
+        v
+Setup Qualification
+        |
+        v
+Option Chain Confirmation
+        |
+        v
+Vision Method Calculator
+        |
+        v
+VisionMethodSnapshot
+```

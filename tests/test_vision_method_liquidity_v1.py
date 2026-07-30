@@ -221,13 +221,12 @@ def test_liquidity_models_are_immutable():
         result.equal_highs[0].price = 1.0
 
 
-def test_vm05_boundary_creates_no_runtime_strategy_ai_option_or_calculator_code():
+def test_vm05_boundary_creates_no_runtime_strategy_ai_or_option_code():
     package = Path("engines/vision_method")
     source = (package / "liquidity.py").read_text(encoding="utf-8").lower()
 
     assert (package / "liquidity.py").exists()
     assert not (package / "engine.py").exists()
-    assert not (package / "calculator.py").exists()
     assert "strategydecision" not in source
     assert "aireasoning" not in source
     assert "optionchain" not in source

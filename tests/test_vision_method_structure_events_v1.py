@@ -243,13 +243,12 @@ def test_structure_event_model_rejects_impossible_bos_choch_and_is_immutable():
         result.bos = VisionBOS.NONE
 
 
-def test_vm06_boundary_creates_no_runtime_strategy_ai_option_or_calculator_code():
+def test_vm06_boundary_creates_no_runtime_strategy_ai_or_option_code():
     package = Path("engines/vision_method")
     source = (package / "structure_events.py").read_text(encoding="utf-8").lower()
 
     assert (package / "structure_events.py").exists()
     assert not (package / "engine.py").exists()
-    assert not (package / "calculator.py").exists()
     assert "strategydecision" not in source
     assert "aireasoning" not in source
     assert "optionchain" not in source

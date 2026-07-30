@@ -221,4 +221,3 @@ def test_vm03_boundary_creates_only_opening_range_module():
 
     assert (package / "opening_range.py").exists()
     assert not (package / "engine.py").exists()
-    assert not (package / "calculator.py").exists()

@@ -376,13 +376,12 @@ def test_setup_qualification_context_is_immutable():
         result.setup_type = VisionSetupType.NO_QUALITY_SETUP
 
 
-def test_vm07_boundary_creates_no_runtime_strategy_ai_option_or_calculator_code():
+def test_vm07_boundary_creates_no_runtime_strategy_ai_or_option_code():
     package = Path("engines/vision_method")
     source = (package / "setup_qualification.py").read_text(encoding="utf-8").lower()
 
     assert (package / "setup_qualification.py").exists()
     assert not (package / "engine.py").exists()
-    assert not (package / "calculator.py").exists()
     assert "strategydecision" not in source
     assert "aireasoning" not in source
     assert "optionchain" not in source

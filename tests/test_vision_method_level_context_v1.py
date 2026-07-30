@@ -242,9 +242,8 @@ def test_required_daily_level_date_validation_and_immutability():
         result.quality = VisionLevelQuality.INSUFFICIENT
 
 
-def test_vm02_boundary_creates_no_engine_calculator_runtime_or_dashboard_code():
+def test_vm02_boundary_creates_no_engine_runtime_or_dashboard_code():
     package = Path("engines/vision_method")
 
     assert not (package / "engine.py").exists()
-    assert not (package / "calculator.py").exists()
     assert (package / "level_context.py").exists()

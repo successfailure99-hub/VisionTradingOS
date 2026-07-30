@@ -545,6 +545,12 @@ class VisionMethodSnapshot:
     opening_context: VisionOpeningContext
     previous_day_context: VisionPreviousDayContext
     level_context: VisionLevelContext
+    opening_range_context: VisionOpeningRangeContext
+    structure_context: VisionStructureContext
+    liquidity_context: VisionLiquidityContext
+    structure_event_context: VisionStructureEventContext
+    setup_qualification_context: VisionSetupQualificationContext
+    option_confirmation_context: VisionOptionConfirmationContext
     market_regime: VisionMarketRegime
     candidate_state: VisionCandidateState
     blocking_reasons: tuple[str, ...]
@@ -563,6 +569,18 @@ class VisionMethodSnapshot:
             raise TypeError("previous_day_context must be VisionPreviousDayContext.")
         if not isinstance(self.level_context, VisionLevelContext):
             raise TypeError("level_context must be VisionLevelContext.")
+        if not isinstance(self.opening_range_context, VisionOpeningRangeContext):
+            raise TypeError("opening_range_context must be VisionOpeningRangeContext.")
+        if not isinstance(self.structure_context, VisionStructureContext):
+            raise TypeError("structure_context must be VisionStructureContext.")
+        if not isinstance(self.liquidity_context, VisionLiquidityContext):
+            raise TypeError("liquidity_context must be VisionLiquidityContext.")
+        if not isinstance(self.structure_event_context, VisionStructureEventContext):
+            raise TypeError("structure_event_context must be VisionStructureEventContext.")
+        if not isinstance(self.setup_qualification_context, VisionSetupQualificationContext):
+            raise TypeError("setup_qualification_context must be VisionSetupQualificationContext.")
+        if not isinstance(self.option_confirmation_context, VisionOptionConfirmationContext):
+            raise TypeError("option_confirmation_context must be VisionOptionConfirmationContext.")
         if not isinstance(self.market_regime, VisionMarketRegime):
             raise TypeError("market_regime must be VisionMarketRegime.")
         if not isinstance(self.candidate_state, VisionCandidateState):

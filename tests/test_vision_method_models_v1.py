@@ -1,5 +1,5 @@
 from dataclasses import FrozenInstanceError
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -14,6 +14,7 @@ from core.events import (
 )
 from engines.vision_method import (
     VisionBOS,
+    VisionBreakerBlock,
     VisionBreakerBlockState,
     VisionBreakStrength,
     VisionBreakDirection,
@@ -27,6 +28,8 @@ from engines.vision_method import (
     VisionFairValueGapDirection,
     VisionLevelContext,
     VisionLevelQuality,
+    VisionLiquidityContext,
+    VisionLiquidityLevel,
     VisionLiquidityPool,
     VisionLiquiditySweep,
     VisionMarketRegime,
@@ -35,12 +38,17 @@ from engines.vision_method import (
     VisionMethodSnapshot,
     VisionOpeningContext,
     VisionOpeningLocation,
+    VisionOpeningRangeContext,
     VisionOpeningRangeState,
+    VisionOptionConfirmationContext,
     VisionOrderBlockDirection,
     VisionRangeLocation,
     VisionReversalState,
     VisionSetupQuality,
+    VisionSetupQualificationContext,
     VisionSetupType,
+    VisionStructureContext,
+    VisionStructureEventContext,
     VisionStructureEventPhase,
     VisionStructurePattern,
     VisionVWAPContext,
@@ -50,12 +58,15 @@ from engines.vision_method import (
     VisionStructureState,
     VisionStructureTrend,
     VisionSweepDirection,
+    VisionSwingPoint,
     VisionSwingType,
     validate_vision_method_snapshot,
 )
 
 
 NOW = datetime(2026, 7, 29, 9, 30, tzinfo=timezone.utc)
+OPEN_START = datetime(2026, 7, 29, 9, 15, tzinfo=timezone.utc)
+OPEN_END = datetime(2026, 7, 29, 9, 30, tzinfo=timezone.utc)
 
 
 def opening_context() -> VisionOpeningContext:
@@ -100,6 +111,89 @@ def level_context() -> VisionLevelContext:
     )
 
 
+def opening_range_context() -> VisionOpeningRangeContext:
+    return VisionOpeningRangeContext(
+        opening_start_time=OPEN_START,
+        opening_end_time=OPEN_END,
+        opening_high=102.0,
+        opening_low=99.0,
+        opening_width=3.0,
+        range_complete=True,
+        current_location=VisionRangeLocation.ABOVE_RANGE,
+        break_direction=VisionBreakDirection.UP,
+        retest_state=VisionOpeningRangeState.BREAK_ABOVE,
+        false_break=False,
+        elapsed_minutes=15,
+        quality=VisionLevelQuality.FULL,
+    )
+
+
+def swing(price: float, index: int, type_: VisionSwingType) -> VisionSwingPoint:
+    return VisionSwingPoint(price, OPEN_START + timedelta(minutes=5 * index), index, 4, type_)
+
+
+def structure_context() -> VisionStructureContext:
+    return VisionStructureContext(
+        current_swing_high=swing(110.0, 5, VisionSwingType.HIGH),
+        current_swing_low=swing(100.0, 6, VisionSwingType.LOW),
+        previous_swing_high=swing(105.0, 1, VisionSwingType.HIGH),
+        previous_swing_low=swing(95.0, 2, VisionSwingType.LOW),
+        trend=VisionStructureTrend.BULLISH,
+        structure_state=VisionStructurePattern.HH,
+        last_confirmed_swing=swing(110.0, 5, VisionSwingType.HIGH),
+        quality=VisionLevelQuality.FULL,
+    )
+
+
+def liquidity_context() -> VisionLiquidityContext:
+    level = VisionLiquidityLevel(110.0, OPEN_START, OPEN_START + timedelta(minutes=5), (0, 1), VisionSwingType.HIGH, 0.0005)
+    return VisionLiquidityContext(
+        equal_highs=(level,),
+        equal_lows=(),
+        liquidity_pool=VisionLiquidityPool.BUY_SIDE,
+        liquidity_sweep=VisionLiquiditySweep.BUY_SIDE_SWEEP,
+        sweep_direction=VisionSweepDirection.BUY_SIDE,
+        fair_value_gap=None,
+        order_block=None,
+        breaker_block=VisionBreakerBlock(VisionBreakerBlockState.NOT_EVALUATED),
+        mitigation=VisionMitigationState.NOT_EVALUATED,
+        quality=VisionLevelQuality.FULL,
+    )
+
+
+def structure_event_context() -> VisionStructureEventContext:
+    return VisionStructureEventContext(
+        bos=VisionBOS.BULLISH_BOS,
+        choch=VisionCHoCH.NONE,
+        mss=VisionMSS.NONE,
+        continuation=VisionStructureEventPhase.CONTINUATION,
+        reversal=VisionReversalState.NONE,
+        break_strength=VisionBreakStrength.STRONG,
+        quality=VisionLevelQuality.FULL,
+    )
+
+
+def setup_qualification_context() -> VisionSetupQualificationContext:
+    return VisionSetupQualificationContext(
+        setup_type=VisionSetupType.TREND_CONTINUATION,
+        setup_quality=VisionSetupQuality.HIGH,
+        blocking_reasons=(),
+        supporting_reasons=("Above CPR", "Bullish BOS"),
+        eligible_for_option_confirmation=True,
+    )
+
+
+def option_confirmation_context() -> VisionOptionConfirmationContext:
+    return VisionOptionConfirmationContext(
+        confirmation_state=VisionOptionConfirmation.CONFIRMS,
+        supporting_factors=("Put writing supports setup",),
+        contradicting_factors=(),
+        neutral_factors=(),
+        quality=VisionLevelQuality.FULL,
+        timestamp=NOW,
+    )
+
+
 def snapshot(**overrides) -> VisionMethodSnapshot:
     values = {
         "instrument": RuntimeInstrument.NIFTY,
@@ -108,6 +202,12 @@ def snapshot(**overrides) -> VisionMethodSnapshot:
         "opening_context": opening_context(),
         "previous_day_context": previous_day_context(),
         "level_context": level_context(),
+        "opening_range_context": opening_range_context(),
+        "structure_context": structure_context(),
+        "liquidity_context": liquidity_context(),
+        "structure_event_context": structure_event_context(),
+        "setup_qualification_context": setup_qualification_context(),
+        "option_confirmation_context": option_confirmation_context(),
         "market_regime": VisionMarketRegime.TREND_DAY,
         "candidate_state": VisionCandidateState.OBSERVE,
         "blocking_reasons": ("wait_for_opening_range",),

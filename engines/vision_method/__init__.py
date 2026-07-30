@@ -43,6 +43,11 @@ from .level_context import (
     assemble_vision_level_context,
     validate_level_context_request,
 )
+from .calculator import (
+    VisionMethodCalculationRequest,
+    calculate_vision_method_snapshot,
+    validate_vision_method_calculation_request,
+)
 from .models import (
     VisionADRContext,
     VisionBreakerBlock,
@@ -125,6 +130,7 @@ __all__ = [
     "VisionLiquiditySweep",
     "VisionMarketRegime",
     "VisionMethodSnapshot",
+    "VisionMethodCalculationRequest",
     "VisionMitigationState",
     "VisionMSS",
     "VisionOpeningContext",
@@ -165,11 +171,13 @@ __all__ = [
     "assemble_vision_setup_qualification_context",
     "assemble_vision_structure_event_context",
     "assemble_vision_structure_context",
+    "calculate_vision_method_snapshot",
     "validate_level_context_request",
     "validate_liquidity_request",
     "validate_opening_range_request",
     "validate_option_confirmation_context",
     "validate_option_confirmation_request",
+    "validate_vision_method_calculation_request",
     "validate_setup_qualification_context",
     "validate_setup_qualification_request",
     "validate_structure_event_context",
