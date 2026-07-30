@@ -16,6 +16,7 @@ from engines.vision_method import (
     VisionMethodValidationReport,
     VisionVWAPContext,
 )
+from .status import VisionMethodLiveStatus
 
 
 class VisionMethodInspector(QGroupBox):
@@ -75,6 +76,38 @@ class VisionMethodInspector(QGroupBox):
                 label.setText(formatters.text(value))
         self._render_trace(report)
 
+    def render_live_status(
+        self,
+        status: VisionMethodLiveStatus,
+        snapshot: VisionMethodSnapshot | None = None,
+        report: VisionMethodValidationReport | None = None,
+    ) -> None:
+        if not isinstance(status, VisionMethodLiveStatus):
+            raise TypeError("status must be VisionMethodLiveStatus.")
+        if snapshot is not None and not isinstance(snapshot, VisionMethodSnapshot):
+            raise TypeError("snapshot must be VisionMethodSnapshot or None.")
+        if report is not None and not isinstance(report, VisionMethodValidationReport):
+            raise TypeError("report must be VisionMethodValidationReport or None.")
+        values = _empty_values()
+        values.update(_diagnostic_values(status))
+        if snapshot is not None:
+            values.update(_snapshot_values(snapshot))
+        if report is not None:
+            values.update(_report_values(report))
+        values.update(_status_values(status))
+        for field, card in self._cards.items():
+            card.set_value(values[field])
+        for field, value in values.items():
+            label = self._labels[field]
+            if isinstance(label, StatusBadge):
+                label.set_status_text(value)
+            else:
+                label.setText(formatters.text(value))
+        if report is not None:
+            self._render_trace(report)
+        else:
+            self._render_status_trace(status)
+
     def render_failure(
         self,
         failure: VisionContextAssemblyFailure,
@@ -114,6 +147,23 @@ class VisionMethodInspector(QGroupBox):
             self._trace_layout.removeWidget(label)
             label.deleteLater()
         lines = ("-",) if report is None else tuple(report.export_record.trace)
+        for line in lines:
+            label = QLabel(line)
+            label.setWordWrap(True)
+            label.setMinimumHeight(24)
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            self._trace_layout.addWidget(label)
+            self._trace_labels.append(label)
+
+    def _render_status_trace(self, status: VisionMethodLiveStatus) -> None:
+        while self._trace_labels:
+            label = self._trace_labels.pop()
+            self._trace_layout.removeWidget(label)
+            label.deleteLater()
+        lines = (
+            f"STATUS | Vision Method Live | {status.runtime_state.value} | {status.blocking_reason}",
+            f"FINAL | Vision Method | {status.validation_result} | {status.candidate_state}",
+        )
         for line in lines:
             label = QLabel(line)
             label.setWordWrap(True)
@@ -215,6 +265,143 @@ def _report_values(report: VisionMethodValidationReport) -> dict[str, str]:
     }
 
 
+def _status_values(status: VisionMethodLiveStatus) -> dict[str, str]:
+    return {
+        "Runtime State": status.runtime_state.value,
+        "Last Market Update": status.market_timestamp or "unavailable",
+        "Last Inspector Refresh": formatters.timestamp(status.updated_at),
+        "Market Data Age": _market_age(status),
+        "Live Instrument": status.instrument or "unavailable",
+        "Live Timeframe": status.timeframe or "unavailable",
+        "Live Blocking Stage": status.blocking_stage or "none",
+        "Blocking Reason": status.blocking_reason or "none",
+        "Available Contexts": _joined_or_none(status.available_contexts),
+        "Missing Contexts": _failure_list(status.missing_contexts),
+        "Failed Contexts": _failure_list(status.failed_contexts),
+        "Unexpected Error": status.unexpected_error or "none",
+        "Assembly Failures": _failure_list((*status.missing_contexts, *status.failed_contexts)),
+        "Instrument": status.instrument or "unavailable",
+        "Timeframe": status.timeframe or "unavailable",
+        "Timestamp": status.market_timestamp or "unavailable",
+        "Candidate State": status.candidate_state,
+        "Quality": status.quality,
+        "Validation Result": status.validation_result,
+        "Blocking Stage": status.blocking_stage or "none",
+    }
+
+
+def _diagnostic_values(status: VisionMethodLiveStatus) -> dict[str, str]:
+    values = {
+        field: "not_evaluated"
+        for _, fields in _SECTION_FIELDS
+        for field in fields
+        if field
+        not in {
+            "Runtime State",
+            "Last Market Update",
+            "Last Inspector Refresh",
+            "Market Data Age",
+            "Live Instrument",
+            "Live Timeframe",
+            "Live Blocking Stage",
+            "Blocking Reason",
+            "Available Contexts",
+            "Missing Contexts",
+            "Failed Contexts",
+            "Unexpected Error",
+            "Instrument",
+            "Timeframe",
+            "Timestamp",
+            "Candidate State",
+            "Quality",
+            "Validation Result",
+        }
+    }
+    if status.runtime_state.value == "WAITING_FOR_MARKET_DATA":
+        values.update(
+            {
+                "CPR Position": "unavailable",
+                "Camarilla Zone": "unavailable",
+                "ADR Used": "unavailable",
+                "ADR Remaining": "unavailable",
+                "ADR Zone": "unavailable",
+                "VWAP Position": "unavailable",
+                "VWAP Distance": "unavailable",
+            }
+        )
+    for failure in (*status.missing_contexts, *status.failed_contexts):
+        marker = failure.status.value
+        stage = failure.stage.casefold()
+        if "level" in stage:
+            values.update(
+                {
+                    "CPR Position": marker,
+                    "Camarilla Zone": marker,
+                    "ADR Used": marker,
+                    "ADR Remaining": marker,
+                    "ADR Zone": marker,
+                    "VWAP Position": marker,
+                    "VWAP Distance": marker,
+                }
+            )
+        elif "candle" in stage:
+            values.update({"Opening High": marker, "Opening Low": marker, "Opening Width": marker})
+        elif "opening range" in stage:
+            values.update(
+                {
+                    "Opening High": marker,
+                    "Opening Low": marker,
+                    "Opening Width": marker,
+                    "Opening Break": marker,
+                    "Opening Retest": marker,
+                    "Opening False Break": marker,
+                }
+            )
+        elif "structure events" in stage:
+            values.update(
+                {
+                    "Bullish BOS": marker,
+                    "Bearish BOS": marker,
+                    "Bullish CHOCH": marker,
+                    "Bearish CHOCH": marker,
+                    "Continuation": marker,
+                    "Reversal": marker,
+                    "Break Strength": marker,
+                }
+            )
+        elif "structure" in stage:
+            values.update({"Trend": marker, "Structure State": marker, "Swing High": marker, "Swing Low": marker})
+        elif "liquidity" in stage:
+            values.update(
+                {
+                    "Buy Side Sweep": marker,
+                    "Sell Side Sweep": marker,
+                    "Equal Highs": marker,
+                    "Equal Lows": marker,
+                    "Fair Value Gap": marker,
+                    "Order Block": marker,
+                    "Breaker": marker,
+                    "Mitigation": marker,
+                }
+            )
+        elif "setup" in stage:
+            values.update(
+                {
+                    "Setup Classification": marker,
+                    "Setup Quality": marker,
+                    "Setup Blocking Reasons": failure.validation_message,
+                }
+            )
+        elif "option" in stage:
+            values.update(
+                {
+                    "Option Confirmation": marker,
+                    "Option Neutral Factors": failure.validation_message,
+                }
+            )
+    return values
+
+
 def _empty_values() -> dict[str, str]:
     return {field: "-" for _, fields in _SECTION_FIELDS for field in fields} | {
         "Candidate State": "-",
@@ -229,6 +416,22 @@ def _assembly_failures(snapshot: VisionMethodSnapshot) -> str:
     return formatters.joined(
         tuple(f"{failure.stage}: {failure.validation_message}" for failure in snapshot.assembly_failures)
     )
+
+
+def _market_age(status: VisionMethodLiveStatus) -> str:
+    if status.market_data_age_seconds is None:
+        return "unavailable"
+    return f"{status.market_data_age_seconds:.0f}s"
+
+
+def _joined_or_none(values: tuple[str, ...]) -> str:
+    return formatters.joined(values) if values else "none"
+
+
+def _failure_list(values: tuple[VisionContextAssemblyFailure, ...]) -> str:
+    if not values:
+        return "none"
+    return formatters.joined(tuple(f"{item.stage} {item.status.value}: {item.validation_message}" for item in values))
 
 
 def _adr_value(adr: VisionADRContext | None, field_name: str) -> str:
@@ -264,6 +467,23 @@ def _swing_price(swing) -> str:
 
 
 _SECTION_FIELDS = (
+    (
+        "VISION METHOD LIVE STATUS",
+        (
+            "Runtime State",
+            "Last Market Update",
+            "Last Inspector Refresh",
+            "Market Data Age",
+            "Live Instrument",
+            "Live Timeframe",
+            "Live Blocking Stage",
+            "Blocking Reason",
+            "Available Contexts",
+            "Missing Contexts",
+            "Failed Contexts",
+            "Unexpected Error",
+        ),
+    ),
     (
         "Header",
         (

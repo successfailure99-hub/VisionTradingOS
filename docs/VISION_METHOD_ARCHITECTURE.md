@@ -657,3 +657,67 @@ Inspector shows A plus exact B/C failure reasons
 The strict context assemblers still raise their original validation exceptions.
 The bridge converts those exceptions at the presentation boundary so no expected
 single-stage failure can hide the rest of the deterministic methodology view.
+
+## VM-11.3 End-to-End Inspector Reliability
+
+VM-11.3 formalizes the live inspector as a state machine. The inspector must
+never show an unexplained screen of placeholder values after startup. Every
+live refresh renders one immutable `VisionMethodLiveStatus` alongside any
+available `VisionMethodSnapshot` and `VisionMethodValidationReport`.
+
+The live runtime states are:
+
+- `WAITING_FOR_MARKET_DATA`: no market timestamp exists yet.
+- `COLLECTING_CONTEXT`: market data exists but one or more expected contexts
+  are still unavailable or incomplete.
+- `DEGRADED`: at least one context assembly failed, but the bridge preserved
+  the available upstream contexts and rendered the failure reason.
+- `READY`: a valid methodology snapshot and validation report are available.
+- `INTERNAL_ERROR`: an unexpected programming defect occurred and was surfaced
+  explicitly.
+
+The inspector status panel records:
+
+- runtime state;
+- last market update;
+- last inspector refresh;
+- market data age;
+- instrument and timeframe;
+- blocking stage;
+- blocking reason;
+- available contexts;
+- missing contexts;
+- failed contexts;
+- unexpected error.
+
+The context status meanings are:
+
+- `MISSING`: required data is expected but not yet available, such as no closed
+  candle history or missing daily CPR levels.
+- `NOT_EVALUATED`: a downstream context was skipped because its real
+  dependency was unavailable.
+- `FAILED`: a context assembler ran and rejected its inputs through its normal
+  validation rules.
+
+Expected operational states, including no live tick, no closed candle, missing
+daily levels, incomplete opening range, unavailable option chain, or a normal
+Vision Method validation failure, must not clear the inspector. They render
+explicit diagnostic values instead.
+
+```text
+MainWindow refresh
+        |
+        v
+VisionMethodLiveInspectorBridge.refresh()
+        |
+        +----> VisionMethodLiveStatus
+        +----> VisionMethodSnapshot, when honestly available
+        +----> VisionMethodValidationReport, when validation succeeds
+        |
+        v
+Visible VisionMethodInspector instance
+```
+
+The bridge does not publish events, own runtime state, trigger Strategy,
+trigger AI, run Risk, update Paper Trading, or modify broker execution. It is
+only an observability adapter for deterministic Vision Method data.

@@ -1,5 +1,6 @@
 import os
 from dataclasses import replace
+from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -15,7 +16,11 @@ from core.enums.instrument import Instrument
 from core.models.candle import Candle
 from core.models.tick import Tick
 from dashboard.main_window import VisionMainWindow
-from desktop.vision_method import VisionMethodInspector, VisionMethodLiveInspectorBridge
+from desktop.vision_method import (
+    VisionMethodInspector,
+    VisionMethodLiveInspectorBridge,
+    VisionMethodLiveRuntimeState,
+)
 from engines.camarilla.levels import CamarillaLevels
 from engines.cpr.levels import CPRLevels
 from engines.vision_method import (
@@ -28,6 +33,7 @@ from tests.test_vision_method_validation_v1 import option, snapshot
 
 IST = timezone(timedelta(hours=5, minutes=30))
 NOW = datetime(2026, 7, 29, 10, 0, tzinfo=IST)
+_DEFAULT = object()
 
 
 def app():
@@ -192,8 +198,9 @@ def test_live_bridge_missing_snapshot_or_validation_fails_closed(monkeypatch):
 
     assert missing.ready is False
     assert missing.snapshot is None
+    assert missing.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
     assert panel._labels["Candidate State"].text() == "insufficient_data"
-    assert panel._labels["Assembly Failures"].text() == "Candle Engine: Closed candle history is unavailable."
+    assert panel._labels["Assembly Failures"].text() == "Candle Engine missing: Closed candle history is unavailable."
 
     runtime.history = _candles()
     runtime.current_snapshot = _runtime_snapshot(history=runtime.history)
@@ -207,6 +214,7 @@ def test_live_bridge_missing_snapshot_or_validation_fails_closed(monkeypatch):
     assert invalid.ready is False
     assert invalid.validation_report is None
     assert "validation unavailable" in invalid.reason
+    assert invalid.status.runtime_state is VisionMethodLiveRuntimeState.INTERNAL_ERROR
 
 
 def test_live_bridge_converts_liquidity_failure_into_visible_insufficient_snapshot(monkeypatch):
@@ -228,11 +236,141 @@ def test_live_bridge_converts_liquidity_failure_into_visible_insufficient_snapsh
     assert result.validation_report.validation_result.value == "insufficient_data"
     assert result.failures[0].stage == "Liquidity"
     assert result.failures[0].validation_message == "ValueError: overlapping gaps"
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.DEGRADED
     assert panel._labels["Candidate State"].text() == "insufficient_data"
-    assert "Liquidity: ValueError: overlapping gaps" in panel._labels["Assembly Failures"].text()
-    assert "Structure Events: ValueError: insufficient liquidity context." in panel._labels["Assembly Failures"].text()
+    assert "Liquidity failed: ValueError: overlapping gaps" in panel._labels["Assembly Failures"].text()
+    assert "Structure Events failed: ValueError: insufficient liquidity context." in panel._labels["Assembly Failures"].text()
     assert "Liquidity" in panel._trace_labels[7].text()
     assert "overlapping gaps" in panel._trace_labels[7].text()
+
+
+def test_live_bridge_startup_without_market_timestamp_renders_waiting_status():
+    app()
+    lifecycle = ApplicationBootstrap().create_application()
+    runtime = _FakeRuntime(_runtime_snapshot_without_market_timestamp(), ())
+    object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
+    panel = VisionMethodInspector()
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
+
+    assert result.snapshot is None
+    assert result.validation_report is None
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.WAITING_FOR_MARKET_DATA
+    assert panel._labels["Runtime State"].text() == "WAITING_FOR_MARKET_DATA"
+    assert panel._labels["Candidate State"].text() == "insufficient_data"
+    assert panel._labels["Quality"].text() == "invalid"
+    assert panel._labels["Validation Result"].text() == "insufficient_data"
+    assert panel._labels["Live Blocking Stage"].text() == "MARKET_DATA"
+    assert panel._labels["Blocking Reason"].text() == "No market timestamp is available."
+    assert panel._labels["Instrument"].text() != "-"
+
+
+def test_live_bridge_early_market_data_without_closed_candle_collects_context():
+    app()
+    lifecycle, _runtime = _live_lifecycle(history=())
+    panel = VisionMethodInspector()
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
+
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+    assert panel._labels["Instrument"].text() == "NIFTY"
+    assert panel._labels["Timeframe"].text() == "5m"
+    assert panel._labels["Timestamp"].text() != "-"
+    assert panel._labels["Live Blocking Stage"].text() == "CANDLE_ENGINE"
+    assert panel._labels["Available Contexts"].text() == "Market Data"
+    assert "Closed candle history is unavailable" in panel._labels["Blocking Reason"].text()
+
+
+def test_live_bridge_missing_daily_context_keeps_candle_progress_visible():
+    app()
+    history = _candles()
+    lifecycle = ApplicationBootstrap().create_application()
+    runtime = _FakeRuntime(_runtime_snapshot(history=history, cpr=None, camarilla=None), history)
+    object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
+    panel = VisionMethodInspector()
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
+
+    assert result.snapshot is None
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+    assert panel._labels["Available Contexts"].text() == "Market Data, Candle Engine"
+    assert panel._labels["CPR Position"].text() == "missing"
+    assert panel._labels["Camarilla Zone"].text() == "missing"
+    assert panel._labels["Assembly Failures"].text() == "Level Context missing: Daily CPR levels are unavailable."
+
+
+def test_live_bridge_structure_failure_reports_blocking_without_blank_screen(monkeypatch):
+    app()
+    lifecycle, _runtime = _live_lifecycle()
+    panel = VisionMethodInspector()
+
+    def fail_structure(*_args, **_kwargs):
+        raise ValueError("Insufficient closed candles.")
+
+    monkeypatch.setattr("desktop.vision_method.live_integration.assemble_vision_structure_context", fail_structure)
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
+
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.DEGRADED
+    assert result.snapshot is not None
+    assert panel._labels["Trend"].text() == "unknown"
+    assert "Structure failed: ValueError: Insufficient closed candles." in panel._labels["Failed Contexts"].text()
+    assert panel._labels["Candidate State"].text() == "insufficient_data"
+
+
+def test_live_bridge_missing_option_chain_is_safe_and_deterministic():
+    app()
+    lifecycle, _runtime = _live_lifecycle()
+    panel = VisionMethodInspector()
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
+
+    assert result.snapshot is not None
+    assert result.validation_report is not None
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+    assert panel._labels["Option Confirmation"].text() == "unavailable"
+    assert panel._labels["Validation Result"].text() == "insufficient_data"
+
+
+def test_live_bridge_status_transitions_are_rendered(monkeypatch):
+    app()
+    lifecycle = ApplicationBootstrap().create_application()
+    runtime = _FakeRuntime(_runtime_snapshot_without_market_timestamp(), ())
+    object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
+    panel = VisionMethodInspector()
+    bridge = VisionMethodLiveInspectorBridge(lifecycle, panel)
+
+    waiting = bridge.refresh()
+    runtime.current_snapshot = _runtime_snapshot(history=(), timestamp=NOW)
+    collecting = bridge.refresh()
+
+    def fail_liquidity(*_args, **_kwargs):
+        raise ValueError("overlapping gaps")
+
+    monkeypatch.setattr("desktop.vision_method.live_integration.assemble_vision_liquidity_context", fail_liquidity)
+    runtime.history = _candles()
+    runtime.current_snapshot = _runtime_snapshot(history=runtime.history, timestamp=NOW)
+    degraded = bridge.refresh()
+    monkeypatch.undo()
+    readyish = bridge.refresh()
+
+    assert waiting.status.runtime_state is VisionMethodLiveRuntimeState.WAITING_FOR_MARKET_DATA
+    assert collecting.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+    assert degraded.status.runtime_state is VisionMethodLiveRuntimeState.DEGRADED
+    assert readyish.status.runtime_state in {
+        VisionMethodLiveRuntimeState.READY,
+        VisionMethodLiveRuntimeState.COLLECTING_CONTEXT,
+    }
+    assert panel._labels["Runtime State"].text() == readyish.status.runtime_state.value
+
+
+def test_live_bridge_status_model_is_immutable():
+    app()
+    lifecycle, _runtime = _live_lifecycle(history=())
+    status = VisionMethodLiveInspectorBridge(lifecycle, VisionMethodInspector()).refresh().status
+
+    with pytest.raises(FrozenInstanceError):
+        status.blocking_reason = "changed"
 
 
 def test_main_window_refresh_updates_live_vision_method_inspector():
@@ -294,7 +432,7 @@ def _live_lifecycle(*, history=None):
     return lifecycle, runtime
 
 
-def _runtime_snapshot(*, history=None, timestamp=NOW, price=102.0):
+def _runtime_snapshot(*, history=None, timestamp=NOW, price=102.0, cpr=_DEFAULT, camarilla=_DEFAULT):
     history = _candles() if history is None else tuple(history)
     return RuntimeSnapshot(
         symbol=RuntimeInstrument.NIFTY,
@@ -303,8 +441,8 @@ def _runtime_snapshot(*, history=None, timestamp=NOW, price=102.0):
         latest_tick=Tick(Instrument.NIFTY, Exchange.NSE, timestamp, price, 10_000, price - 0.5, price + 0.5, 100),
         latest_candle=history[-1] if history else None,
         vwap=None,
-        cpr=_cpr(),
-        camarilla=_camarilla(),
+        cpr=_cpr() if cpr is _DEFAULT else cpr,
+        camarilla=_camarilla() if camarilla is _DEFAULT else camarilla,
         price_action=None,
         option_chain=None,
         market_context=None,
@@ -319,6 +457,33 @@ def _runtime_snapshot(*, history=None, timestamp=NOW, price=102.0):
         latest_closed_candle_at=timestamp,
         latest_analysis_at=timestamp,
         snapshot_created_at=timestamp,
+    )
+
+
+def _runtime_snapshot_without_market_timestamp():
+    return RuntimeSnapshot(
+        symbol=RuntimeInstrument.NIFTY,
+        timeframe="5m",
+        status=RuntimeStatus.RUNNING,
+        latest_tick=None,
+        latest_candle=None,
+        vwap=None,
+        cpr=None,
+        camarilla=None,
+        price_action=None,
+        option_chain=None,
+        market_context=None,
+        ai_reasoning=None,
+        strategy=None,
+        risk=None,
+        latest_order=None,
+        position=None,
+        latest_journal_record=None,
+        updated_at=None,
+        latest_tick_at=None,
+        latest_closed_candle_at=None,
+        latest_analysis_at=None,
+        snapshot_created_at=None,
     )
 
 

@@ -119,6 +119,7 @@ class VisionContextAssemblyStatus(str, Enum):
     AVAILABLE = "available"
     MISSING = "missing"
     FAILED = "failed"
+    NOT_EVALUATED = "not_evaluated"
 
 
 class VisionOpeningRangeState(str, Enum):

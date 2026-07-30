@@ -9,7 +9,7 @@ the resulting snapshot, and renders the pair in the read-only inspector.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 import logging
 
 from application.enums import RuntimeInstrument
@@ -70,16 +70,22 @@ from engines.vision_method import (
     validate_vision_method,
 )
 
+from .status import VisionMethodLiveRuntimeState, VisionMethodLiveStatus
 from .vision_method_inspector import VisionMethodInspector
 
 
 LOGGER = logging.getLogger(__name__)
 
 
+def _default_clock() -> datetime:
+    return datetime.now(UTC)
+
+
 @dataclass(frozen=True, slots=True)
 class VisionMethodInspectorLiveResult:
     snapshot: VisionMethodSnapshot | None
     validation_report: VisionMethodValidationReport | None
+    status: VisionMethodLiveStatus
     rendered: bool
     ready: bool
     reason: str | None = None
@@ -100,6 +106,7 @@ class VisionMethodLiveInspectorBridge:
         inspector: VisionMethodInspector,
         *,
         option_analytics_provider=None,
+        clock=None,
         logger: logging.Logger | None = None,
     ):
         if not isinstance(lifecycle, ApplicationLifecycleManager):
@@ -109,9 +116,11 @@ class VisionMethodLiveInspectorBridge:
         self._lifecycle = lifecycle
         self._inspector = inspector
         self._option_analytics_provider = option_analytics_provider
+        self._clock = clock or _default_clock
         self._logger = logger or LOGGER
         self._last_snapshot: VisionMethodSnapshot | None = None
         self._last_report: VisionMethodValidationReport | None = None
+        self._last_status: VisionMethodLiveStatus | None = None
 
     @property
     def last_snapshot(self) -> VisionMethodSnapshot | None:
@@ -120,6 +129,10 @@ class VisionMethodLiveInspectorBridge:
     @property
     def last_report(self) -> VisionMethodValidationReport | None:
         return self._last_report
+
+    @property
+    def last_status(self) -> VisionMethodLiveStatus | None:
+        return self._last_status
 
     def refresh(self) -> VisionMethodInspectorLiveResult:
         try:
@@ -130,31 +143,27 @@ class VisionMethodLiveInspectorBridge:
         except _VisionMethodNotReady as exc:
             self._last_snapshot = None
             self._last_report = None
-            if exc.failure is None:
-                self._inspector.render(None, None)
-                failures = ()
-            else:
-                self._inspector.render_failure(
-                    exc.failure,
-                    instrument=exc.instrument,
-                    timeframe=exc.timeframe,
-                    timestamp=exc.timestamp,
-                )
-                failures = (exc.failure,)
-            self._logger.debug("[VisionMethod] Inspector updated")
-            return VisionMethodInspectorLiveResult(None, None, True, False, str(exc), failures)
+            status = self._status_from_not_ready(exc)
+            self._last_status = status
+            self._inspector.render_live_status(status)
+            self._log_status(status)
+            return VisionMethodInspectorLiveResult(None, None, status, True, False, str(exc), (*status.missing_contexts, *status.failed_contexts))
         except Exception as exc:
             self._last_snapshot = None
             self._last_report = None
-            self._inspector.render(None, None)
-            self._logger.debug("[VisionMethod] Inspector updated")
-            return VisionMethodInspectorLiveResult(None, None, True, False, _safe_error(exc))
+            status = self._internal_error_status(exc)
+            self._last_status = status
+            self._inspector.render_live_status(status)
+            self._logger.exception("[VisionMethodLive] state=INTERNAL_ERROR reason=%r", status.blocking_reason)
+            return VisionMethodInspectorLiveResult(None, None, status, True, False, _safe_error(exc), status.failed_contexts)
 
         self._last_snapshot = snapshot
         self._last_report = report
-        self._inspector.render(snapshot, report)
-        self._logger.debug("[VisionMethod] Inspector updated")
-        return VisionMethodInspectorLiveResult(snapshot, report, True, not failures, failures=failures)
+        status = self._status_from_snapshot(snapshot, report, failures)
+        self._last_status = status
+        self._inspector.render_live_status(status, snapshot, report)
+        self._log_status(status)
+        return VisionMethodInspectorLiveResult(snapshot, report, status, True, not failures, failures=failures)
 
     def _build_snapshot(self) -> tuple[VisionMethodSnapshot, tuple[VisionContextAssemblyFailure, ...]]:
         runtime = self._select_runtime()
@@ -162,19 +171,37 @@ class VisionMethodLiveInspectorBridge:
         timeframe = TimeFrame.from_value(runtime_snapshot.timeframe)
         timestamp = _runtime_timestamp(runtime_snapshot)
         trading_date = timestamp.date()
-        cpr = runtime_snapshot.cpr
-        camarilla = runtime_snapshot.camarilla
-        if cpr is None:
-            raise self._not_ready("Level Context", "CPR is unavailable.", runtime_snapshot, timestamp)
-        if camarilla is None:
-            raise self._not_ready("Level Context", "Camarilla is unavailable.", runtime_snapshot, timestamp)
         history = tuple(
             candle
             for candle in runtime.get_candle_history(timeframe)
             if candle.start_time.date() == trading_date and candle.end_time <= timestamp
         )
         if not history:
-            raise self._not_ready("Candle Engine", "Closed candle history is unavailable.", runtime_snapshot, timestamp)
+            raise self._not_ready(
+                "Candle Engine",
+                "Closed candle history is unavailable.",
+                runtime_snapshot,
+                timestamp,
+                available_contexts=("Market Data",),
+            )
+        cpr = runtime_snapshot.cpr
+        camarilla = runtime_snapshot.camarilla
+        if cpr is None:
+            raise self._not_ready(
+                "Level Context",
+                "Daily CPR levels are unavailable.",
+                runtime_snapshot,
+                timestamp,
+                available_contexts=("Market Data", "Candle Engine"),
+            )
+        if camarilla is None:
+            raise self._not_ready(
+                "Level Context",
+                "Daily Camarilla levels are unavailable.",
+                runtime_snapshot,
+                timestamp,
+                available_contexts=("Market Data", "Candle Engine"),
+            )
         latest_price = _latest_price(runtime_snapshot, history)
         previous_price = history[-2].close if len(history) >= 2 else None
         opening_price = history[0].open
@@ -343,22 +370,34 @@ class VisionMethodLiveInspectorBridge:
     def _select_runtime(self):
         runtimes = tuple(self._lifecycle.orchestrator.runtimes)
         if not runtimes:
-            raise _VisionMethodNotReady("No symbol runtime is available.")
+            raise _VisionMethodNotReady(
+                "No symbol runtime is available.",
+                failure=_missing_failure("Market Data", "No symbol runtime is available."),
+                runtime_state=VisionMethodLiveRuntimeState.WAITING_FOR_MARKET_DATA,
+                blocking_stage="MARKET_DATA",
+            )
         return runtimes[0]
 
-    def _not_ready(self, stage: str, message: str, runtime_snapshot, timestamp) -> _VisionMethodNotReady:
-        failure = VisionContextAssemblyFailure(
-            stage=stage,
-            status=VisionContextAssemblyStatus.MISSING,
-            failure_reason=message,
-            validation_message=message,
-        )
+    def _not_ready(
+        self,
+        stage: str,
+        message: str,
+        runtime_snapshot,
+        timestamp,
+        *,
+        available_contexts: tuple[str, ...] = (),
+    ) -> _VisionMethodNotReady:
+        failure = _missing_failure(stage, message)
         return _VisionMethodNotReady(
             message,
             failure=failure,
             instrument=getattr(getattr(runtime_snapshot, "symbol", None), "value", "-"),
             timeframe=str(getattr(runtime_snapshot, "timeframe", "-")),
             timestamp=timestamp.isoformat() if hasattr(timestamp, "isoformat") else "-",
+            market_data_age_seconds=_market_age_seconds(runtime_snapshot, timestamp),
+            available_contexts=available_contexts,
+            runtime_state=VisionMethodLiveRuntimeState.COLLECTING_CONTEXT,
+            blocking_stage=_stage_label(stage),
         )
 
     def _option_inputs(
@@ -374,6 +413,110 @@ class VisionMethodLiveInspectorBridge:
             raise TypeError("option provider must return OptionChainAnalyticsSnapshot or None.")
         return option_chain, analytics
 
+    def _status_from_not_ready(self, exc: _VisionMethodNotReady) -> VisionMethodLiveStatus:
+        missing = (exc.failure,) if exc.failure is not None and exc.failure.status is not VisionContextAssemblyStatus.FAILED else ()
+        failed = (exc.failure,) if exc.failure is not None and exc.failure.status is VisionContextAssemblyStatus.FAILED else ()
+        return VisionMethodLiveStatus(
+            instrument=exc.instrument,
+            timeframe=exc.timeframe,
+            market_timestamp=exc.timestamp,
+            runtime_state=exc.runtime_state,
+            candidate_state=VisionCandidateState.INSUFFICIENT_DATA.value,
+            quality="invalid",
+            validation_result="insufficient_data",
+            blocking_stage=exc.blocking_stage,
+            blocking_reason=str(exc),
+            available_contexts=exc.available_contexts,
+            missing_contexts=missing,
+            failed_contexts=failed,
+            unexpected_error=None,
+            updated_at=self._clock(),
+            market_data_age_seconds=exc.market_data_age_seconds,
+        )
+
+    def _status_from_snapshot(
+        self,
+        snapshot: VisionMethodSnapshot,
+        report: VisionMethodValidationReport,
+        failures: tuple[VisionContextAssemblyFailure, ...],
+    ) -> VisionMethodLiveStatus:
+        missing = tuple(item for item in failures if item.status is not VisionContextAssemblyStatus.FAILED)
+        failed = tuple(item for item in failures if item.status is VisionContextAssemblyStatus.FAILED)
+        if report.validation_result.value == "valid":
+            runtime_state = VisionMethodLiveRuntimeState.READY
+        elif failed:
+            runtime_state = VisionMethodLiveRuntimeState.DEGRADED
+        else:
+            runtime_state = VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+        blocking_reason = report.metrics.blocking_stage or "none"
+        if failures:
+            blocking_reason = failures[0].validation_message
+        return VisionMethodLiveStatus(
+            instrument=snapshot.instrument.value,
+            timeframe=snapshot.timeframe.value,
+            market_timestamp=snapshot.timestamp.isoformat(),
+            runtime_state=runtime_state,
+            candidate_state=snapshot.candidate_state.value,
+            quality=snapshot.quality,
+            validation_result=report.validation_result.value,
+            blocking_stage=report.metrics.blocking_stage or "none",
+            blocking_reason=blocking_reason,
+            available_contexts=_available_contexts(snapshot),
+            missing_contexts=missing,
+            failed_contexts=failed,
+            unexpected_error=None,
+            updated_at=self._clock(),
+            market_data_age_seconds=0.0,
+        )
+
+    def _internal_error_status(self, exc: Exception) -> VisionMethodLiveStatus:
+        failure = VisionContextAssemblyFailure(
+            stage="Internal Error",
+            status=VisionContextAssemblyStatus.FAILED,
+            failure_reason=exc.__class__.__name__,
+            validation_message=_safe_error(exc),
+        )
+        return VisionMethodLiveStatus(
+            instrument="-",
+            timeframe="-",
+            market_timestamp="unavailable",
+            runtime_state=VisionMethodLiveRuntimeState.INTERNAL_ERROR,
+            candidate_state=VisionCandidateState.INSUFFICIENT_DATA.value,
+            quality="invalid",
+            validation_result="invalid",
+            blocking_stage="INTERNAL_ERROR",
+            blocking_reason=failure.validation_message,
+            available_contexts=(),
+            missing_contexts=(),
+            failed_contexts=(failure,),
+            unexpected_error=failure.validation_message,
+            updated_at=self._clock(),
+            market_data_age_seconds=None,
+        )
+
+    def _log_status(self, status: VisionMethodLiveStatus) -> None:
+        if status.runtime_state is VisionMethodLiveRuntimeState.WAITING_FOR_MARKET_DATA:
+            self._logger.debug("[VisionMethodLive] state=%s reason=%r", status.runtime_state.value, status.blocking_reason)
+        elif status.runtime_state is VisionMethodLiveRuntimeState.DEGRADED:
+            failed = ",".join(item.stage for item in status.failed_contexts) or "none"
+            self._logger.debug("[VisionMethodLive] state=%s failed=%s reason=%r", status.runtime_state.value, failed, status.blocking_reason)
+        elif status.runtime_state is VisionMethodLiveRuntimeState.READY:
+            self._logger.debug(
+                "[VisionMethodLive] state=%s candidate=%s validation=%s",
+                status.runtime_state.value,
+                status.candidate_state,
+                status.validation_result,
+            )
+        else:
+            self._logger.debug(
+                "[VisionMethodLive] state=%s available=%s missing=%s failed=%s blocking=%s",
+                status.runtime_state.value,
+                len(status.available_contexts),
+                len(status.missing_contexts),
+                len(status.failed_contexts),
+                status.blocking_stage,
+            )
+
 
 class _VisionMethodNotReady(RuntimeError):
     def __init__(
@@ -384,18 +527,33 @@ class _VisionMethodNotReady(RuntimeError):
         instrument: str = "-",
         timeframe: str = "-",
         timestamp: str = "-",
+        market_data_age_seconds: float | None = None,
+        available_contexts: tuple[str, ...] = (),
+        runtime_state: VisionMethodLiveRuntimeState = VisionMethodLiveRuntimeState.COLLECTING_CONTEXT,
+        blocking_stage: str = "VISION_METHOD",
     ):
         super().__init__(message)
         self.failure = failure
         self.instrument = instrument
         self.timeframe = timeframe
         self.timestamp = timestamp
+        self.market_data_age_seconds = market_data_age_seconds
+        self.available_contexts = available_contexts
+        self.runtime_state = runtime_state
+        self.blocking_stage = blocking_stage
 
 
 def _runtime_timestamp(runtime_snapshot) -> object:
     timestamp = runtime_snapshot.latest_closed_candle_at or runtime_snapshot.latest_tick_at or runtime_snapshot.updated_at
     if timestamp is None:
-        raise _VisionMethodNotReady("No market timestamp is available.")
+        raise _VisionMethodNotReady(
+            "No market timestamp is available.",
+            failure=_missing_failure("Market Data", "No market timestamp is available."),
+            instrument=getattr(getattr(runtime_snapshot, "symbol", None), "value", "-"),
+            timeframe=str(getattr(runtime_snapshot, "timeframe", "-")),
+            runtime_state=VisionMethodLiveRuntimeState.WAITING_FOR_MARKET_DATA,
+            blocking_stage="MARKET_DATA",
+        )
     return timestamp
 
 
@@ -424,6 +582,47 @@ def _failure(stage: str, exc: Exception) -> VisionContextAssemblyFailure:
         failure_reason=exc.__class__.__name__,
         validation_message=message,
     )
+
+
+def _missing_failure(stage: str, message: str) -> VisionContextAssemblyFailure:
+    return VisionContextAssemblyFailure(
+        stage=stage,
+        status=VisionContextAssemblyStatus.MISSING,
+        failure_reason=message,
+        validation_message=message,
+    )
+
+
+def _stage_label(stage: str) -> str:
+    return stage.strip().replace(" ", "_").upper()
+
+
+def _market_age_seconds(runtime_snapshot, market_timestamp) -> float | None:
+    updated_at = getattr(runtime_snapshot, "updated_at", None) or getattr(runtime_snapshot, "snapshot_created_at", None)
+    if updated_at is None or market_timestamp is None:
+        return None
+    if not hasattr(updated_at, "utcoffset") or not hasattr(market_timestamp, "utcoffset"):
+        return None
+    if updated_at.utcoffset() is None or market_timestamp.utcoffset() is None:
+        return None
+    return max(0.0, (updated_at - market_timestamp).total_seconds())
+
+
+def _available_contexts(snapshot: VisionMethodSnapshot) -> tuple[str, ...]:
+    contexts = ["Market Data", "Candle Engine", "Level Context"]
+    if snapshot.opening_range_context.quality is not VisionLevelQuality.INSUFFICIENT:
+        contexts.append("Opening Range")
+    if snapshot.structure_context.quality is not VisionLevelQuality.INSUFFICIENT:
+        contexts.append("Structure")
+    if snapshot.liquidity_context.quality is not VisionLevelQuality.INSUFFICIENT:
+        contexts.append("Liquidity")
+    if snapshot.structure_event_context.quality is not VisionLevelQuality.INSUFFICIENT:
+        contexts.append("Structure Events")
+    if snapshot.setup_qualification_context.setup_quality is not VisionSetupQuality.INVALID:
+        contexts.append("Setup Qualification")
+    if snapshot.option_confirmation_context.quality is not VisionLevelQuality.INSUFFICIENT:
+        contexts.append("Option Confirmation")
+    return tuple(contexts)
 
 
 def _fallback_opening_range(timestamp, history) -> object:
