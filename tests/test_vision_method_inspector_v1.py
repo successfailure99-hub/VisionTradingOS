@@ -21,6 +21,8 @@ from desktop.vision_method import (
     VisionMethodLiveInspectorBridge,
     VisionMethodLiveRuntimeState,
 )
+from engines.adr import ADRExpansionState, ADRExhaustionState
+from engines.adr.models import ADRSnapshot
 from engines.camarilla.levels import CamarillaLevels
 from engines.cpr.levels import CPRLevels
 from engines.vision_method import (
@@ -28,6 +30,7 @@ from engines.vision_method import (
     VisionOptionConfirmation,
     validate_vision_method,
 )
+from engines.vwap.levels import VWAPLevels
 from tests.test_vision_method_validation_v1 import option, snapshot
 
 
@@ -295,8 +298,80 @@ def test_live_bridge_missing_daily_context_keeps_candle_progress_visible():
     assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
     assert panel._labels["Available Contexts"].text() == "Market Data, Candle Engine"
     assert panel._labels["CPR Position"].text() == "missing"
+    assert panel._labels["Camarilla Zone"].text() == "not_evaluated"
+    assert panel._labels["Assembly Failures"].text() == "CPR missing: Daily CPR levels are unavailable."
+
+
+def test_live_bridge_blocks_previous_session_cpr_before_level_assembly():
+    app()
+    history = _candles()
+    lifecycle = ApplicationBootstrap().create_application()
+    runtime = _FakeRuntime(
+        _runtime_snapshot(history=history, cpr=replace(_cpr(), trading_date=NOW.date() - timedelta(days=1))),
+        history,
+    )
+    object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
+    panel = VisionMethodInspector()
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
+
+    assert result.snapshot is None
+    assert result.validation_report is None
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+    assert result.status.blocking_stage == "CPR"
+    assert result.status.blocking_reason == "CPR belongs to previous trading session."
+    assert panel._labels["Runtime State"].text() == "COLLECTING_CONTEXT"
+    assert panel._labels["Live Blocking Stage"].text() == "CPR"
+    assert panel._labels["CPR Position"].text() == "missing"
+    assert panel._labels["Assembly Failures"].text() == "CPR missing: CPR belongs to previous trading session."
+
+
+def test_live_bridge_blocks_previous_session_camarilla_before_level_assembly():
+    app()
+    history = _candles()
+    lifecycle = ApplicationBootstrap().create_application()
+    runtime = _FakeRuntime(
+        _runtime_snapshot(history=history, camarilla=replace(_camarilla(), trading_date=NOW.date() - timedelta(days=1))),
+        history,
+    )
+    object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
+    panel = VisionMethodInspector()
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
+
+    assert result.snapshot is None
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+    assert result.status.blocking_stage == "CAMARILLA"
+    assert result.status.blocking_reason == "Camarilla belongs to previous trading session."
+    assert panel._labels["Available Contexts"].text() == "Market Data, Candle Engine, CPR"
     assert panel._labels["Camarilla Zone"].text() == "missing"
-    assert panel._labels["Assembly Failures"].text() == "Level Context missing: Daily CPR levels are unavailable."
+
+
+def test_live_bridge_omits_previous_session_optional_contexts_without_internal_error():
+    app()
+    history = _candles()
+    lifecycle = ApplicationBootstrap().create_application()
+    runtime = _FakeRuntime(
+        _runtime_snapshot(
+            history=history,
+            adr=_adr(trading_date=NOW.date() - timedelta(days=1)),
+            vwap=_vwap(trading_date=NOW.date() - timedelta(days=1)),
+        ),
+        history,
+    )
+    object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
+    panel = VisionMethodInspector()
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
+
+    assert result.snapshot is not None
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+    assert result.status.unexpected_error is None
+    assert tuple(failure.stage for failure in result.failures[:2]) == ("ADR", "VWAP")
+    assert panel._labels["ADR Used"].text() == "unavailable"
+    assert panel._labels["VWAP Position"].text() == "unavailable"
+    assert "ADR missing: ADR belongs to previous trading session." in panel._labels["Assembly Failures"].text()
+    assert "VWAP missing: VWAP belongs to previous trading session." in panel._labels["Assembly Failures"].text()
 
 
 def test_live_bridge_structure_failure_reports_blocking_without_blank_screen(monkeypatch):
@@ -432,7 +507,16 @@ def _live_lifecycle(*, history=None):
     return lifecycle, runtime
 
 
-def _runtime_snapshot(*, history=None, timestamp=NOW, price=102.0, cpr=_DEFAULT, camarilla=_DEFAULT):
+def _runtime_snapshot(
+    *,
+    history=None,
+    timestamp=NOW,
+    price=102.0,
+    cpr=_DEFAULT,
+    camarilla=_DEFAULT,
+    adr=_DEFAULT,
+    vwap=_DEFAULT,
+):
     history = _candles() if history is None else tuple(history)
     return RuntimeSnapshot(
         symbol=RuntimeInstrument.NIFTY,
@@ -440,7 +524,7 @@ def _runtime_snapshot(*, history=None, timestamp=NOW, price=102.0, cpr=_DEFAULT,
         status=RuntimeStatus.RUNNING,
         latest_tick=Tick(Instrument.NIFTY, Exchange.NSE, timestamp, price, 10_000, price - 0.5, price + 0.5, 100),
         latest_candle=history[-1] if history else None,
-        vwap=None,
+        vwap=None if vwap is _DEFAULT else vwap,
         cpr=_cpr() if cpr is _DEFAULT else cpr,
         camarilla=_camarilla() if camarilla is _DEFAULT else camarilla,
         price_action=None,
@@ -457,6 +541,7 @@ def _runtime_snapshot(*, history=None, timestamp=NOW, price=102.0, cpr=_DEFAULT,
         latest_closed_candle_at=timestamp,
         latest_analysis_at=timestamp,
         snapshot_created_at=timestamp,
+        adr=None if adr is _DEFAULT else adr,
     )
 
 
@@ -544,4 +629,34 @@ def _camarilla():
         l4=96.0,
         l5=95.0,
         l6=94.0,
+    )
+
+
+def _adr(*, trading_date=NOW.date()):
+    return ADRSnapshot(
+        trading_date=trading_date,
+        instrument="NIFTY",
+        adr_period=20,
+        adr_value=100.0,
+        today_high=150.0,
+        today_low=50.0,
+        today_range=100.0,
+        adr_high=160.0,
+        adr_low=60.0,
+        range_consumed_pct=75.0,
+        range_remaining_pct=25.0,
+        expansion_state=ADRExpansionState.EXPANDING,
+        exhaustion_state=ADRExhaustionState.NOT_EXHAUSTED,
+        timestamp=NOW,
+    )
+
+
+def _vwap(*, trading_date=NOW.date()):
+    return VWAPLevels(
+        symbol=Instrument.NIFTY,
+        trading_date=trading_date,
+        timestamp=NOW,
+        vwap=100.0,
+        cumulative_volume=1000,
+        cumulative_price_volume=100000.0,
     )

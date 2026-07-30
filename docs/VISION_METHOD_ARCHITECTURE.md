@@ -721,3 +721,40 @@ Visible VisionMethodInspector instance
 The bridge does not publish events, own runtime state, trigger Strategy,
 trigger AI, run Risk, update Paper Trading, or modify broker execution. It is
 only an observability adapter for deterministic Vision Method data.
+
+## VM-11.4 Trading Session Synchronization
+
+VM-11.4 adds an explicit pre-assembly session gate for live Vision Method
+inspection. Before the bridge creates a `VisionLevelContextRequest`, mandatory
+daily contexts must belong to the active market session derived from the latest
+market timestamp.
+
+The gate verifies:
+
+- market timestamp session date;
+- CPR trading date;
+- Camarilla trading date;
+- previous-day reference derived from the accepted CPR levels;
+- optional ADR trading date;
+- optional VWAP trading date.
+
+If CPR or Camarilla belongs to a different session, the bridge does not call
+the Vision Method calculator and does not surface the validator exception as an
+internal error. It renders `COLLECTING_CONTEXT` with the exact blocking stage
+and reason, for example:
+
+```text
+Runtime State   COLLECTING_CONTEXT
+Blocking Stage  CPR
+Reason          CPR belongs to previous trading session.
+```
+
+Optional ADR or VWAP session mismatches are omitted from the level request and
+recorded as missing context. The rest of the available Vision Method contexts
+continue to assemble wherever their dependencies allow.
+
+The underlying CPR, Camarilla, ADR, VWAP, level-context validation, Liquidity,
+Structure, Opening Range, and trading rules remain unchanged. VM-11.4 only
+synchronizes live context ownership before assembly so the inspector waits for
+the daily-context refresh instead of treating expected session drift as a
+programming failure.

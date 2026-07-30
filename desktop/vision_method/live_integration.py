@@ -170,7 +170,7 @@ class VisionMethodLiveInspectorBridge:
         runtime_snapshot = runtime.snapshot()
         timeframe = TimeFrame.from_value(runtime_snapshot.timeframe)
         timestamp = _runtime_timestamp(runtime_snapshot)
-        trading_date = timestamp.date()
+        trading_date = _market_session_date(timestamp)
         history = tuple(
             candle
             for candle in runtime.get_candle_history(timeframe)
@@ -188,25 +188,42 @@ class VisionMethodLiveInspectorBridge:
         camarilla = runtime_snapshot.camarilla
         if cpr is None:
             raise self._not_ready(
-                "Level Context",
+                "CPR",
                 "Daily CPR levels are unavailable.",
+                runtime_snapshot,
+                timestamp,
+                available_contexts=("Market Data", "Candle Engine"),
+            )
+        if cpr.trading_date != trading_date:
+            raise self._not_ready(
+                "CPR",
+                _session_mismatch_reason("CPR", cpr.trading_date, trading_date),
                 runtime_snapshot,
                 timestamp,
                 available_contexts=("Market Data", "Candle Engine"),
             )
         if camarilla is None:
             raise self._not_ready(
-                "Level Context",
+                "Camarilla",
                 "Daily Camarilla levels are unavailable.",
                 runtime_snapshot,
                 timestamp,
                 available_contexts=("Market Data", "Candle Engine"),
+            )
+        if camarilla.trading_date != trading_date:
+            raise self._not_ready(
+                "Camarilla",
+                _session_mismatch_reason("Camarilla", camarilla.trading_date, trading_date),
+                runtime_snapshot,
+                timestamp,
+                available_contexts=("Market Data", "Candle Engine", "CPR"),
             )
         latest_price = _latest_price(runtime_snapshot, history)
         previous_price = history[-2].close if len(history) >= 2 else None
         opening_price = history[0].open
         previous_day = _previous_day_from_cpr(cpr)
         failures: list[VisionContextAssemblyFailure] = []
+        adr, vwap = _session_aligned_optional_contexts(runtime_snapshot, trading_date, failures)
 
         try:
             level = assemble_vision_level_context(
@@ -220,8 +237,8 @@ class VisionMethodLiveInspectorBridge:
                     previous_day=previous_day,
                     cpr=cpr,
                     camarilla=camarilla,
-                    adr=runtime_snapshot.adr,
-                    vwap=runtime_snapshot.vwap,
+                    adr=adr,
+                    vwap=vwap,
                     previous_price=previous_price,
                 ),
                 instrument=runtime_snapshot.symbol,
@@ -557,6 +574,10 @@ def _runtime_timestamp(runtime_snapshot) -> object:
     return timestamp
 
 
+def _market_session_date(timestamp) -> object:
+    return timestamp.date()
+
+
 def _latest_price(runtime_snapshot, history) -> float:
     if runtime_snapshot.latest_tick is not None:
         return runtime_snapshot.latest_tick.last_price
@@ -591,6 +612,30 @@ def _missing_failure(stage: str, message: str) -> VisionContextAssemblyFailure:
         failure_reason=message,
         validation_message=message,
     )
+
+
+def _session_mismatch_reason(name: str, context_date, trading_date) -> str:
+    if context_date < trading_date:
+        return f"{name} belongs to previous trading session."
+    if context_date > trading_date:
+        return f"{name} belongs to a future trading session."
+    return f"{name} belongs to a different trading session."
+
+
+def _session_aligned_optional_contexts(
+    runtime_snapshot,
+    trading_date,
+    failures: list[VisionContextAssemblyFailure],
+):
+    adr = runtime_snapshot.adr
+    if adr is not None and adr.trading_date != trading_date:
+        failures.append(_missing_failure("ADR", _session_mismatch_reason("ADR", adr.trading_date, trading_date)))
+        adr = None
+    vwap = runtime_snapshot.vwap
+    if vwap is not None and vwap.trading_date != trading_date:
+        failures.append(_missing_failure("VWAP", _session_mismatch_reason("VWAP", vwap.trading_date, trading_date)))
+        vwap = None
+    return adr, vwap
 
 
 def _stage_label(stage: str) -> str:

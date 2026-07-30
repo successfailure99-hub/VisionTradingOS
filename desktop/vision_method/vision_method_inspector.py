@@ -344,6 +344,14 @@ def _diagnostic_values(status: VisionMethodLiveStatus) -> dict[str, str]:
                     "VWAP Distance": marker,
                 }
             )
+        elif "cpr" in stage:
+            values.update({"CPR Position": marker, "Virgin CPR": marker, "CPR Width": marker})
+        elif "camarilla" in stage:
+            values.update({"Camarilla Zone": marker})
+        elif "adr" in stage:
+            values.update({"ADR Used": marker, "ADR Remaining": marker, "ADR Zone": marker})
+        elif "vwap" in stage:
+            values.update({"VWAP Position": marker, "VWAP Distance": marker})
         elif "candle" in stage:
             values.update({"Opening High": marker, "Opening Low": marker, "Opening Width": marker})
         elif "opening range" in stage:
