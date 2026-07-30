@@ -115,6 +115,12 @@ class VisionLevelQuality(str, Enum):
     INSUFFICIENT = "insufficient"
 
 
+class VisionContextAssemblyStatus(str, Enum):
+    AVAILABLE = "available"
+    MISSING = "missing"
+    FAILED = "failed"
+
+
 class VisionOpeningRangeState(str, Enum):
     WAITING = "waiting"
     INSIDE_RANGE = "inside_range"

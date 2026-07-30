@@ -22,6 +22,7 @@ from .enums import (
     VisionCPRRelation,
     VisionCamarillaZone,
     VisionCandidateState,
+    VisionContextAssemblyStatus,
     VisionFairValueGapDirection,
     VisionGapType,
     VisionLevelQuality,
@@ -46,6 +47,21 @@ from .enums import (
     VisionSwingType,
     VisionVWAPRelation,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class VisionContextAssemblyFailure:
+    stage: str
+    status: VisionContextAssemblyStatus
+    failure_reason: str
+    validation_message: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "stage", _normalize_text(self.stage, "stage"))
+        if not isinstance(self.status, VisionContextAssemblyStatus):
+            raise TypeError("status must be VisionContextAssemblyStatus.")
+        object.__setattr__(self, "failure_reason", _normalize_text(self.failure_reason, "failure_reason"))
+        object.__setattr__(self, "validation_message", _normalize_text(self.validation_message, "validation_message"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -556,6 +572,7 @@ class VisionMethodSnapshot:
     blocking_reasons: tuple[str, ...]
     supporting_reasons: tuple[str, ...]
     quality: str
+    assembly_failures: tuple[VisionContextAssemblyFailure, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.instrument, RuntimeInstrument):
@@ -588,6 +605,7 @@ class VisionMethodSnapshot:
         object.__setattr__(self, "blocking_reasons", _normalize_text_tuple(self.blocking_reasons, "blocking_reasons"))
         object.__setattr__(self, "supporting_reasons", _normalize_text_tuple(self.supporting_reasons, "supporting_reasons"))
         object.__setattr__(self, "quality", _normalize_text(self.quality, "quality"))
+        object.__setattr__(self, "assembly_failures", _normalize_assembly_failures(self.assembly_failures))
 
 
 def _normalize_text_tuple(values: tuple[str, ...], field_name: str) -> tuple[str, ...]:
@@ -646,6 +664,22 @@ def _normalize_liquidity_levels(values: tuple[VisionLiquidityLevel, ...], field_
         if identity in identities:
             raise ValueError("duplicate liquidity pool.")
         identities.add(identity)
+        normalized.append(value)
+    return tuple(normalized)
+
+
+def _normalize_assembly_failures(values: tuple[VisionContextAssemblyFailure, ...]) -> tuple[VisionContextAssemblyFailure, ...]:
+    if not isinstance(values, tuple):
+        raise TypeError("assembly_failures must be a tuple.")
+    normalized: list[VisionContextAssemblyFailure] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, VisionContextAssemblyFailure):
+            raise TypeError("assembly_failures must contain VisionContextAssemblyFailure objects.")
+        key = value.stage.casefold()
+        if key in seen:
+            raise ValueError("assembly_failures cannot contain duplicate stages.")
+        seen.add(key)
         normalized.append(value)
     return tuple(normalized)
 

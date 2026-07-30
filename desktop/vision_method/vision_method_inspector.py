@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QGroupBox, QLabel, QVBoxLayout, QWidget
 from dashboard import formatters
 from dashboard.widgets import FieldGrid, MetricCard, StatusBadge
 from engines.vision_method import (
+    VisionContextAssemblyFailure,
     VisionADRContext,
     VisionMethodSnapshot,
     VisionMethodValidationReport,
@@ -74,12 +75,62 @@ class VisionMethodInspector(QGroupBox):
                 label.setText(formatters.text(value))
         self._render_trace(report)
 
+    def render_failure(
+        self,
+        failure: VisionContextAssemblyFailure,
+        *,
+        instrument: str = "-",
+        timeframe: str = "-",
+        timestamp: str = "-",
+    ) -> None:
+        if not isinstance(failure, VisionContextAssemblyFailure):
+            raise TypeError("failure must be VisionContextAssemblyFailure.")
+        values = _empty_values()
+        values.update(
+            {
+                "Instrument": instrument,
+                "Timeframe": timeframe,
+                "Timestamp": timestamp,
+                "Candidate State": "insufficient_data",
+                "Quality": "invalid",
+                "Validation Result": "insufficient_data",
+                "Assembly Failures": f"{failure.stage}: {failure.validation_message}",
+                "Blocking Stage": failure.stage,
+            }
+        )
+        for field, card in self._cards.items():
+            card.set_value(values[field])
+        for field, value in values.items():
+            label = self._labels[field]
+            if isinstance(label, StatusBadge):
+                label.set_status_text(value)
+            else:
+                label.setText(formatters.text(value))
+        self._render_failure_trace(failure)
+
     def _render_trace(self, report: VisionMethodValidationReport | None) -> None:
         while self._trace_labels:
             label = self._trace_labels.pop()
             self._trace_layout.removeWidget(label)
             label.deleteLater()
         lines = ("-",) if report is None else tuple(report.export_record.trace)
+        for line in lines:
+            label = QLabel(line)
+            label.setWordWrap(True)
+            label.setMinimumHeight(24)
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            self._trace_layout.addWidget(label)
+            self._trace_labels.append(label)
+
+    def _render_failure_trace(self, failure: VisionContextAssemblyFailure) -> None:
+        while self._trace_labels:
+            label = self._trace_labels.pop()
+            self._trace_layout.removeWidget(label)
+            label.deleteLater()
+        lines = (
+            f"STEP | {failure.stage} | {failure.status.value} | {failure.validation_message}",
+            "FINAL | Vision Method | insufficient_data | Context assembly incomplete",
+        )
         for line in lines:
             label = QLabel(line)
             label.setWordWrap(True)
@@ -149,6 +200,7 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
         "Option Neutral Factors": formatters.joined(option.neutral_factors),
         "Method Candidate State": snapshot.candidate_state.value,
         "Method Quality": snapshot.quality,
+        "Assembly Failures": _assembly_failures(snapshot),
     }
     return values
 
@@ -169,6 +221,14 @@ def _empty_values() -> dict[str, str]:
         "Quality": "-",
         "Validation Result": "-",
     }
+
+
+def _assembly_failures(snapshot: VisionMethodSnapshot) -> str:
+    if not snapshot.assembly_failures:
+        return "none"
+    return formatters.joined(
+        tuple(f"{failure.stage}: {failure.validation_message}" for failure in snapshot.assembly_failures)
+    )
 
 
 def _adr_value(adr: VisionADRContext | None, field_name: str) -> str:
@@ -290,7 +350,7 @@ _SECTION_FIELDS = (
     ),
     (
         "Vision Method",
-        ("Method Candidate State", "Method Quality"),
+        ("Method Candidate State", "Method Quality", "Assembly Failures"),
     ),
     (
         "Validation",

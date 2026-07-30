@@ -217,6 +217,7 @@ def _trace(snapshot: VisionMethodSnapshot) -> tuple[VisionMethodValidationTraceS
     events = snapshot.structure_event_context
     setup = snapshot.setup_qualification_context
     option = snapshot.option_confirmation_context
+    failures = {failure.stage.casefold(): failure for failure in snapshot.assembly_failures}
     trace = (
         VisionMethodValidationTraceStep(1, "CPR", level.cpr_context.relation.value, _quality_status(level.quality)),
         VisionMethodValidationTraceStep(2, "Camarilla", level.camarilla_context.zone.value, _quality_status(level.quality)),
@@ -230,14 +231,26 @@ def _trace(snapshot: VisionMethodSnapshot) -> tuple[VisionMethodValidationTraceS
             "pass" if opening_range.range_complete and opening_range.quality is not VisionLevelQuality.INSUFFICIENT else "missing",
             "Opening range incomplete" if not opening_range.range_complete else "",
         ),
-        VisionMethodValidationTraceStep(7, "Structure", structure.structure_state.value, _quality_status(structure.quality)),
-        VisionMethodValidationTraceStep(8, "Liquidity", liquidity.liquidity_sweep.value, _quality_status(liquidity.quality)),
+        _trace_step_with_failure(
+            7,
+            "Structure",
+            structure.structure_state.value,
+            _quality_status(structure.quality),
+            failures,
+        ),
+        _trace_step_with_failure(
+            8,
+            "Liquidity",
+            liquidity.liquidity_sweep.value,
+            _quality_status(liquidity.quality),
+            failures,
+        ),
         VisionMethodValidationTraceStep(
             9,
             "Setup",
             setup.setup_type.value,
             "fail" if setup.setup_quality is VisionSetupQuality.INVALID or setup.blocking_reasons else "pass",
-            "; ".join(setup.blocking_reasons),
+            _failure_detail("Setup", failures) or "; ".join(setup.blocking_reasons),
         ),
         VisionMethodValidationTraceStep(
             10,
@@ -249,6 +262,26 @@ def _trace(snapshot: VisionMethodSnapshot) -> tuple[VisionMethodValidationTraceS
         VisionMethodValidationTraceStep(None, "FINAL", snapshot.candidate_state.value, "pass", snapshot.quality),
     )
     return trace
+
+
+def _trace_step_with_failure(
+    step_number: int,
+    stage: str,
+    observed: str,
+    status: str,
+    failures: dict[str, object],
+) -> VisionMethodValidationTraceStep:
+    detail = _failure_detail(stage, failures)
+    if detail:
+        return VisionMethodValidationTraceStep(step_number, stage, observed, "missing", detail)
+    return VisionMethodValidationTraceStep(step_number, stage, observed, status)
+
+
+def _failure_detail(stage: str, failures: dict[str, object]) -> str:
+    failure = failures.get(stage.casefold())
+    if failure is None:
+        return ""
+    return getattr(failure, "validation_message")
 
 
 def _metrics(

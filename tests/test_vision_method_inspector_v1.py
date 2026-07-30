@@ -192,7 +192,8 @@ def test_live_bridge_missing_snapshot_or_validation_fails_closed(monkeypatch):
 
     assert missing.ready is False
     assert missing.snapshot is None
-    assert panel._labels["Candidate State"].text() == "-"
+    assert panel._labels["Candidate State"].text() == "insufficient_data"
+    assert panel._labels["Assembly Failures"].text() == "Candle Engine: Closed candle history is unavailable."
 
     runtime.history = _candles()
     runtime.current_snapshot = _runtime_snapshot(history=runtime.history)
@@ -206,6 +207,32 @@ def test_live_bridge_missing_snapshot_or_validation_fails_closed(monkeypatch):
     assert invalid.ready is False
     assert invalid.validation_report is None
     assert "validation unavailable" in invalid.reason
+
+
+def test_live_bridge_converts_liquidity_failure_into_visible_insufficient_snapshot(monkeypatch):
+    app()
+    lifecycle, _runtime = _live_lifecycle()
+    panel = VisionMethodInspector()
+
+    def fail_liquidity(*_args, **_kwargs):
+        raise ValueError("overlapping gaps")
+
+    monkeypatch.setattr("desktop.vision_method.live_integration.assemble_vision_liquidity_context", fail_liquidity)
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
+
+    assert result.ready is False
+    assert result.snapshot is not None
+    assert result.validation_report is not None
+    assert result.snapshot.candidate_state.value == "insufficient_data"
+    assert result.validation_report.validation_result.value == "insufficient_data"
+    assert result.failures[0].stage == "Liquidity"
+    assert result.failures[0].validation_message == "ValueError: overlapping gaps"
+    assert panel._labels["Candidate State"].text() == "insufficient_data"
+    assert "Liquidity: ValueError: overlapping gaps" in panel._labels["Assembly Failures"].text()
+    assert "Structure Events: ValueError: insufficient liquidity context." in panel._labels["Assembly Failures"].text()
+    assert "Liquidity" in panel._trace_labels[7].text()
+    assert "overlapping gaps" in panel._trace_labels[7].text()
 
 
 def test_main_window_refresh_updates_live_vision_method_inspector():

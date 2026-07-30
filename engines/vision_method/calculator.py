@@ -31,6 +31,7 @@ from .enums import (
     VisionStructureTrend,
 )
 from .models import (
+    VisionContextAssemblyFailure,
     VisionLevelContext,
     VisionLiquidityContext,
     VisionMethodSnapshot,
@@ -57,6 +58,7 @@ class VisionMethodCalculationRequest:
     structure_event_context: VisionStructureEventContext
     setup_qualification_context: VisionSetupQualificationContext
     option_confirmation_context: VisionOptionConfirmationContext
+    assembly_failures: tuple[VisionContextAssemblyFailure, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.instrument, RuntimeInstrument):
@@ -78,6 +80,7 @@ class VisionMethodCalculationRequest:
             raise TypeError("setup_qualification_context must be VisionSetupQualificationContext.")
         if not isinstance(self.option_confirmation_context, VisionOptionConfirmationContext):
             raise TypeError("option_confirmation_context must be VisionOptionConfirmationContext.")
+        object.__setattr__(self, "assembly_failures", _normalize_assembly_failures(self.assembly_failures))
 
 
 def calculate_vision_method_snapshot(
@@ -114,6 +117,7 @@ def calculate_vision_method_snapshot(
         blocking_reasons=blocking_reasons,
         supporting_reasons=supporting_reasons,
         quality=quality,
+        assembly_failures=request.assembly_failures,
     )
     return validate_vision_method_snapshot(snapshot, instrument=request.instrument, timeframe=request.timeframe)
 
@@ -236,6 +240,10 @@ def _method_quality(
 
 def _blocking_reasons(request: VisionMethodCalculationRequest) -> tuple[str, ...]:
     reasons: list[str] = []
+    reasons.extend(
+        f"{failure.stage} {failure.status.value}: {failure.validation_message}"
+        for failure in request.assembly_failures
+    )
     reasons.extend(request.setup_qualification_context.blocking_reasons)
     confirmation = request.option_confirmation_context
     if confirmation.confirmation_state is VisionOptionConfirmation.CONTRADICTS:
@@ -302,6 +310,8 @@ def _structure_event_reasons(context: VisionStructureEventContext) -> tuple[str,
 
 def _has_insufficient_data(request: VisionMethodCalculationRequest) -> bool:
     return (
+        bool(request.assembly_failures)
+        or
         request.level_context.quality is VisionLevelQuality.INSUFFICIENT
         or request.opening_range_context.quality is VisionLevelQuality.INSUFFICIENT
         or request.structure_context.quality is VisionLevelQuality.INSUFFICIENT
@@ -332,6 +342,22 @@ def _dedupe(values: list[str]) -> tuple[str, ...]:
             result.append(normalized)
             seen.add(key)
     return tuple(result)
+
+
+def _normalize_assembly_failures(
+    values: tuple[VisionContextAssemblyFailure, ...],
+) -> tuple[VisionContextAssemblyFailure, ...]:
+    if not isinstance(values, tuple):
+        raise TypeError("assembly_failures must be a tuple.")
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, VisionContextAssemblyFailure):
+            raise TypeError("assembly_failures must contain VisionContextAssemblyFailure objects.")
+        key = value.stage.casefold()
+        if key in seen:
+            raise ValueError("assembly_failures cannot contain duplicate stages.")
+        seen.add(key)
+    return values
 
 
 def _validate_aware(value: datetime, field_name: str) -> None:

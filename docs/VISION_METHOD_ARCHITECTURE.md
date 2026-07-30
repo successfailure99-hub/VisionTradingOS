@@ -597,9 +597,12 @@ The bridge reuses:
 - `VisionMethodCalculationRequest` and `calculate_vision_method_snapshot`;
 - `validate_vision_method`.
 
-Before the first complete deterministic snapshot can be assembled, the
-inspector remains in its unavailable placeholder state. After a snapshot is
-available, the inspector displays the actual immutable Vision Method values.
+Before market data has produced any timestamp, the inspector remains in its
+unavailable placeholder state. Once market data has started, expected assembly
+failures are surfaced as deterministic status instead of blanking the whole
+panel. The inspector shows the failed stage, failure status, and validation
+message while preserving all contexts that were assembled successfully.
+
 When optional evidence such as ADR, VWAP, or option-chain analytics is missing,
 the existing Vision Method contexts report that as unavailable or insufficient
 instead of the inspector fabricating values.
@@ -616,3 +619,41 @@ The integration does not continue into trade candidate generation, AI,
 Strategy, Risk, Paper Trading, broker order placement, or execution. It does
 not publish events, create runtime ownership, or add a second Vision Method
 calculation pipeline.
+
+## VM-11.2 Fault-Tolerant Context Assembly
+
+VM-11.2 keeps strict Vision Method context validation intact. It does not weaken
+Liquidity, Fair Value Gap detection, setup qualification, option-chain
+confirmation, or any trading rule.
+
+The live inspector bridge now converts expected context assembly failures into
+immutable `VisionContextAssemblyFailure` records containing:
+
+- stage;
+- status;
+- failure reason;
+- validation message.
+
+Where a failed stage can be represented safely, the bridge supplies an
+insufficient fallback context and passes the failure record into
+`VisionMethodCalculator`. The resulting `VisionMethodSnapshot` has
+`candidate_state=INSUFFICIENT_DATA`, carries the assembly failures, and produces
+a validation report that identifies the failed stage in the trace.
+
+If a foundational prerequisite is missing before a snapshot can be honestly
+assembled, such as CPR or closed candle history, the inspector renders a
+deterministic failure state with `INSUFFICIENT_DATA` instead of staying blank
+after market data has started.
+
+```text
+Context A succeeds
+Context B fails validation
+Context C depends on B and reports unavailable
+        |
+        v
+Inspector shows A plus exact B/C failure reasons
+```
+
+The strict context assemblers still raise their original validation exceptions.
+The bridge converts those exceptions at the presentation boundary so no expected
+single-stage failure can hide the rest of the deterministic methodology view.
