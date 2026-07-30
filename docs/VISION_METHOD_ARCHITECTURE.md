@@ -422,3 +422,82 @@ Vision Method Calculator
         v
 VisionMethodSnapshot
 ```
+
+## VM-10 Validation Framework Boundary
+
+VM-10 introduces the Vision Method Validation Framework. The framework consumes
+only one assembled `VisionMethodSnapshot` and produces one immutable
+`VisionMethodValidationReport`.
+
+The validation framework does not calculate levels, opening range, structure,
+liquidity, structure events, setup qualification, or option-chain confirmation.
+Those responsibilities remain owned by VM-02 through VM-08 and assembled by
+VM-09.
+
+The validator answers one question:
+
+```text
+Why did Vision Method reach this conclusion?
+```
+
+It emits a deterministic ordered trace:
+
+```text
+STEP 1   CPR
+STEP 2   Camarilla
+STEP 3   Previous Day
+STEP 4   ADR
+STEP 5   VWAP
+STEP 6   Opening Range
+STEP 7   Structure
+STEP 8   Liquidity
+STEP 9   Setup
+STEP 10  Option Chain
+FINAL    Candidate State
+```
+
+Every trace step records:
+
+- stage;
+- observed value;
+- status: pass, fail, or missing;
+- optional detail.
+
+The report also records deterministic metrics:
+
+- completed steps;
+- failed steps;
+- missing steps;
+- confidence inputs;
+- blocking stage.
+
+Validation results are descriptive:
+
+- `VALID`;
+- `PARTIAL`;
+- `INVALID`;
+- `CONFLICT`;
+- `INSUFFICIENT_DATA`.
+
+No probabilities are produced. `confidence_inputs` are the deterministic
+supporting reasons carried by the assembled methodology snapshot, not numeric
+confidence scores.
+
+The validation report is replay-ready: a historical replay can generate one
+report for every closed candle after a `VisionMethodSnapshot` exists. The
+report includes an export-ready immutable record suitable for later CSV or JSON
+serialization. VM-10 does not write files.
+
+VM-10 intentionally does not create runtime integration, dashboard output, AI
+explanation, strategy decisions, risk decisions, paper trades, broker
+integration, or execution.
+
+```text
+VisionMethodSnapshot
+        |
+        v
+Vision Method Validation Framework
+        |
+        v
+VisionMethodValidationReport
+```

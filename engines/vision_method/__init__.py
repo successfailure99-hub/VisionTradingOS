@@ -1,7 +1,5 @@
 """
 Vision Method V1 immutable methodology contracts.
-
-This package intentionally contains no engine or calculator in VM-01.
 """
 
 from .enums import (
@@ -103,6 +101,16 @@ from .setup_qualification import (
     validate_setup_qualification_request,
 )
 from .validator import validate_vision_method_snapshot
+from .validation import (
+    VisionMethodValidationExportRecord,
+    VisionMethodValidationMetrics,
+    VisionMethodValidationReport,
+    VisionMethodValidationResult,
+    VisionMethodValidationTraceStep,
+    build_vision_method_validation_report,
+    validate_vision_method,
+    validate_vision_method_validation_report,
+)
 
 __all__ = [
     "VisionBOS",
@@ -131,6 +139,11 @@ __all__ = [
     "VisionMarketRegime",
     "VisionMethodSnapshot",
     "VisionMethodCalculationRequest",
+    "VisionMethodValidationExportRecord",
+    "VisionMethodValidationMetrics",
+    "VisionMethodValidationReport",
+    "VisionMethodValidationResult",
+    "VisionMethodValidationTraceStep",
     "VisionMitigationState",
     "VisionMSS",
     "VisionOpeningContext",
@@ -172,12 +185,15 @@ __all__ = [
     "assemble_vision_structure_event_context",
     "assemble_vision_structure_context",
     "calculate_vision_method_snapshot",
+    "build_vision_method_validation_report",
     "validate_level_context_request",
     "validate_liquidity_request",
     "validate_opening_range_request",
     "validate_option_confirmation_context",
     "validate_option_confirmation_request",
     "validate_vision_method_calculation_request",
+    "validate_vision_method",
+    "validate_vision_method_validation_report",
     "validate_setup_qualification_context",
     "validate_setup_qualification_request",
     "validate_structure_event_context",
