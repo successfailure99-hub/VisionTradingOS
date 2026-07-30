@@ -56,6 +56,7 @@ from engines.position.models import PositionState
 from engines.price_action.models import PriceActionState
 from engines.risk.models import RiskConfiguration, RiskDecisionState
 from engines.risk_management_v2.models import RiskManagementV2Snapshot
+from engines.runtime_adapter.models import TradeCandidate
 from engines.strategy.models import StrategyDecisionState
 from engines.strategy_decision_v2.models import StrategyDecisionV2Snapshot
 from application.trade_lifecycle_v1.models import TradeLifecycleV1Snapshot
@@ -298,6 +299,7 @@ class RuntimeSnapshot:
     risk_management_v2: RiskManagementV2Snapshot | None = None
     trade_lifecycle_v1: TradeLifecycleV1Snapshot | None = None
     trade_journal_v1: TradeJournalV1Snapshot | None = None
+    vision_trade_candidate: TradeCandidate | None = None
     decision_audit: "RuntimeDecisionAudit" | None = None
 
 
@@ -312,6 +314,7 @@ class RuntimeDecisionAudit:
     strategy_decision_v2: StrategyDecisionV2Snapshot | None = None
     risk_management_v2: RiskManagementV2Snapshot | None = None
     trade_lifecycle_v1: TradeLifecycleV1Snapshot | None = None
+    vision_trade_candidate: TradeCandidate | None = None
 
 
 @dataclass(frozen=True, slots=True)

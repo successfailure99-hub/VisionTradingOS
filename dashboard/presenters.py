@@ -648,6 +648,31 @@ def build_position_view(runtime_snapshot: RuntimeSnapshot) -> DashboardPositionV
 
 
 def build_journal_view(runtime_snapshot: RuntimeSnapshot) -> DashboardJournalView:
+    v1_entry = getattr(getattr(runtime_snapshot, "trade_journal_v1", None), "latest_entry", None)
+    if v1_entry is not None:
+        return DashboardJournalView(
+            symbol=_enum_text(runtime_snapshot.symbol),
+            status="Ready",
+            records=getattr(getattr(runtime_snapshot, "trade_journal_v1", None), "trade_count", 1),
+            message="Latest completed DRY_RUN trade",
+            latest_trade_id=getattr(v1_entry, "trade_id", None),
+            latest_trade_source=getattr(v1_entry, "trade_source", "-"),
+            latest_exit_type=_enum_text(getattr(v1_entry, "exit_reason", None)),
+            latest_realized_pnl=getattr(v1_entry, "realized_pnl", None),
+            latest_opened_at=getattr(v1_entry, "opened_at", None),
+            latest_closed_at=getattr(v1_entry, "closed_at", None),
+            latest_instrument=_enum_text(getattr(v1_entry, "instrument", None)),
+            latest_side=_enum_text(getattr(v1_entry, "direction", None)),
+            latest_quantity=getattr(v1_entry, "closed_quantity", None),
+            latest_entry_price=getattr(v1_entry, "entry_price", None),
+            latest_exit_price=getattr(v1_entry, "average_exit_price", None),
+            latest_holding_seconds=int(getattr(v1_entry, "duration_seconds", 0)),
+            daily_pnl=getattr(
+                getattr(getattr(getattr(runtime_snapshot, "trade_journal_v1", None), "analytics", None), "overall", None),
+                "net_pnl",
+                None,
+            ),
+        )
     paper_summary = getattr(getattr(runtime_snapshot, "paper_trading", None), "journal_summary", None)
     if paper_summary is not None:
         record = paper_summary.latest_record
@@ -657,6 +682,7 @@ def build_journal_view(runtime_snapshot: RuntimeSnapshot) -> DashboardJournalVie
             records=paper_summary.record_count,
             message="Latest completed DRY_RUN trade" if record is not None else "No completed DRY_RUN trades",
             latest_trade_id=getattr(record, "trade_id", None),
+            latest_trade_source="-",
             latest_exit_type=_enum_text(getattr(record, "exit_type", None)),
             latest_realized_pnl=getattr(record, "net_pnl", None),
             latest_opened_at=getattr(record, "entry_time", None),
@@ -683,6 +709,7 @@ def build_journal_view(runtime_snapshot: RuntimeSnapshot) -> DashboardJournalVie
         records=1 if has_record else 0,
         message="Latest completed DRY_RUN trade" if has_record else "No completed DRY_RUN trades",
         latest_trade_id=getattr(record, "trade_id", None),
+        latest_trade_source="-",
         latest_exit_type=_enum_text(getattr(record, "exit_type", None)),
         latest_realized_pnl=getattr(record, "realized_gross_pnl", None),
         latest_opened_at=getattr(record, "opened_at", None),

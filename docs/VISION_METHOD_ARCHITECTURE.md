@@ -867,3 +867,61 @@ VM-12 intentionally stops here. It does not send the candidate to Strategy,
 Risk, Paper Trading, Broker, or AI. Future milestones may consume
 `TradeCandidate`, but this milestone only creates the immutable handoff
 contract.
+
+## VM-13 Vision Paper Trading Integration
+
+VM-13 routes completed Vision Method candidates into the existing dry-run paper
+trading stack without introducing a new lifecycle or changing certified
+strategy, risk, broker, or execution rules.
+
+```text
+VisionMethodSnapshot
+        |
+        v
+VisionMethodValidationReport
+        |
+        v
+VisionRuntimeAdapter
+        |
+        v
+TradeCandidate
+        |
+        v
+RiskManagementV2
+        |
+        v
+TradeLifecycleV1
+        |
+        v
+TradeJournalV1
+```
+
+Only actionable candidates are forwarded to risk review:
+
+- `TradeCandidateState.LONG` with `TradeCandidateDirection.LONG`
+- `TradeCandidateState.SHORT` with `TradeCandidateDirection.SHORT`
+
+The following Vision Method states remain observational and are blocked before
+risk review:
+
+- `WAIT`
+- `OBSERVE`
+- `AVOID`
+- `INSUFFICIENT_DATA`
+- `PREPARE_LONG`
+- `PREPARE_SHORT`
+
+The runtime preserves the existing Risk V2 and Trade Lifecycle V1 contracts by
+creating a StrategyDecisionV2-compatible handoff snapshot with explicit
+`trade_source = "VISION_METHOD"` metadata. The StrategyDecisionV2 engine is not
+asked to reinterpret the candidate, and no strategy decision rules are changed.
+
+Journal entries store references, not duplicated snapshots:
+
+- `trade_candidate_reference`
+- `vision_method_snapshot_reference`
+- `vision_method_validation_reference`
+
+The dashboard journal panel displays the trade source for completed dry-run
+trades. VM-13 does not place broker orders, enable live trading, modify AI
+reasoning, or redesign Paper Trading.

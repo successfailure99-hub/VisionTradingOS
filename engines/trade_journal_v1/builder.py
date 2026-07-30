@@ -73,6 +73,10 @@ class TradeJournalEntryBuilder:
             execution_fill_price=execution.average_fill_price or position.average_entry_price,
             execution_filled_quantity=execution.filled_quantity,
             lifecycle_snapshot=lifecycle,
+            trade_source=getattr(strategy, "trade_source", "STRATEGY_DECISION_V2"),
+            trade_candidate_reference=getattr(strategy, "trade_candidate_reference", None),
+            vision_method_snapshot_reference=getattr(strategy, "vision_method_snapshot_reference", None),
+            vision_method_validation_reference=getattr(strategy, "vision_method_validation_reference", None),
         )
 
 

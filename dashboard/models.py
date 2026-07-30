@@ -604,6 +604,7 @@ class DashboardJournalView:
     losses: int = 0
     win_rate: float | None = None
     profit_factor: float | None = None
+    latest_trade_source: str = "-"
 
 
 @dataclass(frozen=True, slots=True)

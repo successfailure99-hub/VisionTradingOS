@@ -63,6 +63,10 @@ class TradeJournalEntry:
     execution_fill_price: float
     execution_filled_quantity: int
     lifecycle_snapshot: TradeLifecycleV1Snapshot
+    trade_source: str = "STRATEGY_DECISION_V2"
+    trade_candidate_reference: str | None = None
+    vision_method_snapshot_reference: str | None = None
+    vision_method_validation_reference: str | None = None
 
     def __post_init__(self) -> None:
         _non_empty(self.trade_id, "trade_id")
@@ -105,6 +109,15 @@ class TradeJournalEntry:
             raise ValueError("lifecycle snapshot must contain a closed position")
         if position.dry_run is not True or position.analysis_only is not True:
             raise ValueError("journal entries must remain dry-run and analysis-only")
+        object.__setattr__(self, "trade_source", _non_empty(self.trade_source, "trade_source"))
+        for name in (
+            "trade_candidate_reference",
+            "vision_method_snapshot_reference",
+            "vision_method_validation_reference",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, _non_empty(value, name))
 
 
 @dataclass(frozen=True, slots=True)

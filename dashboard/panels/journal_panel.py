@@ -26,6 +26,7 @@ class JournalPanel(QGroupBox):
                 "Records",
                 "Message",
                 "Trade ID",
+                "Trade Source",
                 "Instrument",
                 "Side",
                 "Quantity",
@@ -59,6 +60,7 @@ class JournalPanel(QGroupBox):
         self._labels["Records"].setText(formatters.integer(view.records))
         self._labels["Message"].setText(formatters.text(view.message))
         self._labels["Trade ID"].setText(formatters.text(view.latest_trade_id))
+        self._labels["Trade Source"].setText(formatters.text(view.latest_trade_source))
         self._labels["Instrument"].setText(formatters.text(view.latest_instrument))
         self._labels["Side"].setText(formatters.text(view.latest_side))
         self._labels["Quantity"].setText(formatters.quantity(view.latest_quantity))

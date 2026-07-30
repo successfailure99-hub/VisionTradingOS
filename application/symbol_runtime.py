@@ -61,10 +61,31 @@ from engines.risk_management_v2 import (
     RiskManagementV2Input,
     SessionRiskState,
 )
+from engines.runtime_adapter import (
+    TradeCandidate,
+    TradeCandidateDirection,
+    TradeCandidateState,
+    adapt_vision_method_to_trade_candidate,
+)
 from engines.strategy.models import StrategyDecisionState, StrategySnapshot
 from engines.strategy.strategy_engine import StrategyEngine
 from engines.strategy_decision_v2 import StrategyDecisionV2Engine, StrategyDecisionV2Input
-from engines.strategy_decision_v2.enums import StrategyDirection
+from engines.strategy_decision_v2.enums import (
+    StrategyAction,
+    StrategyDecisionChange,
+    StrategyDecisionQuality,
+    StrategyDirection,
+    StrategyInvalidationType,
+    StrategySetupFamily,
+    StrategySetupStatus,
+    StrategyTriggerType,
+)
+from engines.strategy_decision_v2.models import (
+    StrategyDecisionV2Snapshot,
+    StrategyEntryCondition,
+    StrategyInvalidationRule,
+    StrategyRiskHandoff,
+)
 from engines.trade_decision_authorization.engine import TradeDecisionAuthorizationEngine
 from engines.trade_decision_authorization.models import TradeAuthorizationRequest
 from engines.trade_execution_policy.engine import TradeExecutionPolicyEngine
@@ -73,6 +94,7 @@ from engines.trade_execution_policy.models import ExecutionRequest, TradeExecuti
 from engines.tradingview_evidence.engine import TradingViewEvidenceMappingEngine
 from engines.tradingview_evidence.models import TradingViewEvidenceRequest
 from engines.trade_journal_v1 import TradeJournalV1Engine
+from engines.vision_method import VisionMethodSnapshot, VisionMethodValidationReport
 from engines.vwap.vwap_engine import VWAPEngine
 
 from application.enums import RuntimeInstrument, RuntimeStatus
@@ -309,6 +331,9 @@ class SymbolRuntime:
         )
         self.trade_journal_v1_engine = TradeJournalV1Engine(event_bus=event_bus)
         self._decision_audit: RuntimeDecisionAudit | None = None
+        self._vision_trade_candidate: TradeCandidate | None = None
+        self._vision_strategy_decision_v2: StrategyDecisionV2Snapshot | None = None
+        self._last_vision_trade_identity: str | None = None
 
     @property
     def instrument(self) -> RuntimeInstrument:
@@ -981,15 +1006,16 @@ class SymbolRuntime:
             setup_classification=self.setup_classification_engine.snapshot(),
             chart_explanation=self.chart_explanation_engine.snapshot(),
             ai_reasoning_v2=self.ai_reasoning_v2_engine.snapshot,
-            strategy_decision_v2=self.strategy_decision_v2_engine.snapshot,
+            strategy_decision_v2=self._vision_strategy_decision_v2 or self.strategy_decision_v2_engine.snapshot,
             risk_management_v2=self.risk_management_v2_engine.snapshot,
             trade_lifecycle_v1=self.trade_lifecycle_v1.snapshot(),
             trade_journal_v1=self.trade_journal_v1_engine.snapshot(),
+            vision_trade_candidate=self._vision_trade_candidate,
             decision_audit=self._decision_audit,
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
-        strategy = self.strategy_decision_v2_engine.snapshot or self.strategy_engine.state
+        strategy = self._vision_strategy_decision_v2 or self.strategy_decision_v2_engine.snapshot or self.strategy_engine.state
         risk = self.risk_management_v2_engine.snapshot or self.risk_engine.state
         record = self.paper_trading_engine.on_tick(
             tick,
@@ -1187,6 +1213,190 @@ class SymbolRuntime:
             trade_lifecycle_v1=lifecycle,
         )
 
+    def process_vision_method_paper_trade(
+        self,
+        snapshot: VisionMethodSnapshot,
+        validation_report: VisionMethodValidationReport,
+    ) -> TradeCandidate:
+        candidate = adapt_vision_method_to_trade_candidate(snapshot, validation_report)
+        self._vision_trade_candidate = candidate
+        if not _is_actionable_vision_candidate(candidate):
+            self._record_decision_audit(
+                "Vision Method",
+                f"Vision Method candidate blocked: {candidate.reason}",
+                vision_trade_candidate=candidate,
+            )
+            return candidate
+
+        identity = _vision_trade_identity(candidate)
+        if identity == self._last_vision_trade_identity:
+            return candidate
+
+        reasoning = self.ai_reasoning_v2_engine.snapshot
+        if reasoning is None or reasoning.timestamp != candidate.timestamp:
+            self._record_decision_audit(
+                "Vision Method",
+                "AI Reasoning V2 snapshot is unavailable for the Vision Method candidate timestamp.",
+                vision_trade_candidate=candidate,
+            )
+            return candidate
+
+        strategy = self._build_vision_strategy_decision(candidate, reasoning)
+        self._vision_strategy_decision_v2 = strategy
+        self._last_vision_trade_identity = identity
+        self._process_strategy_risk_lifecycle(
+            strategy,
+            ai_reasoning_v2=reasoning,
+            accepted_message="Vision Method paper-trading chain accepted the candidate.",
+            vision_trade_candidate=candidate,
+        )
+        return candidate
+
+    def _process_strategy_risk_lifecycle(
+        self,
+        strategy: StrategyDecisionV2Snapshot,
+        *,
+        ai_reasoning_v2=None,
+        accepted_message: str,
+        vision_trade_candidate: TradeCandidate | None = None,
+    ) -> None:
+        try:
+            risk_input = self._build_risk_management_v2_input(strategy)
+            risk = self.risk_management_v2_engine.process(risk_input)
+        except Exception as exc:
+            self._record_decision_audit(
+                "Risk",
+                f"Risk Management V2 input unavailable: {_safe_error(exc)}",
+                ai_reasoning_v2=ai_reasoning_v2,
+                strategy_decision_v2=strategy,
+                vision_trade_candidate=vision_trade_candidate,
+            )
+            return
+        if risk.decision not in {RiskDecisionV2.APPROVED, RiskDecisionV2.APPROVED_REDUCED} or not risk.execution_eligible:
+            self._record_decision_audit(
+                "Risk",
+                _risk_rejection_reason(risk),
+                ai_reasoning_v2=ai_reasoning_v2,
+                strategy_decision_v2=strategy,
+                risk_management_v2=risk,
+                vision_trade_candidate=vision_trade_candidate,
+            )
+            return
+        try:
+            lifecycle = self.trade_lifecycle_v1.process(TradeLifecycleV1Request(strategy, risk))
+        except Exception as exc:
+            self._record_decision_audit(
+                "Lifecycle",
+                f"Trade Lifecycle V1 rejected the handoff: {_safe_error(exc)}",
+                ai_reasoning_v2=ai_reasoning_v2,
+                strategy_decision_v2=strategy,
+                risk_management_v2=risk,
+                vision_trade_candidate=vision_trade_candidate,
+            )
+            return
+        if lifecycle.block_source.value != "none":
+            self._record_decision_audit(
+                "Lifecycle",
+                _lifecycle_rejection_reason(lifecycle),
+                ai_reasoning_v2=ai_reasoning_v2,
+                strategy_decision_v2=strategy,
+                risk_management_v2=risk,
+                trade_lifecycle_v1=lifecycle,
+                vision_trade_candidate=vision_trade_candidate,
+            )
+            return
+        self._record_decision_audit(
+            "NONE",
+            accepted_message,
+            rejected=False,
+            ai_reasoning_v2=ai_reasoning_v2,
+            strategy_decision_v2=strategy,
+            risk_management_v2=risk,
+            trade_lifecycle_v1=lifecycle,
+            vision_trade_candidate=vision_trade_candidate,
+        )
+
+    def _build_vision_strategy_decision(
+        self,
+        candidate: TradeCandidate,
+        reasoning,
+    ) -> StrategyDecisionV2Snapshot:
+        direction = StrategyDirection.LONG if candidate.direction is TradeCandidateDirection.LONG else StrategyDirection.SHORT
+        action = StrategyAction.CONSIDER_LONG if direction is StrategyDirection.LONG else StrategyAction.CONSIDER_SHORT
+        trigger = (
+            StrategyTriggerType.CONFIRMED_BREAKOUT
+            if "Opening Range Break" in candidate.entry_zone
+            else StrategyTriggerType.STRUCTURE_CONTINUATION
+        )
+        invalidation = (
+            StrategyInvalidationType.CLOSE_BACK_BELOW_LEVEL
+            if direction is StrategyDirection.LONG
+            else StrategyInvalidationType.CLOSE_BACK_ABOVE_LEVEL
+        )
+        quality = _strategy_quality_from_vision(candidate.confidence)
+        return StrategyDecisionV2Snapshot(
+            instrument=self._core_instrument,
+            timestamp=reasoning.timestamp,
+            action=action,
+            direction=direction,
+            setup_family=StrategySetupFamily.STRUCTURAL_RETEST,
+            setup_status=StrategySetupStatus.READY_FOR_RISK_REVIEW,
+            quality=quality,
+            change=StrategyDecisionChange.SETUP_APPEARED,
+            ai_reasoning=reasoning,
+            current_price=None,
+            setup_name="Vision Method Candidate",
+            thesis="Vision Method produced an eligible deterministic trade candidate.",
+            entry_conditions=(
+                StrategyEntryCondition(
+                    1,
+                    trigger,
+                    f"Vision Method entry context: {candidate.entry_zone}.",
+                    None,
+                    True,
+                ),
+            ),
+            invalidation_rules=(
+                StrategyInvalidationRule(
+                    1,
+                    invalidation,
+                    f"Vision Method structural invalidation: {candidate.stop_loss_zone}.",
+                    None,
+                ),
+            ),
+            objectives=(),
+            primary_reference=None,
+            invalidation_reference=None,
+            context_confidence=_confidence_from_vision(candidate.confidence),
+            reasoning_confidence=reasoning.confidence,
+            eligible=True,
+            requires_retest=False,
+            risk_handoff=StrategyRiskHandoff(
+                True,
+                direction,
+                StrategySetupStatus.READY_FOR_RISK_REVIEW,
+                None,
+                0,
+                _confidence_from_vision(candidate.confidence),
+                reasoning.confidence,
+                (
+                    "Trade Source: VISION_METHOD",
+                    f"Candidate Reference: {_vision_trade_identity(candidate)}",
+                ),
+            ),
+            rationale=(
+                "Trade Source: VISION_METHOD",
+                candidate.reason,
+                f"Vision Method Snapshot: {candidate.snapshot_reference}",
+                f"Vision Method Validation: {candidate.validation_reference}",
+            ),
+            warnings=(),
+            trade_source="VISION_METHOD",
+            trade_candidate_reference=_vision_trade_identity(candidate),
+            vision_method_snapshot_reference=candidate.snapshot_reference,
+            vision_method_validation_reference=candidate.validation_reference,
+        )
+
     def _build_risk_management_v2_input(self, strategy) -> RiskManagementV2Input:
         entry = _positive_price(getattr(strategy, "current_price", None))
         if entry is None and self._last_tick is not None:
@@ -1308,12 +1518,14 @@ class SymbolRuntime:
         strategy_decision_v2=None,
         risk_management_v2=None,
         trade_lifecycle_v1=None,
+        vision_trade_candidate=None,
     ) -> None:
         timestamp = (
             getattr(trade_lifecycle_v1, "timestamp", None)
             or getattr(risk_management_v2, "timestamp", None)
             or getattr(strategy_decision_v2, "timestamp", None)
             or getattr(ai_reasoning_v2, "timestamp", None)
+            or getattr(vision_trade_candidate, "timestamp", None)
             or getattr(self._last_tick, "timestamp", None)
         )
         if timestamp is None:
@@ -1328,6 +1540,7 @@ class SymbolRuntime:
             strategy_decision_v2=strategy_decision_v2 or self.strategy_decision_v2_engine.snapshot,
             risk_management_v2=risk_management_v2 or self.risk_management_v2_engine.snapshot,
             trade_lifecycle_v1=trade_lifecycle_v1 or self.trade_lifecycle_v1.snapshot(),
+            vision_trade_candidate=vision_trade_candidate or self._vision_trade_candidate,
         )
 
     def _append_daily_ohlc(self, daily_ohlc: DailyOHLC) -> None:
@@ -1478,6 +1691,50 @@ def _valid_objective(direction, entry: float, candidate: float | None) -> bool:
     if direction is StrategyDirection.SHORT:
         return candidate < entry
     return False
+
+
+def _is_actionable_vision_candidate(candidate: TradeCandidate) -> bool:
+    return (
+        candidate.direction in {TradeCandidateDirection.LONG, TradeCandidateDirection.SHORT}
+        and candidate.candidate_state in {TradeCandidateState.LONG, TradeCandidateState.SHORT}
+    )
+
+
+def _vision_trade_identity(candidate: TradeCandidate) -> str:
+    return ":".join(
+        (
+            "vision_trade_candidate",
+            candidate.instrument.value,
+            candidate.timeframe.value,
+            candidate.timestamp.isoformat(),
+            candidate.candidate_state.value,
+            candidate.direction.value,
+            candidate.snapshot_reference,
+            candidate.validation_reference,
+        )
+    )
+
+
+def _strategy_quality_from_vision(quality: str) -> StrategyDecisionQuality:
+    normalized = str(quality).strip().lower()
+    if normalized == "high":
+        return StrategyDecisionQuality.HIGH
+    if normalized == "medium":
+        return StrategyDecisionQuality.MODERATE
+    if normalized == "low":
+        return StrategyDecisionQuality.LOW
+    return StrategyDecisionQuality.UNAVAILABLE
+
+
+def _confidence_from_vision(quality: str) -> float:
+    normalized = str(quality).strip().lower()
+    if normalized == "high":
+        return 0.85
+    if normalized == "medium":
+        return 0.65
+    if normalized == "low":
+        return 0.4
+    return 0.0
 
 
 def _strategy_rejection_reason(strategy) -> str:

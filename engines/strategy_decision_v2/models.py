@@ -153,6 +153,10 @@ class StrategyDecisionV2Snapshot:
     risk_handoff: StrategyRiskHandoff
     rationale: tuple[str, ...]
     warnings: tuple[str, ...]
+    trade_source: str = "STRATEGY_DECISION_V2"
+    trade_candidate_reference: str | None = None
+    vision_method_snapshot_reference: str | None = None
+    vision_method_validation_reference: str | None = None
 
     def __post_init__(self) -> None:
         if self.instrument not in SUPPORTED_INSTRUMENTS:
@@ -201,6 +205,15 @@ class StrategyDecisionV2Snapshot:
             raise TypeError("risk_handoff must be StrategyRiskHandoff")
         object.__setattr__(self, "rationale", _strings(self.rationale, "rationale"))
         object.__setattr__(self, "warnings", _strings(self.warnings, "warnings"))
+        _non_empty(self.trade_source, "trade_source")
+        for name in (
+            "trade_candidate_reference",
+            "vision_method_snapshot_reference",
+            "vision_method_validation_reference",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                _non_empty(value, name)
 
 
 def _aware(value: datetime, name: str) -> None:
