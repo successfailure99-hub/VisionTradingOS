@@ -501,3 +501,60 @@ Vision Method Validation Framework
         v
 VisionMethodValidationReport
 ```
+
+## VM-11 Vision Method Inspector Boundary
+
+VM-11 introduces the Vision Method Inspector. The inspector is a read-only
+desktop presentation layer for the deterministic Vision Method output.
+
+It consumes only:
+
+- `VisionMethodSnapshot`;
+- `VisionMethodValidationReport`.
+
+It does not recalculate levels, opening range, structure, liquidity, structure
+events, setup qualification, option-chain confirmation, candidate state,
+quality, validation result, or validation metrics.
+
+The inspector exists to answer:
+
+```text
+Does Vision Trading OS think exactly like Vision?
+```
+
+The desktop application exposes a top-level `Vision Method` tab. The tab starts
+in an unavailable state until a snapshot and report are supplied by a later
+runtime or replay workflow. VM-11 does not create that workflow.
+
+The inspector displays the deterministic methodology layers:
+
+- header and candidate state;
+- level context;
+- opening range;
+- structure;
+- structure events;
+- liquidity;
+- setup qualification;
+- option confirmation;
+- Vision Method candidate state and method quality;
+- validation result and metrics;
+- full validation trace in order.
+
+If a field is not present in the immutable snapshot or validation report, the
+inspector shows a placeholder rather than deriving or fabricating it. This keeps
+the desktop view faithful to the methodology data that actually exists.
+
+VM-11 intentionally does not create runtime integration, paper trading
+integration, AI changes, strategy changes, risk changes, broker execution, or a
+dashboard redesign.
+
+```text
+VisionMethodSnapshot
+VisionMethodValidationReport
+        |
+        v
+Vision Method Inspector
+        |
+        v
+Read-only desktop tab
+```

@@ -34,6 +34,7 @@ from dashboard.panels.strategy_panel import StrategyPanel
 from dashboard.presenters import build_dashboard_view
 from dashboard.theme import dashboard_stylesheet
 from dashboard.widgets import StatusBadge
+from desktop.vision_method import VisionMethodInspector
 
 
 def _default_clock() -> datetime:
@@ -85,6 +86,7 @@ class VisionMainWindow(QMainWindow):
         self._runtime_panel = RuntimePanel()
         self._live_market_data_panel = LiveMarketDataPanel()
         self._backtest_panel = BacktestPanel(command_target=lifecycle.orchestrator)
+        self._vision_method_inspector = VisionMethodInspector()
         self._main_tabs = QTabWidget()
         self._tabs = QTabWidget()
         self._system_tabs = QTabWidget()
@@ -175,6 +177,9 @@ class VisionMainWindow(QMainWindow):
     def diagnostics(self) -> dict[str, object]:
         return dict(self._diagnostics)
 
+    def render_vision_method(self, snapshot, report) -> None:
+        self._vision_method_inspector.render(snapshot, report)
+
     def _render_current_view(self, *_args) -> None:
         if self._current_view is not None:
             started = perf_counter()
@@ -196,7 +201,7 @@ class VisionMainWindow(QMainWindow):
             self._render_instrument_panels(view, market.symbol, all_sections=True)
 
     def _render_visible_panels(self, view: DashboardView) -> None:
-        if self._main_tabs.currentWidget() is self._main_tabs.widget(1):
+        if self._main_tabs.currentWidget() is self._system_area:
             current_system = self._system_tabs.currentWidget()
             if current_system is self._system_tabs.widget(0):
                 self._runtime_panel.render(view.runtime)
@@ -204,6 +209,8 @@ class VisionMainWindow(QMainWindow):
                 self._live_market_data_panel.render(view.live_market_data)
             elif current_system is self._system_tabs.widget(2):
                 self._backtest_panel.render(view.backtest)
+            return
+        if self._main_tabs.currentWidget() is self._vision_method_area:
             return
         if self._tabs.currentIndex() < 0:
             return
@@ -256,11 +263,19 @@ class VisionMainWindow(QMainWindow):
 
     def _build_main_tabs(self) -> QTabWidget:
         trading = QWidget()
+        self._trading_area = trading
         trading_layout = QVBoxLayout(trading)
         trading_layout.setContentsMargins(0, 0, 0, 0)
         trading_layout.addWidget(self._tabs, 1)
 
+        vision_method = QWidget()
+        self._vision_method_area = vision_method
+        vision_layout = QVBoxLayout(vision_method)
+        vision_layout.setContentsMargins(0, 0, 0, 0)
+        vision_layout.addWidget(self._scroll_area(self._vision_method_inspector), 1)
+
         system = QWidget()
+        self._system_area = system
         system_layout = QVBoxLayout(system)
         system_layout.setContentsMargins(0, 0, 0, 0)
         self._system_tabs.addTab(self._scroll_area(self._runtime_panel), "Runtime")
@@ -269,6 +284,7 @@ class VisionMainWindow(QMainWindow):
         system_layout.addWidget(self._system_tabs, 1)
 
         self._main_tabs.addTab(trading, "Trading")
+        self._main_tabs.addTab(vision_method, "Vision Method")
         self._main_tabs.addTab(system, "System")
         return self._main_tabs
 

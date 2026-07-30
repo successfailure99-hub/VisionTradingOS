@@ -1,0 +1,3 @@
+"""
+Desktop-only presentation helpers.
+"""

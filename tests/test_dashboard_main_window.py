@@ -217,7 +217,7 @@ def test_start_stop_refresh_are_idempotent_and_close_stops_timer():
 
 def test_public_main_window_api_remains_available():
     public = {name for name in dir(VisionMainWindow) if not name.startswith("_")}
-    assert {"start_refresh", "stop_refresh", "refresh", "render", "current_view"}.issubset(public)
+    assert {"start_refresh", "stop_refresh", "refresh", "render", "current_view", "render_vision_method"}.issubset(public)
 
 
 def test_panel_code_does_not_call_engines_or_broker_methods():
