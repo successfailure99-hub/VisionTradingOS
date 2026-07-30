@@ -34,7 +34,7 @@ from dashboard.panels.strategy_panel import StrategyPanel
 from dashboard.presenters import build_dashboard_view
 from dashboard.theme import dashboard_stylesheet
 from dashboard.widgets import StatusBadge
-from desktop.vision_method import VisionMethodInspector
+from desktop.vision_method import VisionMethodInspector, VisionMethodLiveInspectorBridge
 
 
 def _default_clock() -> datetime:
@@ -87,6 +87,7 @@ class VisionMainWindow(QMainWindow):
         self._live_market_data_panel = LiveMarketDataPanel()
         self._backtest_panel = BacktestPanel(command_target=lifecycle.orchestrator)
         self._vision_method_inspector = VisionMethodInspector()
+        self._vision_method_bridge = VisionMethodLiveInspectorBridge(lifecycle, self._vision_method_inspector)
         self._main_tabs = QTabWidget()
         self._tabs = QTabWidget()
         self._system_tabs = QTabWidget()
@@ -121,6 +122,7 @@ class VisionMainWindow(QMainWindow):
             self._deterministic_backtest_driver.poll()
         view = self._build_view()
         self._current_view = view
+        self._vision_method_bridge.refresh()
         if view != self._last_rendered_view:
             self.render(view)
         return view

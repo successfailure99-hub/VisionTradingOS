@@ -558,3 +558,61 @@ Vision Method Inspector
         v
 Read-only desktop tab
 ```
+
+## VM-11.1 Vision Method Live Inspector Integration
+
+VM-11.1 connects the read-only desktop inspector to the existing deterministic
+Vision Method pipeline. It is a presentation bridge, not a new runtime engine.
+
+The bridge reads the existing symbol runtime state and closed candle history,
+then invokes the already-certified Vision Method components in order:
+
+```text
+Market data already held by runtime
+        |
+        v
+Vision Method context assemblers
+        |
+        v
+VisionMethodCalculator
+        |
+        v
+VisionMethodValidation
+        |
+        v
+VisionMethodInspector
+```
+
+The bridge reuses:
+
+- `VisionLevelContextRequest` and `assemble_vision_level_context`;
+- `VisionOpeningRangeRequest` and `assemble_vision_opening_range_context`;
+- `VisionStructureRequest` and `assemble_vision_structure_context`;
+- `VisionLiquidityRequest` and `assemble_vision_liquidity_context`;
+- `VisionStructureEventRequest` and `assemble_vision_structure_event_context`;
+- `VisionSetupQualificationRequest` and
+  `assemble_vision_setup_qualification_context`;
+- `VisionOptionConfirmationRequest` and
+  `assemble_vision_option_confirmation_context`;
+- `VisionMethodCalculationRequest` and `calculate_vision_method_snapshot`;
+- `validate_vision_method`.
+
+Before the first complete deterministic snapshot can be assembled, the
+inspector remains in its unavailable placeholder state. After a snapshot is
+available, the inspector displays the actual immutable Vision Method values.
+When optional evidence such as ADR, VWAP, or option-chain analytics is missing,
+the existing Vision Method contexts report that as unavailable or insufficient
+instead of the inspector fabricating values.
+
+VM-11.1 adds debug-only lifecycle messages:
+
+```text
+[VisionMethod] Snapshot generated
+[VisionMethod] Validation complete
+[VisionMethod] Inspector updated
+```
+
+The integration does not continue into trade candidate generation, AI,
+Strategy, Risk, Paper Trading, broker order placement, or execution. It does
+not publish events, create runtime ownership, or add a second Vision Method
+calculation pipeline.

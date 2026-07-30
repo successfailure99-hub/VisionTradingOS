@@ -100,7 +100,6 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
     option = snapshot.option_confirmation_context
     values = {
         "Instrument": snapshot.instrument.value,
-        "Exchange": "-",
         "Timeframe": snapshot.timeframe.value,
         "Timestamp": formatters.timestamp(snapshot.timestamp),
         "Candidate State": snapshot.candidate_state.value,
@@ -108,13 +107,8 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
         "CPR Position": level.cpr_context.relation.value,
         "Virgin CPR": formatters.yes_no(previous.virgin_cpr),
         "CPR Width": f"{level.cpr_context.width:.2f}",
-        "CPR Width Bias": "-",
-        "CPR Bias": "-",
         "Camarilla Zone": level.camarilla_context.zone.value,
-        "Camarilla Nearest Level": "-",
-        "Camarilla Distance": "-",
         "Previous Day Position": previous.previous_day_relation.value if previous.previous_day_relation is not None else "-",
-        "Previous Close Relation": "-",
         "ADR Used": _adr_value(level.adr_context, "range_consumed_pct"),
         "ADR Remaining": _adr_value(level.adr_context, "range_remaining_pct"),
         "ADR Zone": _adr_zone(level.adr_context),
@@ -179,19 +173,19 @@ def _empty_values() -> dict[str, str]:
 
 def _adr_value(adr: VisionADRContext | None, field_name: str) -> str:
     if adr is None:
-        return "-"
+        return "unavailable"
     return f"{getattr(adr, field_name):.0f}%"
 
 
 def _adr_zone(adr: VisionADRContext | None) -> str:
     if adr is None:
-        return "-"
+        return "unavailable"
     return f"{adr.expansion}; {adr.exhaustion}"
 
 
 def _vwap_position(vwap: VisionVWAPContext | None) -> str:
     if vwap is None or vwap.relation.value == "unavailable":
-        return "-"
+        return "unavailable"
     if vwap.relation.value == "retest":
         return "touching"
     return vwap.relation.value
@@ -199,13 +193,13 @@ def _vwap_position(vwap: VisionVWAPContext | None) -> str:
 
 def _vwap_distance(vwap: VisionVWAPContext | None) -> str:
     if vwap is None:
-        return "-"
+        return "unavailable"
     return f"{vwap.distance_pct:.2f}%"
 
 
 def _swing_price(swing) -> str:
     if swing is None:
-        return "-"
+        return "none"
     return formatters.price(swing.price)
 
 
@@ -214,7 +208,6 @@ _SECTION_FIELDS = (
         "Header",
         (
             "Instrument",
-            "Exchange",
             "Timeframe",
             "Timestamp",
             "Candidate State",
@@ -228,13 +221,8 @@ _SECTION_FIELDS = (
             "CPR Position",
             "Virgin CPR",
             "CPR Width",
-            "CPR Width Bias",
-            "CPR Bias",
             "Camarilla Zone",
-            "Camarilla Nearest Level",
-            "Camarilla Distance",
             "Previous Day Position",
-            "Previous Close Relation",
             "ADR Used",
             "ADR Remaining",
             "ADR Zone",
