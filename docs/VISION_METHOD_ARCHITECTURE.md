@@ -758,3 +758,63 @@ Structure, Opening Range, and trading rules remain unchanged. VM-11.4 only
 synchronizes live context ownership before assembly so the inspector waits for
 the daily-context refresh instead of treating expected session drift as a
 programming failure.
+
+## VM-11.5 Independent Context Assembly
+
+VM-11.5 changes the live inspector bridge from all-or-nothing assembly to
+dependency-aware independent assembly. A missing mandatory daily context, such
+as CPR, no longer hides unrelated contexts that can be evaluated from closed
+candles.
+
+The live assembly graph is:
+
+```text
+Market Data
+        |
+        +----> Level Context
+        +----> Opening Range
+        +----> Structure
+        +----> Liquidity
+        +----> Structure Events
+        +----> Setup Qualification
+        +----> Option Confirmation
+```
+
+Each context runs only when its own prerequisites are available:
+
+- Level Context requires session-aligned CPR and Camarilla. Optional ADR and
+  VWAP mismatches are recorded as missing and omitted from the level request.
+- Opening Range requires only instrument, timeframe, session date, timestamp,
+  and closed candles.
+- Structure requires only sufficient closed candles.
+- Liquidity requires only sufficient closed candles and its canonical
+  liquidity rules.
+- Structure Events require valid Structure and Liquidity contexts.
+- Setup Qualification requires Level Context, Opening Range, Structure,
+  Liquidity, and Structure Events.
+- Option Confirmation requires Setup Qualification and canonical option-chain
+  inputs. If Setup Qualification is unavailable, Option Confirmation is marked
+  `NOT_EVALUATED`; if option-chain data is absent after setup exists, it is
+  `UNAVAILABLE`.
+
+Context states are:
+
+- `AVAILABLE`: a valid immutable context exists.
+- `MISSING`: required input is absent or belongs to another trading session.
+- `FAILED`: the assembler executed and rejected its inputs.
+- `NOT_EVALUATED`: a real dependency was unavailable.
+- `UNAVAILABLE`: an external source, such as option-chain data, is not present.
+
+The final methodology state remains safe. If any mandatory context is missing
+or incomplete, the live status reports:
+
+```text
+Candidate State    insufficient_data
+Quality            invalid
+Validation Result  insufficient_data
+```
+
+The bridge does not fabricate a full `VisionMethodSnapshot` from incomplete
+mandatory contexts. It carries successful independent contexts in
+`VisionMethodLiveStatus` so the inspector can show what the system knows while
+still blocking actionable candidate states.

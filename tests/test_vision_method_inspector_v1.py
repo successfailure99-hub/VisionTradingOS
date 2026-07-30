@@ -233,18 +233,21 @@ def test_live_bridge_converts_liquidity_failure_into_visible_insufficient_snapsh
     result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
 
     assert result.ready is False
-    assert result.snapshot is not None
-    assert result.validation_report is not None
-    assert result.snapshot.candidate_state.value == "insufficient_data"
-    assert result.validation_report.validation_result.value == "insufficient_data"
+    assert result.snapshot is None
+    assert result.validation_report is None
+    assert result.status.candidate_state == "insufficient_data"
+    assert result.status.validation_result == "insufficient_data"
+    assert result.status.level_context is not None
+    assert result.status.opening_range_context is not None
+    assert result.status.structure_context is not None
     assert result.failures[0].stage == "Liquidity"
     assert result.failures[0].validation_message == "ValueError: overlapping gaps"
     assert result.status.runtime_state is VisionMethodLiveRuntimeState.DEGRADED
     assert panel._labels["Candidate State"].text() == "insufficient_data"
     assert "Liquidity failed: ValueError: overlapping gaps" in panel._labels["Assembly Failures"].text()
-    assert "Structure Events failed: ValueError: insufficient liquidity context." in panel._labels["Assembly Failures"].text()
-    assert "Liquidity" in panel._trace_labels[7].text()
-    assert "overlapping gaps" in panel._trace_labels[7].text()
+    assert "Structure Events not_evaluated: Liquidity context is unavailable." in panel._labels["Assembly Failures"].text()
+    assert "DEGRADED" in panel._trace_labels[0].text()
+    assert "overlapping gaps" in panel._labels["Failed Contexts"].text()
 
 
 def test_live_bridge_startup_without_market_timestamp_renders_waiting_status():
@@ -296,10 +299,11 @@ def test_live_bridge_missing_daily_context_keeps_candle_progress_visible():
 
     assert result.snapshot is None
     assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
-    assert panel._labels["Available Contexts"].text() == "Market Data, Candle Engine"
+    assert panel._labels["Available Contexts"].text() == "Market Data, Candle Engine, Opening Range, Structure, Liquidity, Structure Events"
     assert panel._labels["CPR Position"].text() == "missing"
-    assert panel._labels["Camarilla Zone"].text() == "not_evaluated"
-    assert panel._labels["Assembly Failures"].text() == "CPR missing: Daily CPR levels are unavailable."
+    assert panel._labels["Camarilla Zone"].text() == "missing"
+    assert "CPR missing: Daily CPR levels are unavailable." in panel._labels["Assembly Failures"].text()
+    assert "Camarilla missing: Daily Camarilla levels are unavailable." in panel._labels["Assembly Failures"].text()
 
 
 def test_live_bridge_blocks_previous_session_cpr_before_level_assembly():
@@ -323,7 +327,57 @@ def test_live_bridge_blocks_previous_session_cpr_before_level_assembly():
     assert panel._labels["Runtime State"].text() == "COLLECTING_CONTEXT"
     assert panel._labels["Live Blocking Stage"].text() == "CPR"
     assert panel._labels["CPR Position"].text() == "missing"
-    assert panel._labels["Assembly Failures"].text() == "CPR missing: CPR belongs to previous trading session."
+    assert panel._labels["Opening High"].text() != "not_evaluated"
+    assert panel._labels["Trend"].text() != "not_evaluated"
+    assert panel._labels["Buy Side Sweep"].text() != "not_evaluated"
+    assert "CPR missing: CPR belongs to previous trading session." in panel._labels["Assembly Failures"].text()
+
+
+def test_live_bridge_independent_contexts_run_when_cpr_is_missing(monkeypatch):
+    app()
+    history = _candles()
+    lifecycle = ApplicationBootstrap().create_application()
+    runtime = _FakeRuntime(
+        _runtime_snapshot(history=history, cpr=replace(_cpr(), trading_date=NOW.date() - timedelta(days=1))),
+        history,
+    )
+    object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
+    from desktop.vision_method import live_integration
+
+    calls = {"opening": 0, "structure": 0, "liquidity": 0, "option": 0}
+    original_opening = live_integration.assemble_vision_opening_range_context
+    original_structure = live_integration.assemble_vision_structure_context
+    original_liquidity = live_integration.assemble_vision_liquidity_context
+    original_option = live_integration.assemble_vision_option_confirmation_context
+
+    def opening(*args, **kwargs):
+        calls["opening"] += 1
+        return original_opening(*args, **kwargs)
+
+    def structure(*args, **kwargs):
+        calls["structure"] += 1
+        return original_structure(*args, **kwargs)
+
+    def liquidity(*args, **kwargs):
+        calls["liquidity"] += 1
+        return original_liquidity(*args, **kwargs)
+
+    def option_confirmation(*args, **kwargs):
+        calls["option"] += 1
+        return original_option(*args, **kwargs)
+
+    monkeypatch.setattr(live_integration, "assemble_vision_opening_range_context", opening)
+    monkeypatch.setattr(live_integration, "assemble_vision_structure_context", structure)
+    monkeypatch.setattr(live_integration, "assemble_vision_liquidity_context", liquidity)
+    monkeypatch.setattr(live_integration, "assemble_vision_option_confirmation_context", option_confirmation)
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, VisionMethodInspector()).refresh()
+
+    assert result.snapshot is None
+    assert result.status.opening_range_context is not None
+    assert result.status.structure_context is not None
+    assert result.status.liquidity_context is not None
+    assert calls == {"opening": 1, "structure": 1, "liquidity": 1, "option": 0}
 
 
 def test_live_bridge_blocks_previous_session_camarilla_before_level_assembly():
@@ -343,7 +397,7 @@ def test_live_bridge_blocks_previous_session_camarilla_before_level_assembly():
     assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
     assert result.status.blocking_stage == "CAMARILLA"
     assert result.status.blocking_reason == "Camarilla belongs to previous trading session."
-    assert panel._labels["Available Contexts"].text() == "Market Data, Candle Engine, CPR"
+    assert panel._labels["Available Contexts"].text() == "Market Data, Candle Engine, Opening Range, Structure, Liquidity, Structure Events"
     assert panel._labels["Camarilla Zone"].text() == "missing"
 
 
@@ -387,7 +441,9 @@ def test_live_bridge_structure_failure_reports_blocking_without_blank_screen(mon
     result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
 
     assert result.status.runtime_state is VisionMethodLiveRuntimeState.DEGRADED
-    assert result.snapshot is not None
+    assert result.snapshot is None
+    assert result.status.level_context is not None
+    assert result.status.opening_range_context is not None
     assert panel._labels["Trend"].text() == "unknown"
     assert "Structure failed: ValueError: Insufficient closed candles." in panel._labels["Failed Contexts"].text()
     assert panel._labels["Candidate State"].text() == "insufficient_data"

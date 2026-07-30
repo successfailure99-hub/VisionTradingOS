@@ -90,6 +90,7 @@ class VisionMethodInspector(QGroupBox):
             raise TypeError("report must be VisionMethodValidationReport or None.")
         values = _empty_values()
         values.update(_diagnostic_values(status))
+        values.update(_status_context_values(status))
         if snapshot is not None:
             values.update(_snapshot_values(snapshot))
         if report is not None:
@@ -288,6 +289,97 @@ def _status_values(status: VisionMethodLiveStatus) -> dict[str, str]:
         "Validation Result": status.validation_result,
         "Blocking Stage": status.blocking_stage or "none",
     }
+
+
+def _status_context_values(status: VisionMethodLiveStatus) -> dict[str, str]:
+    values: dict[str, str] = {}
+    level = status.level_context
+    if level is not None:
+        previous = level.previous_day_context
+        values.update(
+            {
+                "CPR Position": level.cpr_context.relation.value,
+                "Virgin CPR": formatters.yes_no(previous.virgin_cpr),
+                "CPR Width": f"{level.cpr_context.width:.2f}",
+                "Camarilla Zone": level.camarilla_context.zone.value,
+                "Previous Day Position": previous.previous_day_relation.value if previous.previous_day_relation is not None else "-",
+                "ADR Used": _adr_value(level.adr_context, "range_consumed_pct"),
+                "ADR Remaining": _adr_value(level.adr_context, "range_remaining_pct"),
+                "ADR Zone": _adr_zone(level.adr_context),
+                "VWAP Position": _vwap_position(level.vwap_context),
+                "VWAP Distance": _vwap_distance(level.vwap_context),
+            }
+        )
+    opening = status.opening_range_context
+    if opening is not None:
+        values.update(
+            {
+                "Opening High": formatters.price(opening.opening_high),
+                "Opening Low": formatters.price(opening.opening_low),
+                "Opening Width": formatters.price(opening.opening_width),
+                "Opening Break": opening.break_direction.value,
+                "Opening Retest": opening.retest_state.value,
+                "Opening False Break": formatters.yes_no(opening.false_break),
+            }
+        )
+    structure = status.structure_context
+    if structure is not None:
+        values.update(
+            {
+                "Trend": structure.trend.value,
+                "Structure State": structure.structure_state.value,
+                "Swing High": _swing_price(structure.current_swing_high),
+                "Swing Low": _swing_price(structure.current_swing_low),
+            }
+        )
+    events = status.structure_event_context
+    if events is not None:
+        values.update(
+            {
+                "Bullish BOS": formatters.yes_no(events.bos.value == "bullish_bos"),
+                "Bearish BOS": formatters.yes_no(events.bos.value == "bearish_bos"),
+                "Bullish CHOCH": formatters.yes_no(events.choch.value == "bullish_choch"),
+                "Bearish CHOCH": formatters.yes_no(events.choch.value == "bearish_choch"),
+                "Continuation": events.continuation.value,
+                "Reversal": events.reversal.value,
+                "Break Strength": events.break_strength.value,
+            }
+        )
+    liquidity = status.liquidity_context
+    if liquidity is not None:
+        values.update(
+            {
+                "Buy Side Sweep": formatters.yes_no(liquidity.liquidity_sweep.value == "buy_side_sweep"),
+                "Sell Side Sweep": formatters.yes_no(liquidity.liquidity_sweep.value == "sell_side_sweep"),
+                "Equal Highs": formatters.integer(len(liquidity.equal_highs)),
+                "Equal Lows": formatters.integer(len(liquidity.equal_lows)),
+                "Fair Value Gap": liquidity.fair_value_gap.direction.value if liquidity.fair_value_gap is not None else "-",
+                "Order Block": liquidity.order_block.direction.value if liquidity.order_block is not None else "-",
+                "Breaker": liquidity.breaker_block.state.value,
+                "Mitigation": liquidity.mitigation.value,
+            }
+        )
+    setup = status.setup_qualification_context
+    if setup is not None:
+        values.update(
+            {
+                "Setup Classification": setup.setup_type.value,
+                "Setup Quality": setup.setup_quality.value,
+                "Setup Supporting Reasons": formatters.joined(setup.supporting_reasons),
+                "Setup Blocking Reasons": formatters.joined(setup.blocking_reasons),
+            }
+        )
+    option = status.option_confirmation_context
+    if option is not None:
+        values.update(
+            {
+                "Option Confirmation": option.confirmation_state.value,
+                "Option Supporting Factors": formatters.joined(option.supporting_factors),
+                "Option Contradicting Factors": formatters.joined(option.contradicting_factors),
+                "Option Neutral Factors": formatters.joined(option.neutral_factors),
+            }
+        )
+    return values
 
 
 def _diagnostic_values(status: VisionMethodLiveStatus) -> dict[str, str]:

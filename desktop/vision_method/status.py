@@ -36,6 +36,13 @@ class VisionMethodLiveStatus:
     unexpected_error: str | None
     updated_at: datetime
     market_data_age_seconds: float | None = None
+    level_context: object | None = None
+    opening_range_context: object | None = None
+    structure_context: object | None = None
+    liquidity_context: object | None = None
+    structure_event_context: object | None = None
+    setup_qualification_context: object | None = None
+    option_confirmation_context: object | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
