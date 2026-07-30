@@ -818,3 +818,52 @@ The bridge does not fabricate a full `VisionMethodSnapshot` from incomplete
 mandatory contexts. It carries successful independent contexts in
 `VisionMethodLiveStatus` so the inspector can show what the system knows while
 still blocking actionable candidate states.
+
+## VM-12 Vision Runtime Adapter
+
+VM-12 introduces the non-executing boundary between the completed Vision Method
+and later trading subsystems.
+
+```text
+VisionMethodSnapshot
+        |
+        v
+VisionRuntimeAdapter
+        |
+        v
+TradeCandidate
+```
+
+The adapter consumes only:
+
+- `VisionMethodSnapshot`
+- `VisionMethodValidationReport`
+
+It does not consume indicators, AI reasoning, strategy, risk, broker state,
+paper trading state, or execution state. It does not calculate order prices,
+position size, stop-loss prices, targets, risk, or probability. It converts the
+Vision Method candidate state into a standardized immutable candidate contract
+that later milestones can route into paper trading or risk review.
+
+Candidate mapping is deterministic:
+
+- `LONG_ELIGIBLE` -> `LONG`
+- `SHORT_ELIGIBLE` -> `SHORT`
+- `PREPARE_LONG` -> `WAITING_LONG`
+- `PREPARE_SHORT` -> `WAITING_SHORT`
+- `WAIT`, `OBSERVE`, `AVOID`, and `INSUFFICIENT_DATA` -> `NO_CANDIDATE`
+
+`TradeCandidate` contains only references. Entry, stop-loss, and target fields
+are named structural zones such as `Opening Range Break`, `Below Swing Low`,
+`Above Swing High`, `H4`, `L4`, `Previous High`, or `ADR Low`. They are not
+broker-ready order prices.
+
+The adapter preserves auditability through deterministic source references:
+
+- `snapshot_reference` points to the Vision Method snapshot identity.
+- `validation_reference` points to the validation report identity.
+
+VM-12 intentionally stops here. It does not send the candidate to Strategy,
+Risk, Paper Trading, Broker, or AI. Future milestones may consume
+`TradeCandidate`, but this milestone only creates the immutable handoff
+contract.
