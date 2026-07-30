@@ -301,5 +301,48 @@ Structure Events
 Setup Qualification
         |
         v
-Option Chain Confirmation (future)
+Option Chain Confirmation
 ```
+
+## VM-08 Option Chain Confirmation Boundary
+
+VM-08 introduces deterministic option-chain confirmation. It answers whether
+the canonical option-chain analytics confirm, partially confirm, contradict,
+remain neutral, or are unavailable for an already-qualified Vision Method
+setup.
+
+The option-chain confirmation module consumes only:
+
+- `VisionSetupQualificationContext` from VM-07;
+- canonical `OptionChainSnapshot`;
+- canonical `OptionChainAnalyticsSnapshot`.
+
+It does not consume AI output, StrategyDecision, RiskManagement, runtime state,
+broker state, raw candles, or raw option-chain data outside the canonical
+snapshots. It does not recalculate call writing, put writing, PCR, Max Pain, OI
+support, OI resistance, or OI imbalance. Those calculations remain owned by
+the canonical option-chain and option-chain analytics engines.
+
+VM-08 reuses the existing `VisionOptionConfirmation` enum created in VM-01 to
+avoid duplicate confirmation vocabulary:
+
+- confirms;
+- partial;
+- contradicts;
+- neutral;
+- unavailable.
+
+The output is `VisionOptionConfirmationContext`, an immutable context with:
+
+- confirmation state;
+- supporting factors;
+- contradicting factors;
+- neutral factors;
+- quality;
+- timestamp.
+
+Option Chain is a confirmation layer only. The chart-derived setup creates the
+context to evaluate; option-chain analytics can only confirm, contradict, mark
+mixed/partial, remain neutral, or be unavailable. VM-08 does not create trade
+direction, entries, exits, order instructions, paper trades, runtime events, AI
+reasoning, strategy decisions, risk decisions, or dashboard output.

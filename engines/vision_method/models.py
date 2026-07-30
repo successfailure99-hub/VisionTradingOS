@@ -41,6 +41,7 @@ from .enums import (
     VisionStructureEventPhase,
     VisionStructurePattern,
     VisionStructureTrend,
+    VisionOptionConfirmation,
     VisionSweepDirection,
     VisionSwingType,
     VisionVWAPRelation,
@@ -477,6 +478,40 @@ class VisionSetupQualificationContext:
 
 
 @dataclass(frozen=True, slots=True)
+class VisionOptionConfirmationContext:
+    confirmation_state: VisionOptionConfirmation
+    supporting_factors: tuple[str, ...]
+    contradicting_factors: tuple[str, ...]
+    neutral_factors: tuple[str, ...]
+    quality: VisionLevelQuality
+    timestamp: datetime
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.confirmation_state, VisionOptionConfirmation):
+            raise TypeError("confirmation_state must be VisionOptionConfirmation.")
+        supporting = _normalize_unique_text_tuple(self.supporting_factors, "supporting_factors")
+        contradicting = _normalize_unique_text_tuple(self.contradicting_factors, "contradicting_factors")
+        neutral = _normalize_unique_text_tuple(self.neutral_factors, "neutral_factors")
+        _validate_unique_factor_groups(supporting, contradicting, neutral)
+        if not isinstance(self.quality, VisionLevelQuality):
+            raise TypeError("quality must be VisionLevelQuality.")
+        _validate_aware(self.timestamp, "timestamp")
+        if self.confirmation_state is VisionOptionConfirmation.CONFIRMS and not supporting:
+            raise ValueError("confirming option context requires supporting factors.")
+        if self.confirmation_state is VisionOptionConfirmation.CONTRADICTS and not contradicting:
+            raise ValueError("contradicting option context requires contradicting factors.")
+        if self.confirmation_state is VisionOptionConfirmation.PARTIAL and (not supporting or not contradicting):
+            raise ValueError("partial option context requires supporting and contradicting factors.")
+        if self.confirmation_state is VisionOptionConfirmation.NEUTRAL and not neutral:
+            raise ValueError("neutral option context requires neutral factors.")
+        if self.confirmation_state is VisionOptionConfirmation.UNAVAILABLE and self.quality is not VisionLevelQuality.INSUFFICIENT:
+            raise ValueError("unavailable option context requires insufficient quality.")
+        object.__setattr__(self, "supporting_factors", supporting)
+        object.__setattr__(self, "contradicting_factors", contradicting)
+        object.__setattr__(self, "neutral_factors", neutral)
+
+
+@dataclass(frozen=True, slots=True)
 class VisionLevelContext:
     cpr_context: VisionCPRContext
     camarilla_context: VisionCamarillaContext
@@ -552,6 +587,16 @@ def _normalize_unique_text_tuple(values: tuple[str, ...], field_name: str) -> tu
             raise ValueError(f"{field_name} cannot contain duplicate reasons.")
         lowered.add(key)
     return normalized
+
+
+def _validate_unique_factor_groups(*groups: tuple[str, ...]) -> None:
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            key = item.casefold()
+            if key in seen:
+                raise ValueError("option confirmation factors cannot be duplicated.")
+            seen.add(key)
 
 
 def _normalize_index_tuple(values: tuple[int, ...], field_name: str) -> tuple[int, ...]:
