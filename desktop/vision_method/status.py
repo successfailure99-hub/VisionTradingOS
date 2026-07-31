@@ -13,6 +13,7 @@ from engines.vision_method import VisionContextAssemblyFailure
 
 class VisionMethodLiveRuntimeState(str, Enum):
     WAITING_FOR_MARKET_DATA = "WAITING_FOR_MARKET_DATA"
+    WAITING_DAILY_CONTEXT = "WAITING_DAILY_CONTEXT"
     COLLECTING_CONTEXT = "COLLECTING_CONTEXT"
     READY = "READY"
     DEGRADED = "DEGRADED"

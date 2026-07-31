@@ -249,6 +249,32 @@ def _normalize_runtime_timeframes(
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeDiagnostics:
+    current_stage: str
+    blocking_stage: str
+    current_candidate: str
+    paper_trade_state: str
+    journal_state: str
+    last_successful_snapshot: str
+    last_validation: str
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "current_stage",
+            "blocking_stage",
+            "current_candidate",
+            "paper_trade_state",
+            "journal_state",
+            "last_successful_snapshot",
+            "last_validation",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise TypeError(f"{field_name} must be str")
+            object.__setattr__(self, field_name, value.strip() or "-")
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeSnapshot:
     symbol: RuntimeInstrument
     timeframe: str
@@ -301,6 +327,8 @@ class RuntimeSnapshot:
     trade_journal_v1: TradeJournalV1Snapshot | None = None
     vision_trade_candidate: TradeCandidate | None = None
     decision_audit: "RuntimeDecisionAudit" | None = None
+    runtime_diagnostics: RuntimeDiagnostics | None = None
+    vision_ai_explanation: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

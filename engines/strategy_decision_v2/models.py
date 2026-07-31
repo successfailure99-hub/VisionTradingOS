@@ -137,7 +137,7 @@ class StrategyDecisionV2Snapshot:
     setup_status: StrategySetupStatus
     quality: StrategyDecisionQuality
     change: StrategyDecisionChange
-    ai_reasoning: AIReasoningV2Snapshot
+    ai_reasoning: AIReasoningV2Snapshot | None
     current_price: float | None
     setup_name: str
     thesis: str
@@ -172,10 +172,16 @@ class StrategyDecisionV2Snapshot:
         ):
             if not isinstance(getattr(self, name), enum_type):
                 raise TypeError(f"{name} must be {enum_type.__name__}")
-        if self.ai_reasoning.instrument is not self.instrument:
-            raise ValueError("reasoning and decision instruments must match")
-        if self.ai_reasoning.timestamp != self.timestamp:
-            raise ValueError("reasoning timestamp must match decision timestamp")
+        if self.ai_reasoning is None:
+            if self.trade_source != "VISION_METHOD":
+                raise TypeError("ai_reasoning must be AIReasoningV2Snapshot")
+        else:
+            if not isinstance(self.ai_reasoning, AIReasoningV2Snapshot):
+                raise TypeError("ai_reasoning must be AIReasoningV2Snapshot")
+            if self.ai_reasoning.instrument is not self.instrument:
+                raise ValueError("reasoning and decision instruments must match")
+            if self.ai_reasoning.timestamp != self.timestamp:
+                raise ValueError("reasoning timestamp must match decision timestamp")
         if self.current_price is not None:
             object.__setattr__(self, "current_price", _positive(self.current_price, "current_price"))
         _non_empty(self.setup_name, "setup_name")

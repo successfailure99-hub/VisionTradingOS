@@ -13,7 +13,6 @@ from engines.runtime_adapter import TradeCandidateDirection, TradeCandidateState
 from engines.strategy_decision_v2.enums import StrategyAction, StrategyDirection
 from engines.trade_journal_v1.enums import TradeRecordStatus
 from engines.vision_method import VisionCandidateState, validate_vision_method
-from tests.test_ai_reasoning_v2_models import explanation, fusion, market_state, setup as ai_setup
 from tests.test_vision_method_validation_v1 import NOW, option, setup, snapshot
 
 
@@ -34,13 +33,6 @@ def runtime():
     item = SymbolRuntime(EventBus(), RuntimeConfiguration(), RuntimeInstrument.NIFTY)
     item.start()
     item._last_tick = tick()
-    item.ai_reasoning_v2_engine.process(
-        fusion(timestamp=NOW),
-        market_state(timestamp=NOW),
-        ai_setup(timestamp=NOW),
-        explanation(timestamp=NOW),
-        timestamp=NOW,
-    )
     return item
 
 
@@ -68,11 +60,16 @@ def test_long_candidate_reaches_existing_risk_lifecycle_and_paper_tick():
     assert candidate.candidate_state is TradeCandidateState.LONG
     assert candidate.direction is TradeCandidateDirection.LONG
     assert view.vision_trade_candidate is candidate
+    assert view.ai_reasoning_v2 is None
+    assert view.vision_ai_explanation.startswith("Vision Method produced a long candidate")
     assert view.strategy_decision_v2.action is StrategyAction.CONSIDER_LONG
+    assert view.strategy_decision_v2.ai_reasoning is None
     assert view.strategy_decision_v2.trade_source == "VISION_METHOD"
     assert view.risk_management_v2.decision in {RiskDecision.APPROVED, RiskDecision.APPROVED_REDUCED}
     assert view.trade_lifecycle_v1.position_snapshot.has_open_position is True
     assert view.decision_audit.rejected is False
+    assert view.runtime_diagnostics.current_candidate == "long"
+    assert view.runtime_diagnostics.last_validation == "valid"
     assert paper_calls
     assert paper_calls[-1][0] is view.strategy_decision_v2
     assert paper_calls[-1][1] is view.risk_management_v2

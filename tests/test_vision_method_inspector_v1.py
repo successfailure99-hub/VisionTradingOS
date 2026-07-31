@@ -298,12 +298,12 @@ def test_live_bridge_missing_daily_context_keeps_candle_progress_visible():
     result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
 
     assert result.snapshot is None
-    assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.WAITING_DAILY_CONTEXT
     assert panel._labels["Available Contexts"].text() == "Market Data, Candle Engine, Opening Range, Structure, Liquidity, Structure Events"
     assert panel._labels["CPR Position"].text() == "missing"
     assert panel._labels["Camarilla Zone"].text() == "missing"
-    assert "CPR missing: Daily CPR levels are unavailable." in panel._labels["Assembly Failures"].text()
-    assert "Camarilla missing: Daily Camarilla levels are unavailable." in panel._labels["Assembly Failures"].text()
+    assert "CPR missing: WAITING_DAILY_CONTEXT: Daily CPR levels are unavailable." in panel._labels["Assembly Failures"].text()
+    assert "Camarilla missing: WAITING_DAILY_CONTEXT: Daily Camarilla levels are unavailable." in panel._labels["Assembly Failures"].text()
 
 
 def test_live_bridge_blocks_previous_session_cpr_before_level_assembly():
@@ -321,16 +321,16 @@ def test_live_bridge_blocks_previous_session_cpr_before_level_assembly():
 
     assert result.snapshot is None
     assert result.validation_report is None
-    assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.WAITING_DAILY_CONTEXT
     assert result.status.blocking_stage == "CPR"
-    assert result.status.blocking_reason == "CPR belongs to previous trading session."
-    assert panel._labels["Runtime State"].text() == "COLLECTING_CONTEXT"
+    assert result.status.blocking_reason == f"WAITING_DAILY_CONTEXT: CPR levels are not refreshed for {NOW.date()}."
+    assert panel._labels["Runtime State"].text() == "WAITING_DAILY_CONTEXT"
     assert panel._labels["Live Blocking Stage"].text() == "CPR"
     assert panel._labels["CPR Position"].text() == "missing"
     assert panel._labels["Opening High"].text() != "not_evaluated"
     assert panel._labels["Trend"].text() != "not_evaluated"
     assert panel._labels["Buy Side Sweep"].text() != "not_evaluated"
-    assert "CPR missing: CPR belongs to previous trading session." in panel._labels["Assembly Failures"].text()
+    assert f"CPR missing: WAITING_DAILY_CONTEXT: CPR levels are not refreshed for {NOW.date()}." in panel._labels["Assembly Failures"].text()
 
 
 def test_live_bridge_independent_contexts_run_when_cpr_is_missing(monkeypatch):
@@ -394,9 +394,9 @@ def test_live_bridge_blocks_previous_session_camarilla_before_level_assembly():
     result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
 
     assert result.snapshot is None
-    assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.WAITING_DAILY_CONTEXT
     assert result.status.blocking_stage == "CAMARILLA"
-    assert result.status.blocking_reason == "Camarilla belongs to previous trading session."
+    assert result.status.blocking_reason == f"WAITING_DAILY_CONTEXT: Camarilla levels are not refreshed for {NOW.date()}."
     assert panel._labels["Available Contexts"].text() == "Market Data, Candle Engine, Opening Range, Structure, Liquidity, Structure Events"
     assert panel._labels["Camarilla Zone"].text() == "missing"
 
@@ -419,13 +419,13 @@ def test_live_bridge_omits_previous_session_optional_contexts_without_internal_e
     result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
 
     assert result.snapshot is not None
-    assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.WAITING_DAILY_CONTEXT
     assert result.status.unexpected_error is None
     assert tuple(failure.stage for failure in result.failures[:2]) == ("ADR", "VWAP")
     assert panel._labels["ADR Used"].text() == "unavailable"
     assert panel._labels["VWAP Position"].text() == "unavailable"
-    assert "ADR missing: ADR belongs to previous trading session." in panel._labels["Assembly Failures"].text()
-    assert "VWAP missing: VWAP belongs to previous trading session." in panel._labels["Assembly Failures"].text()
+    assert f"ADR missing: WAITING_DAILY_CONTEXT: ADR levels are not refreshed for {NOW.date()}." in panel._labels["Assembly Failures"].text()
+    assert f"VWAP missing: WAITING_DAILY_CONTEXT: VWAP levels are not refreshed for {NOW.date()}." in panel._labels["Assembly Failures"].text()
 
 
 def test_live_bridge_structure_failure_reports_blocking_without_blank_screen(monkeypatch):

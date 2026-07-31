@@ -32,7 +32,7 @@ class TradeJournalEntryBuilder:
         risk = source.risk_snapshot
         strategy = source.strategy_snapshot
         reasoning = strategy.ai_reasoning
-        market_state = reasoning.market_state
+        market_state = reasoning.market_state if reasoning is not None else None
         if position.closed_at is None:
             raise ValueError("closed position timestamp is required")
         if position.average_exit_price is None:
@@ -60,13 +60,13 @@ class TradeJournalEntryBuilder:
             outcome=_outcome(position.realized_pnl, self._configuration.flat_pnl_tolerance),
             exit_reason=position.exit_reason,
             close_category=_close_category(position.exit_reason),
-            market_state=market_state.market_state.value,
-            market_phase=market_state.market_phase.value,
-            structural_confidence=market_state.confidence_level.value,
+            market_state=market_state.market_state.value if market_state is not None else "VISION_METHOD",
+            market_phase=market_state.market_phase.value if market_state is not None else "VISION_METHOD",
+            structural_confidence=market_state.confidence_level.value if market_state is not None else "VISION_METHOD",
             context_confidence=strategy.context_confidence,
-            reasoning_direction=reasoning.direction.value,
-            reasoning_conviction=reasoning.conviction.value,
-            reasoning_confidence=reasoning.confidence,
+            reasoning_direction=reasoning.direction.value if reasoning is not None else strategy.direction.value,
+            reasoning_conviction=reasoning.conviction.value if reasoning is not None else strategy.quality.value,
+            reasoning_confidence=reasoning.confidence if reasoning is not None else strategy.reasoning_confidence,
             risk_decision=risk.decision,
             risk_approved_quantity=risk.approved_quantity,
             execution_side=intent.side,

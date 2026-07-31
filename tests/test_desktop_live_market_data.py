@@ -827,7 +827,8 @@ def test_tick_delivery_reaches_orchestrator_and_rejected_tick_sets_safe_error_st
     assert view.markets[0].analysis_updated_at == NOW + timedelta(minutes=1)
     assert view.markets[0].feed_delay_text == "0 ms"
     assert view.ai[0].market_summary != "-"
-    assert view.strategies[0].decision != "-"
+    assert view.strategies[0].decision == "-"
+    assert view.runtime.component_health
     assert view.strategies[0].risk_decision == "-"
     snapshot = runtime.snapshot()
     assert snapshot.websocket.raw_tick_count == 3

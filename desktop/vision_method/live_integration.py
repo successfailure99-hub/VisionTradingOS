@@ -212,13 +212,13 @@ class VisionMethodLiveInspectorBridge:
         camarilla = runtime_snapshot.camarilla
         level = None
         if cpr is None:
-            failures.append(_missing_failure("CPR", "Daily CPR levels are unavailable."))
+            failures.append(_missing_failure("CPR", "WAITING_DAILY_CONTEXT: Daily CPR levels are unavailable."))
         elif cpr.trading_date != trading_date:
-            failures.append(_missing_failure("CPR", _session_mismatch_reason("CPR", cpr.trading_date, trading_date)))
+            failures.append(_missing_failure("CPR", _waiting_daily_context_reason("CPR", cpr.trading_date, trading_date)))
         if camarilla is None:
-            failures.append(_missing_failure("Camarilla", "Daily Camarilla levels are unavailable."))
+            failures.append(_missing_failure("Camarilla", "WAITING_DAILY_CONTEXT: Daily Camarilla levels are unavailable."))
         elif camarilla.trading_date != trading_date:
-            failures.append(_missing_failure("Camarilla", _session_mismatch_reason("Camarilla", camarilla.trading_date, trading_date)))
+            failures.append(_missing_failure("Camarilla", _waiting_daily_context_reason("Camarilla", camarilla.trading_date, trading_date)))
         if cpr is not None and camarilla is not None and cpr.trading_date == trading_date and camarilla.trading_date == trading_date:
             previous_day = _previous_day_from_cpr(cpr)
             adr, vwap = _session_aligned_optional_contexts(runtime_snapshot, trading_date, failures)
@@ -739,6 +739,8 @@ class VisionMethodLiveInspectorBridge:
             runtime_state = VisionMethodLiveRuntimeState.READY
         elif failed:
             runtime_state = VisionMethodLiveRuntimeState.DEGRADED
+        elif _has_daily_context_wait(failures):
+            runtime_state = VisionMethodLiveRuntimeState.WAITING_DAILY_CONTEXT
         else:
             runtime_state = VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
         first_blocker = failures[0] if failures else None
@@ -950,6 +952,18 @@ def _session_mismatch_reason(name: str, context_date, trading_date) -> str:
     return f"{name} belongs to a different trading session."
 
 
+def _waiting_daily_context_reason(name: str, context_date, trading_date) -> str:
+    return f"WAITING_DAILY_CONTEXT: {name} levels are not refreshed for {trading_date}."
+
+
+def _has_daily_context_wait(failures: tuple[VisionContextAssemblyFailure, ...]) -> bool:
+    daily_stages = {"CPR", "CAMARILLA", "PREVIOUS_DAY", "ADR", "VWAP"}
+    return any(
+        _stage_label(item.stage) in daily_stages and "WAITING_DAILY_CONTEXT" in item.validation_message
+        for item in failures
+    )
+
+
 def _session_aligned_optional_contexts(
     runtime_snapshot,
     trading_date,
@@ -957,11 +971,11 @@ def _session_aligned_optional_contexts(
 ):
     adr = runtime_snapshot.adr
     if adr is not None and adr.trading_date != trading_date:
-        failures.append(_missing_failure("ADR", _session_mismatch_reason("ADR", adr.trading_date, trading_date)))
+        failures.append(_missing_failure("ADR", _waiting_daily_context_reason("ADR", adr.trading_date, trading_date)))
         adr = None
     vwap = runtime_snapshot.vwap
     if vwap is not None and vwap.trading_date != trading_date:
-        failures.append(_missing_failure("VWAP", _session_mismatch_reason("VWAP", vwap.trading_date, trading_date)))
+        failures.append(_missing_failure("VWAP", _waiting_daily_context_reason("VWAP", vwap.trading_date, trading_date)))
         vwap = None
     return adr, vwap
 

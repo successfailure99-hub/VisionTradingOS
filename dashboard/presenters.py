@@ -260,7 +260,29 @@ def _runtime_component_health(orchestrator) -> tuple[DashboardRuntimeComponentHe
         ready_row("Risk", any_snapshot("risk_management_v2") or any_snapshot("risk")),
         ready_row("Lifecycle", any_snapshot("trade_lifecycle_v1") or bool(snapshots)),
         ready_row("Journal", any_snapshot("trade_journal_v1") or bool(getattr(orchestrator, "shared_trade_journal_ready", False))),
+        *_runtime_diagnostic_rows(snapshots),
     )
+
+
+def _runtime_diagnostic_rows(snapshots) -> tuple[DashboardRuntimeComponentHealthView, ...]:
+    rows = []
+    for snapshot in snapshots:
+        diagnostics = getattr(snapshot, "runtime_diagnostics", None)
+        if diagnostics is None:
+            continue
+        prefix = _enum_text(getattr(snapshot, "symbol", None))
+        rows.extend(
+            (
+                DashboardRuntimeComponentHealthView(f"{prefix} Current Stage", "Ready", diagnostics.current_stage),
+                DashboardRuntimeComponentHealthView(f"{prefix} Blocking Stage", "Ready", diagnostics.blocking_stage),
+                DashboardRuntimeComponentHealthView(f"{prefix} Current Candidate", "Ready", diagnostics.current_candidate),
+                DashboardRuntimeComponentHealthView(f"{prefix} Paper Trade State", "Ready", diagnostics.paper_trade_state),
+                DashboardRuntimeComponentHealthView(f"{prefix} Journal State", "Ready", diagnostics.journal_state),
+                DashboardRuntimeComponentHealthView(f"{prefix} Last Snapshot", "Ready", diagnostics.last_successful_snapshot),
+                DashboardRuntimeComponentHealthView(f"{prefix} Last Validation", "Ready", diagnostics.last_validation),
+            )
+        )
+    return tuple(rows)
 
 
 def build_market_view(runtime_snapshot: RuntimeSnapshot, *, clock=None) -> DashboardMarketView:
@@ -435,9 +457,20 @@ def build_option_chain_view(
 
 
 def build_ai_view(runtime_snapshot: RuntimeSnapshot) -> DashboardAIView:
-    ai = runtime_snapshot.ai_reasoning
-    if ai is None:
-        ai = runtime_snapshot.ai_reasoning_v2
+    candidate = getattr(runtime_snapshot, "vision_trade_candidate", None)
+    if candidate is not None:
+        audit = getattr(runtime_snapshot, "decision_audit", None)
+        return DashboardAIView(
+            symbol=_enum_text(runtime_snapshot.symbol),
+            market_summary=f"Vision Method: {_enum_text(candidate.candidate_state)}",
+            confidence=str(getattr(candidate, "confidence", MISSING)),
+            agreement="Vision Method",
+            conflict=getattr(audit, "reason", MISSING) if getattr(audit, "rejected", False) else "None",
+            trading_suitability=_enum_text(candidate.candidate_state),
+            explanation=getattr(runtime_snapshot, "vision_ai_explanation", None) or getattr(candidate, "reason", MISSING),
+            missing_information=(getattr(audit, "reason", MISSING),) if getattr(audit, "rejected", False) else (),
+        )
+    ai = runtime_snapshot.ai_reasoning_v2 or runtime_snapshot.ai_reasoning
     return DashboardAIView(
         symbol=_enum_text(runtime_snapshot.symbol),
         market_summary=_ai_market_summary(ai),
@@ -556,8 +589,8 @@ def _risk_reason(risk) -> str:
 
 
 def build_strategy_view(runtime_snapshot: RuntimeSnapshot) -> DashboardStrategyView:
-    strategy = runtime_snapshot.strategy or runtime_snapshot.strategy_decision_v2
-    risk = runtime_snapshot.risk or runtime_snapshot.risk_management_v2
+    strategy = runtime_snapshot.strategy_decision_v2 or runtime_snapshot.strategy
+    risk = runtime_snapshot.risk_management_v2 or runtime_snapshot.risk
     order = runtime_snapshot.latest_order
     return DashboardStrategyView(
         symbol=_enum_text(runtime_snapshot.symbol),
