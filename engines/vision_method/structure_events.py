@@ -44,7 +44,7 @@ class VisionStructureEventRequest:
     timestamp: datetime
     candles: tuple[Candle, ...]
     structure_context: VisionStructureContext
-    liquidity_context: VisionLiquidityContext
+    liquidity_context: VisionLiquidityContext | None
 
     def __post_init__(self) -> None:
         if not isinstance(self.instrument, RuntimeInstrument):
@@ -60,8 +60,8 @@ class VisionStructureEventRequest:
             raise ValueError("missing candles.")
         if not isinstance(self.structure_context, VisionStructureContext):
             raise TypeError("structure_context must be VisionStructureContext.")
-        if not isinstance(self.liquidity_context, VisionLiquidityContext):
-            raise TypeError("liquidity_context must be VisionLiquidityContext.")
+        if self.liquidity_context is not None and not isinstance(self.liquidity_context, VisionLiquidityContext):
+            raise TypeError("liquidity_context must be VisionLiquidityContext or None.")
 
 
 def assemble_vision_structure_event_context(
@@ -116,8 +116,6 @@ def validate_structure_event_request(
         raise ValueError("timeframe mismatch.")
     if request.structure_context.quality is VisionLevelQuality.INSUFFICIENT:
         raise ValueError("insufficient structure context.")
-    if request.liquidity_context.quality is VisionLevelQuality.INSUFFICIENT:
-        raise ValueError("insufficient liquidity context.")
     if len(request.candles) < 2:
         raise ValueError("insufficient candles.")
 
@@ -208,7 +206,7 @@ def _classify_break_strength(
     latest: Candle,
     candles: tuple[Candle, ...],
     structure: VisionStructureContext,
-    liquidity: VisionLiquidityContext,
+    liquidity: VisionLiquidityContext | None,
     event: _ClassifiedEvent,
 ) -> VisionBreakStrength:
     if event.bos is VisionBOS.NONE and event.choch is VisionCHoCH.NONE:
@@ -238,7 +236,9 @@ def _broken_level(structure: VisionStructureContext, event: _ClassifiedEvent) ->
     return None
 
 
-def _liquidity_supports_event(liquidity: VisionLiquidityContext, event: _ClassifiedEvent) -> bool:
+def _liquidity_supports_event(liquidity: VisionLiquidityContext | None, event: _ClassifiedEvent) -> bool:
+    if liquidity is None or liquidity.quality is VisionLevelQuality.INSUFFICIENT:
+        return False
     if event.bos is VisionBOS.BULLISH_BOS or event.choch is VisionCHoCH.BULLISH_CHOCH:
         return liquidity.liquidity_sweep is VisionLiquiditySweep.SELL_SIDE_SWEEP
     if event.bos is VisionBOS.BEARISH_BOS or event.choch is VisionCHoCH.BEARISH_CHOCH:

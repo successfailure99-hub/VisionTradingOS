@@ -240,12 +240,13 @@ def test_live_bridge_converts_liquidity_failure_into_visible_insufficient_snapsh
     assert result.status.level_context is not None
     assert result.status.opening_range_context is not None
     assert result.status.structure_context is not None
+    assert result.status.structure_event_context is not None
     assert result.failures[0].stage == "Liquidity"
     assert result.failures[0].validation_message == "ValueError: overlapping gaps"
     assert result.status.runtime_state is VisionMethodLiveRuntimeState.DEGRADED
     assert panel._labels["Candidate State"].text() == "insufficient_data"
     assert "Liquidity failed: ValueError: overlapping gaps" in panel._labels["Assembly Failures"].text()
-    assert "Structure Events not_evaluated: Liquidity context is unavailable." in panel._labels["Assembly Failures"].text()
+    assert "Structure Events not_evaluated: Liquidity context is unavailable." not in panel._labels["Assembly Failures"].text()
     assert "DEGRADED" in panel._trace_labels[0].text()
     assert "overlapping gaps" in panel._labels["Failed Contexts"].text()
 

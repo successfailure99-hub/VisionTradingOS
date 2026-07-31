@@ -88,6 +88,7 @@ def run_reference_data_bootstrap(
             resolutions=resolutions,
             start_at=bounds.previous_start,
             end_at=bounds.previous_end,
+            levels_trading_date=now.astimezone(IST).date(),
         )
     return coordinator.warm_up(
         start_at=bounds.current_start,
@@ -104,6 +105,7 @@ def _bootstrap_previous_session_only(
     resolutions: tuple[ZerodhaInstrumentResolution, ...],
     start_at: datetime,
     end_at: datetime,
+    levels_trading_date,
 ) -> tuple[object, ...]:
     results = []
     for resolution in resolutions:
@@ -116,7 +118,11 @@ def _bootstrap_previous_session_only(
             )
             if result.candles:
                 daily = derive_daily_ohlc(result.candles, instrument=resolution.instrument)
-                lifecycle.orchestrator.process_daily_ohlc(resolution.instrument.value, daily)
+                lifecycle.orchestrator.process_daily_ohlc(
+                    resolution.instrument.value,
+                    daily,
+                    levels_trading_date=levels_trading_date,
+                )
             results.append(result)
         except Exception as exc:
             results.append(exc)

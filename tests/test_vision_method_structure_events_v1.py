@@ -147,6 +147,21 @@ def test_bullish_bos_is_continuation_after_hh_hl_structure():
     assert result.quality is VisionLevelQuality.FULL
 
 
+def test_bos_is_available_without_liquidity_context():
+    result = assemble_vision_structure_event_context(
+        request(
+            *base_candles(111.0),
+            structure_context=structure(trend=VisionStructureTrend.BULLISH, state=VisionStructurePattern.HH),
+            liquidity_context=None,
+        )
+    )
+
+    assert result.bos is VisionBOS.BULLISH_BOS
+    assert result.choch is VisionCHoCH.NONE
+    assert result.break_strength is VisionBreakStrength.NORMAL
+    assert result.quality is VisionLevelQuality.FULL
+
+
 def test_bearish_bos_is_continuation_after_lh_ll_structure():
     result = assemble_vision_structure_event_context(
         request(

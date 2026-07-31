@@ -47,16 +47,17 @@ class PaperTradeJournalRepository:
     def load(self) -> tuple[PaperTradeRecord, ...]:
         if not self._persistence_enabled or self._path is None or not self._path.exists():
             return self.records()
-        for line in self._path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                payload = json.loads(line)
-                if payload.get("schema_version") != SCHEMA_VERSION:
-                    raise ValueError("unsupported journal schema")
-                self.add(_record_from_payload(payload["record"]), persist=False)
-            except Exception:
-                self._load_failures += 1
+        with self._path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    payload = json.loads(line)
+                    if payload.get("schema_version") != SCHEMA_VERSION:
+                        raise ValueError("unsupported journal schema")
+                    self.add(_record_from_payload(payload["record"]), persist=False)
+                except Exception:
+                    self._load_failures += 1
         return self.records()
 
     def add(self, record: PaperTradeRecord, *, persist: bool = True) -> JournalRecordResult:

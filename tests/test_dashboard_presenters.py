@@ -8,7 +8,7 @@ from pathlib import Path
 
 from application.enums import ExecutionSafetyMode, RuntimeInstrument, RuntimeStatus
 from application.lifecycle_manager import LifecycleSnapshot
-from application.models import OrchestratorSnapshot, RuntimeSnapshot
+from application.models import OrchestratorSnapshot, RuntimeDiagnostics, RuntimeSnapshot
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
@@ -162,6 +162,7 @@ def test_price_action_maps_complete_state():
 def test_ai_strategy_risk_order_position_and_journal_map_correctly():
     runtime = full_runtime()
     assert build_ai_view(runtime).market_summary == "Bullish"
+    assert build_ai_view(runtime).agreement == "LEGACY_DIAGNOSTIC"
     strategy = build_strategy_view(runtime)
     assert strategy.risk_decision == "Approved"
     assert strategy.approved_quantity == 10
@@ -264,6 +265,34 @@ def test_runtime_view_exposes_deterministic_pipeline_health_from_snapshots():
     assert health["Chart Explanation"] == "Ready"
     assert health["AI Reasoning"] == "Ready"
     assert health["Lifecycle"] == "Ready"
+
+
+def test_runtime_view_exposes_vision_pipeline_health_and_reasons():
+    runtime = replace(
+        empty_runtime(),
+        runtime_diagnostics=RuntimeDiagnostics(
+            current_stage="WAITING_DAILY_CONTEXT",
+            blocking_stage="DAILY_OHLC",
+            current_candidate="INSUFFICIENT_DATA",
+            paper_trade_state="NO_CANDIDATE",
+            journal_state="NO_TRADE",
+            last_successful_snapshot="-",
+            last_validation="INSUFFICIENT_DATA",
+        ),
+    )
+    rows = {item.name: item for item in build_runtime_view(lifecycle(runtime)).component_health}
+
+    assert rows["NIFTY Vision Daily Context"].status == "WAITING"
+    assert rows["NIFTY Vision Daily Context"].detail == "DAILY_OHLC"
+    assert rows["NIFTY Vision Level Context"].detail == "DAILY_OHLC"
+    assert rows["NIFTY Vision Opening Range"].detail == "DAILY_OHLC"
+    assert rows["NIFTY Vision Structure"].detail == "DAILY_OHLC"
+    assert rows["NIFTY Vision Liquidity"].detail == "DAILY_OHLC"
+    assert rows["NIFTY Vision Structure Events"].detail == "DAILY_OHLC"
+    assert rows["NIFTY Vision Setup Qualification"].detail == "DAILY_OHLC"
+    assert rows["NIFTY Vision Option Confirmation"].detail == "DAILY_OHLC"
+    assert rows["NIFTY Strategy Gate"].detail == "no actionable Vision candidate"
+    assert rows["NIFTY Risk Gate"].detail == "no strategy decision"
 
 
 def test_dashboard_package_has_no_market_context_v2_dependency():

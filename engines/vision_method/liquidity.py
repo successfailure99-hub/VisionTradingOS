@@ -239,8 +239,8 @@ def _detect_latest_fair_value_gap(candles: tuple[Candle, ...]) -> VisionFairValu
                     candle_indexes=(index, index + 1, index + 2),
                 )
             )
-    _validate_non_overlapping_gaps(gaps)
-    return gaps[-1] if gaps else None
+    normalized = _normalize_fair_value_gaps(gaps)
+    return normalized[-1] if normalized else None
 
 
 def _detect_latest_order_block(candles: tuple[Candle, ...]) -> VisionOrderBlock | None:
@@ -269,11 +269,46 @@ def _detect_latest_order_block(candles: tuple[Candle, ...]) -> VisionOrderBlock 
     return latest
 
 
-def _validate_non_overlapping_gaps(gaps: list[VisionFairValueGap]) -> None:
-    for index, gap in enumerate(gaps):
-        for other in gaps[index + 1 :]:
-            if max(gap.lower_bound, other.lower_bound) < min(gap.upper_bound, other.upper_bound):
-                raise ValueError("overlapping gaps.")
+def _normalize_fair_value_gaps(gaps: list[VisionFairValueGap]) -> tuple[VisionFairValueGap, ...]:
+    unique: list[VisionFairValueGap] = []
+    identities = set()
+    for gap in sorted(gaps, key=_gap_sort_key):
+        identity = (
+            gap.direction,
+            gap.lower_bound,
+            gap.upper_bound,
+            gap.start_time,
+            gap.end_time,
+        )
+        if identity in identities:
+            continue
+        identities.add(identity)
+        unique.append(gap)
+
+    normalized: list[VisionFairValueGap] = []
+    for gap in unique:
+        merged = False
+        for index, existing in enumerate(normalized):
+            if existing.direction is not gap.direction:
+                continue
+            if max(existing.lower_bound, gap.lower_bound) <= min(existing.upper_bound, gap.upper_bound):
+                normalized[index] = VisionFairValueGap(
+                    direction=existing.direction,
+                    start_time=min(existing.start_time, gap.start_time),
+                    end_time=max(existing.end_time, gap.end_time),
+                    lower_bound=min(existing.lower_bound, gap.lower_bound),
+                    upper_bound=max(existing.upper_bound, gap.upper_bound),
+                    candle_indexes=existing.candle_indexes,
+                )
+                merged = True
+                break
+        if not merged:
+            normalized.append(gap)
+    return tuple(sorted(normalized, key=_gap_sort_key))
+
+
+def _gap_sort_key(gap: VisionFairValueGap) -> tuple:
+    return (gap.end_time, gap.start_time, gap.direction.value, gap.lower_bound, gap.upper_bound)
 
 
 def _within_tolerance(first: float, second: float, tolerance_pct: float) -> bool:

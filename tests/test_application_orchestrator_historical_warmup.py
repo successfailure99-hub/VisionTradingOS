@@ -58,6 +58,36 @@ def test_existing_daily_ohlc_behavior_unchanged():
     assert camarilla is not None
 
 
+def test_daily_context_can_label_levels_for_active_session_from_previous_ohlc():
+    orchestrator = ApplicationOrchestrator(EventBus())
+    orchestrator.start()
+    previous_day = TS.date() - timedelta(days=1)
+    active_day = TS.date()
+
+    cpr, camarilla = orchestrator.process_daily_ohlc(
+        "NIFTY",
+        DailyOHLC(previous_day, 100.0, 110.0, 90.0, 105.0),
+        levels_trading_date=active_day,
+    )
+
+    runtime = orchestrator.get_runtime("NIFTY")
+    assert cpr.trading_date == active_day
+    assert camarilla.trading_date == active_day
+    assert runtime._daily_ohlc_history[-1].trading_date == previous_day
+
+
+def test_live_tick_refreshes_stale_daily_context_once_when_history_exists():
+    orchestrator = ApplicationOrchestrator(EventBus())
+    orchestrator.start()
+    previous_day = TS.date() - timedelta(days=1)
+    orchestrator.process_daily_ohlc("NIFTY", DailyOHLC(previous_day, 100.0, 110.0, 90.0, 105.0))
+
+    snapshot = orchestrator.process_tick(tick(TS + timedelta(minutes=1)))
+
+    assert snapshot.cpr.trading_date == TS.date()
+    assert snapshot.camarilla.trading_date == TS.date()
+
+
 def test_previous_session_cpr_camarilla_are_available_to_current_context():
     orchestrator = ApplicationOrchestrator(EventBus())
     orchestrator.start()

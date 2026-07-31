@@ -307,8 +307,6 @@ class VisionMethodLiveInspectorBridge:
         structure_events = None
         if structure is None or structure.quality is VisionLevelQuality.INSUFFICIENT:
             failures.append(_not_evaluated_failure("Structure Events", "Structure context is unavailable."))
-        elif liquidity is None or liquidity.quality is VisionLevelQuality.INSUFFICIENT:
-            failures.append(_not_evaluated_failure("Structure Events", "Liquidity context is unavailable."))
         else:
             try:
                 structure_events = assemble_vision_structure_event_context(
@@ -319,7 +317,7 @@ class VisionMethodLiveInspectorBridge:
                         timestamp=timestamp,
                         candles=history,
                         structure_context=structure,
-                        liquidity_context=liquidity,
+                        liquidity_context=liquidity if liquidity is not None and liquidity.quality is not VisionLevelQuality.INSUFFICIENT else None,
                     ),
                     instrument=runtime_snapshot.symbol,
                     timeframe=timeframe,
@@ -600,7 +598,7 @@ class VisionMethodLiveInspectorBridge:
                     timestamp=timestamp,
                     candles=history,
                     structure_context=structure,
-                    liquidity_context=liquidity,
+                    liquidity_context=liquidity if liquidity.quality is not VisionLevelQuality.INSUFFICIENT else None,
                 ),
                 instrument=runtime_snapshot.symbol,
                 timeframe=timeframe,

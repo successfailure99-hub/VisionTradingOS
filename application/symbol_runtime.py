@@ -2,7 +2,8 @@
 Per-symbol Application Orchestrator runtime.
 """
 
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, date, datetime
 
 from core.enums.instrument import Instrument
 from core.enums.exchange import Exchange
@@ -130,6 +131,7 @@ class SymbolRuntime:
         self._latest_closed_candle_at = None
         self._latest_analysis_at = None
         self._daily_ohlc_history: tuple[DailyOHLC, ...] = ()
+        self._daily_context_source_date: date | None = None
         self._last_processed_history_counts = {timeframe: 0 for timeframe in self._timeframes}
         self._vwap_source_type = "-"
         self._vwap_source_exchange = "-"
@@ -429,6 +431,7 @@ class SymbolRuntime:
         self._last_tick = tick
         self._updated_at = tick.timestamp
         self._latest_tick_at = tick.timestamp
+        self._ensure_daily_context_for_session(tick.timestamp)
         self._refresh_adr(tick.timestamp, tick.last_price)
         self._refresh_closed_timeframe_analysis(closed_timeframes, tick.timestamp, tick.last_price)
         self._process_paper_tick(tick)
@@ -516,11 +519,18 @@ class SymbolRuntime:
         self._vwap_last_error = last_error or reason
         return self.snapshot()
 
-    def process_daily_ohlc(self, daily_ohlc: DailyOHLC) -> tuple[CPRLevels, CamarillaLevels]:
+    def process_daily_ohlc(
+        self,
+        daily_ohlc: DailyOHLC,
+        *,
+        levels_trading_date: date | None = None,
+    ) -> tuple[CPRLevels, CamarillaLevels]:
         self._require_running()
         self._append_daily_ohlc(daily_ohlc)
-        cpr = self.cpr_engine.update(daily_ohlc)
-        camarilla = self.camarilla_engine.update(daily_ohlc)
+        levels_input = _daily_ohlc_for_levels(daily_ohlc, levels_trading_date)
+        cpr = self.cpr_engine.update(levels_input)
+        camarilla = self.camarilla_engine.update(levels_input)
+        self._daily_context_source_date = daily_ohlc.trading_date
         if self._last_tick is not None:
             self._refresh_adr(self._last_tick.timestamp, self._last_tick.last_price)
         return cpr, camarilla
@@ -935,6 +945,7 @@ class SymbolRuntime:
         self._latest_closed_candle_at = None
         self._latest_analysis_at = None
         self._daily_ohlc_history = ()
+        self._daily_context_source_date = None
         self._last_processed_history_counts = {timeframe: 0 for timeframe in self._timeframes}
         self._vwap_source_type = "-"
         self._vwap_source_exchange = "-"
@@ -1580,6 +1591,20 @@ class SymbolRuntime:
         existing[daily_ohlc.trading_date] = daily_ohlc
         self._daily_ohlc_history = tuple(existing[key] for key in sorted(existing))
 
+    def _ensure_daily_context_for_session(self, timestamp: datetime) -> None:
+        active_date = timestamp.date()
+        if (
+            self.cpr is not None
+            and self.camarilla is not None
+            and self.cpr.trading_date == active_date
+            and self.camarilla.trading_date == active_date
+        ):
+            return
+        previous_sessions = tuple(item for item in self._daily_ohlc_history if item.trading_date < active_date)
+        if not previous_sessions:
+            return
+        self.process_daily_ohlc(previous_sessions[-1], levels_trading_date=active_date)
+
     def _refresh_adr(self, timestamp, current_price: float) -> None:
         try:
             session_high, session_low = self._session_high_low(current_price, self._primary_timeframe)
@@ -1745,6 +1770,12 @@ def _vision_trade_identity(candidate: TradeCandidate) -> str:
             candidate.validation_reference,
         )
     )
+
+
+def _daily_ohlc_for_levels(daily_ohlc: DailyOHLC, trading_date: date | None) -> DailyOHLC:
+    if trading_date is None or trading_date == daily_ohlc.trading_date:
+        return daily_ohlc
+    return replace(daily_ohlc, trading_date=trading_date)
 
 
 def _strategy_quality_from_vision(quality: str) -> StrategyDecisionQuality:

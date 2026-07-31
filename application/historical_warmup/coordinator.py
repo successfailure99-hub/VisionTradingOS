@@ -221,7 +221,11 @@ class HistoricalWarmupCoordinator:
                 )
                 if previous.candles:
                     daily_ohlc = derive_daily_ohlc(previous.candles, instrument=instrument)
-                    self._lifecycle.orchestrator.process_daily_ohlc(instrument.value, daily_ohlc)
+                    self._lifecycle.orchestrator.process_daily_ohlc(
+                        instrument.value,
+                        daily_ohlc,
+                        levels_trading_date=start_at.date(),
+                    )
             result = self._historical_manager.fetch_resolution(
                 resolution,
                 timeframe=self._configuration.timeframe,

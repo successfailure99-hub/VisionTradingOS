@@ -247,7 +247,7 @@ def _runtime_component_health(orchestrator) -> tuple[DashboardRuntimeComponentHe
         ready_row("CPR", any_snapshot("cpr")),
         ready_row("Camarilla", any_snapshot("camarilla")),
         ready_row("VWAP", any_snapshot("vwap")),
-        ready_row("ADR", any_snapshot("adr")),
+        ready_row("ADR", any_snapshot("adr"), _adr_health_detail(snapshots)),
         ready_row("Price Action", any_snapshot("price_action")),
         ready_row("Option Chain", any_snapshot("option_chain")),
         ready_row("TradingView Evidence", any_snapshot("tradingview_evidence")),
@@ -260,8 +260,83 @@ def _runtime_component_health(orchestrator) -> tuple[DashboardRuntimeComponentHe
         ready_row("Risk", any_snapshot("risk_management_v2") or any_snapshot("risk")),
         ready_row("Lifecycle", any_snapshot("trade_lifecycle_v1") or bool(snapshots)),
         ready_row("Journal", any_snapshot("trade_journal_v1") or bool(getattr(orchestrator, "shared_trade_journal_ready", False))),
+        *_vision_runtime_health_rows(snapshots),
         *_runtime_diagnostic_rows(snapshots),
     )
+
+
+def _adr_health_detail(snapshots) -> str:
+    diagnostics = next((getattr(snapshot, "adr_diagnostics", None) for snapshot in snapshots if getattr(snapshot, "adr_diagnostics", None) is not None), None)
+    if diagnostics is None:
+        return "-"
+    if getattr(diagnostics, "last_snapshot", None) is not None:
+        return "AVAILABLE"
+    error = getattr(diagnostics, "last_error", None)
+    period = getattr(diagnostics, "period", None)
+    if error:
+        return f"WAITING_HISTORY: {error}"
+    return f"WAITING_HISTORY: required={period}" if period else "WAITING_HISTORY"
+
+
+def _vision_runtime_health_rows(snapshots) -> tuple[DashboardRuntimeComponentHealthView, ...]:
+    rows = []
+    for snapshot in snapshots:
+        prefix = _enum_text(getattr(snapshot, "symbol", None))
+        candidate = getattr(snapshot, "vision_trade_candidate", None)
+        audit = getattr(snapshot, "decision_audit", None)
+        diagnostics = getattr(snapshot, "runtime_diagnostics", None)
+        blocked = bool(getattr(audit, "rejected", False))
+        reason = getattr(audit, "reason", "-") if audit is not None else "-"
+        candidate_ready = candidate is not None
+        strategy = getattr(snapshot, "strategy_decision_v2", None)
+        risk = getattr(snapshot, "risk_management_v2", None)
+        diagnostics_detail = _vision_health_detail(reason, diagnostics)
+        daily_ready = getattr(snapshot, "cpr", None) is not None and getattr(snapshot, "camarilla", None) is not None
+        pipeline_ready = candidate_ready
+        rows.extend(
+            (
+                _health_row(f"{prefix} Vision Daily Context", daily_ready, diagnostics_detail),
+                _health_row(f"{prefix} Vision Level Context", pipeline_ready, diagnostics_detail),
+                _health_row(f"{prefix} Vision Opening Range", pipeline_ready, diagnostics_detail),
+                _health_row(f"{prefix} Vision Structure", pipeline_ready, diagnostics_detail),
+                _health_row(f"{prefix} Vision Liquidity", pipeline_ready, diagnostics_detail),
+                _health_row(f"{prefix} Vision Structure Events", pipeline_ready, diagnostics_detail),
+                _health_row(f"{prefix} Vision Setup Qualification", pipeline_ready, diagnostics_detail),
+                _health_row(f"{prefix} Vision Option Confirmation", pipeline_ready, diagnostics_detail),
+                _health_row(f"{prefix} Vision Method Calculator", candidate_ready, diagnostics_detail),
+                _health_row(f"{prefix} Vision Validation", diagnostics is not None and diagnostics.last_validation != "-", getattr(diagnostics, "last_validation", "-")),
+                _health_row(f"{prefix} Vision Runtime Adapter", candidate_ready, getattr(getattr(candidate, "candidate_state", None), "value", "-")),
+                _health_row(f"{prefix} Vision Paper Handoff", strategy is not None and risk is not None and not blocked, reason if blocked else "ready"),
+                _health_row(f"{prefix} Strategy Gate", strategy is not None, "no actionable Vision candidate" if strategy is None else "ready"),
+                _health_row(f"{prefix} Risk Gate", risk is not None, "no strategy decision" if strategy is None else ("ready" if risk is not None else "not applicable")),
+            )
+        )
+    return tuple(rows)
+
+
+def _vision_health_detail(reason: str, diagnostics) -> str:
+    if reason and reason != "-":
+        return reason
+    if diagnostics is None:
+        return "-"
+    blocking_stage = getattr(diagnostics, "blocking_stage", "-")
+    current_stage = getattr(diagnostics, "current_stage", "-")
+    if blocking_stage and blocking_stage != "-":
+        return blocking_stage
+    return current_stage if current_stage else "-"
+
+
+def _health_row(name: str, ready: bool, detail: str) -> DashboardRuntimeComponentHealthView:
+    status = "READY" if ready else "WAITING"
+    detail_text = str(detail) if detail else "-"
+    lowered = detail_text.lower()
+    if lowered.startswith("no "):
+        status = "BLOCKED" if "candidate" in str(detail).lower() else "NOT_APPLICABLE"
+    elif "failed" in lowered or "error" in lowered:
+        status = "FAILED"
+    elif "unavailable" in lowered or "missing" in lowered or "insufficient" in lowered:
+        status = "DEGRADED"
+    return DashboardRuntimeComponentHealthView(name, status, detail_text)
 
 
 def _runtime_diagnostic_rows(snapshots) -> tuple[DashboardRuntimeComponentHealthView, ...]:
@@ -475,7 +550,7 @@ def build_ai_view(runtime_snapshot: RuntimeSnapshot) -> DashboardAIView:
         symbol=_enum_text(runtime_snapshot.symbol),
         market_summary=_ai_market_summary(ai),
         confidence=_ai_confidence(ai),
-        agreement=_ai_agreement(ai),
+        agreement="LEGACY_DIAGNOSTIC" if ai is not None else _ai_agreement(ai),
         conflict=_ai_conflict(ai),
         trading_suitability=_ai_suitability(ai),
         explanation=_ai_explanation(ai),

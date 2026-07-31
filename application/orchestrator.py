@@ -157,9 +157,15 @@ class ApplicationOrchestrator:
         runtime.process_tick(accepted_tick, observe_shadow=observe_shadow)
         return runtime.snapshot(self._latest_journal_record_for(runtime.instrument)), True, accepted_tick
 
-    def process_daily_ohlc(self, instrument: str | RuntimeInstrument, daily_ohlc: DailyOHLC):
+    def process_daily_ohlc(
+        self,
+        instrument: str | RuntimeInstrument,
+        daily_ohlc: DailyOHLC,
+        *,
+        levels_trading_date=None,
+    ):
         self._require_running()
-        return self.get_runtime(instrument).process_daily_ohlc(daily_ohlc)
+        return self.get_runtime(instrument).process_daily_ohlc(daily_ohlc, levels_trading_date=levels_trading_date)
 
     def warm_up_candles(
         self,

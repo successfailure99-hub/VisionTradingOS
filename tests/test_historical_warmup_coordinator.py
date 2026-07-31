@@ -99,6 +99,8 @@ def test_warmup_success_empty_partial_error_strict_gap_daily_levels_and_clear():
     runtime_snapshot = lifecycle.orchestrator.snapshot().runtime_snapshots[0]
     assert runtime_snapshot.cpr is not None
     assert runtime_snapshot.camarilla is not None
+    assert runtime_snapshot.cpr.trading_date == TS.date()
+    assert runtime_snapshot.camarilla.trading_date == TS.date()
     assert runtime_snapshot.vwap is not None
     assert runtime_snapshot.vwap.cumulative_volume == 20
 

@@ -164,7 +164,56 @@ def test_order_block_marks_last_opposite_candle_before_impulsive_move():
     assert result.breaker_block.state is VisionBreakerBlockState.NOT_EVALUATED
 
 
-def test_validator_rejects_context_mismatch_invalid_sequence_overlapping_gaps_and_bad_sweep_model():
+def test_overlapping_bullish_fvgs_are_normalized_without_crashing():
+    candles = (
+        candle(0, 99.0, 100.0, 99.0, 99.5),
+        candle(1, 100.0, 100.5, 99.5, 100.2),
+        candle(2, 101.0, 102.0, 101.0, 101.5),
+        candle(3, 101.1, 102.2, 100.8, 101.7),
+    )
+
+    result = assemble_vision_liquidity_context(request(*candles))
+
+    assert result.fair_value_gap is not None
+    assert result.fair_value_gap.direction is VisionFairValueGapDirection.BULLISH
+    assert result.fair_value_gap.lower_bound == 100.0
+    assert result.fair_value_gap.upper_bound == 101.0
+
+
+def test_overlapping_bearish_fvgs_are_normalized_without_crashing():
+    candles = (
+        candle(0, 101.0, 102.0, 100.0, 100.5),
+        candle(1, 100.2, 100.8, 99.7, 100.0),
+        candle(2, 99.0, 99.0, 98.0, 98.5),
+        candle(3, 98.8, 99.5, 98.0, 98.2),
+    )
+
+    result = assemble_vision_liquidity_context(request(*candles))
+
+    assert result.fair_value_gap is not None
+    assert result.fair_value_gap.direction is VisionFairValueGapDirection.BEARISH
+    assert result.fair_value_gap.lower_bound == 99.0
+    assert result.fair_value_gap.upper_bound == 100.0
+
+
+def test_opposite_direction_overlapping_fvgs_coexist_without_crashing():
+    candles = (
+        candle(0, 99.0, 100.0, 99.0, 99.5),
+        candle(1, 100.0, 100.5, 99.5, 100.2),
+        candle(2, 101.0, 102.0, 101.0, 101.5),
+        candle(3, 101.2, 101.8, 100.8, 101.0),
+        candle(4, 100.0, 100.5, 99.0, 99.5),
+    )
+
+    result = assemble_vision_liquidity_context(request(*candles))
+
+    assert result.fair_value_gap is not None
+    assert result.fair_value_gap.direction is VisionFairValueGapDirection.BEARISH
+    assert result.fair_value_gap.lower_bound == 100.5
+    assert result.fair_value_gap.upper_bound == 101.0
+
+
+def test_validator_rejects_context_mismatch_invalid_sequence_and_bad_sweep_model():
     valid = (
         candle(0, 99.0, 100.0, 98.0, 99.5),
         candle(1, 99.4, 100.04, 98.2, 99.2),
@@ -183,14 +232,6 @@ def test_validator_rejects_context_mismatch_invalid_sequence_overlapping_gaps_an
     )
     with pytest.raises(ValueError, match="invalid candle sequence"):
         assemble_vision_liquidity_context(request(*overlapping))
-    gap_overlap = (
-        candle(0, 99.0, 100.0, 99.0, 99.5),
-        candle(1, 100.0, 100.5, 99.5, 100.2),
-        candle(2, 101.0, 102.0, 101.0, 101.5),
-        candle(3, 101.1, 102.2, 100.8, 101.7),
-    )
-    with pytest.raises(ValueError, match="overlapping gaps"):
-        assemble_vision_liquidity_context(request(*gap_overlap))
     with pytest.raises(ValueError, match="sweeps require"):
         VisionLiquidityContext(
             equal_highs=(),

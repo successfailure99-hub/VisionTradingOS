@@ -191,6 +191,16 @@ The liquidity module classifies:
   move;
 - breaker block and mitigation fields as immutable placeholders only.
 
+Fair Value Gap handling follows a deterministic normalization policy before
+model validation:
+
+- exact duplicate gaps are removed;
+- same-direction overlapping or touching gaps are merged into one outer zone;
+- nested same-direction gaps merge into the containing zone;
+- opposite-direction overlaps are retained as conflicting market context and
+  must not crash live assembly;
+- invalid numeric bounds and invalid candle sequences remain validation errors.
+
 VM-05 remains non-repainting because it uses closed candles only. It does not
 refine order blocks, evaluate mitigation, create setup eligibility, confirm
 with option chain data, publish runtime events, update dashboard panels, call AI,
@@ -207,7 +217,7 @@ price did; structure events explain when the market changed. This module
 consumes:
 
 - `VisionStructureContext` from VM-04;
-- `VisionLiquidityContext` from VM-05;
+- optional `VisionLiquidityContext` from VM-05;
 - canonical immutable closed `Candle` objects.
 
 It does not recalculate structure, liquidity, indicators, option-chain
@@ -225,9 +235,12 @@ The structure-event context classifies:
 - continuation, reversal, transition, or no event;
 - break strength: weak, normal, strong, or none.
 
-Break strength is deterministic and uses only structure distance, liquidity
-sweep support, and recent candle range. It does not use volume, option chain,
-AI, or risk. VM-06 remains non-repainting because it uses closed candles only.
+Break strength is deterministic and uses only structure distance, available
+liquidity sweep support, and recent candle range. BOS and CHoCH remain
+structure-driven, so they may still be evaluated if liquidity is unavailable or
+insufficient. Liquidity-dependent support simply remains neutral for that field.
+It does not use volume, option chain, AI, or risk. VM-06 remains non-repainting
+because it uses closed candles only.
 
 VM-06 intentionally does not create runtime integration, dashboard output, AI
 explanation, option confirmation, Vision Method Calculator, strategy, risk, or
@@ -758,6 +771,18 @@ Structure, Opening Range, and trading rules remain unchanged. VM-11.4 only
 synchronizes live context ownership before assembly so the inspector waits for
 the daily-context refresh instead of treating expected session drift as a
 programming failure.
+
+Runtime daily context production uses the previous completed trading session as
+the price source for same-day levels. The stored `DailyOHLC` keeps its original
+completed-session trading date, while CPR and Camarilla level snapshots are
+created for the active market session before Vision Method level assembly. This
+preserves the existing CPR and Camarilla formulas and fixes only the runtime
+session ownership of the produced level snapshots.
+
+If previous completed-session OHLC is unavailable at startup, the Vision Method
+runtime state remains `WAITING_DAILY_CONTEXT` with blocking stage
+`DAILY_OHLC`. The runtime retries through the normal warm-up/recovery path and
+does not repeatedly rebuild daily context from dashboard repaints.
 
 ## VM-11.5 Independent Context Assembly
 
