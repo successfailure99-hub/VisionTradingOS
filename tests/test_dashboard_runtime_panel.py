@@ -72,9 +72,12 @@ def test_runtime_component_health_renders_as_status_badges():
             component_health=(
                 DashboardRuntimeComponentHealthView("AI Reasoning", "Ready"),
                 DashboardRuntimeComponentHealthView("Fusion", "Waiting"),
+                DashboardRuntimeComponentHealthView("Vision Daily Context", "READY", "Owner=SymbolRuntime | Producer=CPR"),
             ),
         )
     )
     assert panel._labels["Health: AI Reasoning"].text() == "Ready"
     assert panel._labels["Health: AI Reasoning"].property("status") == "positive"
     assert panel._labels["Health: Fusion"].text() == "Waiting"
+    assert panel._labels["Health: Vision Daily Context"].text() == "READY"
+    assert panel._labels["Health: Vision Daily Context"].toolTip() == "Owner=SymbolRuntime | Producer=CPR"

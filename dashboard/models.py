@@ -25,13 +25,19 @@ class DashboardRuntimeComponentHealthView:
     name: str
     status: str
     detail: str = "-"
+    owner: str = "-"
+    producer: str = "-"
+    consumer: str = "-"
+    timestamp: datetime | None = None
 
     def __post_init__(self) -> None:
-        for field_name in ("name", "status", "detail"):
+        for field_name in ("name", "status", "detail", "owner", "producer", "consumer"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{field_name} must be non-empty text")
             object.__setattr__(self, field_name, value.strip())
+        if self.timestamp is not None and not isinstance(self.timestamp, datetime):
+            raise TypeError("timestamp must be datetime or None")
 
 
 @dataclass(frozen=True, slots=True)

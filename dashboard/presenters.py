@@ -260,6 +260,7 @@ def _runtime_component_health(orchestrator) -> tuple[DashboardRuntimeComponentHe
         ready_row("Risk", any_snapshot("risk_management_v2") or any_snapshot("risk")),
         ready_row("Lifecycle", any_snapshot("trade_lifecycle_v1") or bool(snapshots)),
         ready_row("Journal", any_snapshot("trade_journal_v1") or bool(getattr(orchestrator, "shared_trade_journal_ready", False))),
+        *_runtime_verification_health_rows(snapshots),
         *_vision_runtime_health_rows(snapshots),
         *_runtime_diagnostic_rows(snapshots),
     )
@@ -312,6 +313,54 @@ def _vision_runtime_health_rows(snapshots) -> tuple[DashboardRuntimeComponentHea
             )
         )
     return tuple(rows)
+
+
+def _runtime_verification_health_rows(snapshots) -> tuple[DashboardRuntimeComponentHealthView, ...]:
+    rows = []
+    for snapshot in snapshots:
+        for stage in tuple(getattr(snapshot, "runtime_verification_report", ()) or ()):
+            timestamp = getattr(stage, "timestamp", None)
+            rows.append(
+                DashboardRuntimeComponentHealthView(
+                    _verification_health_name(getattr(stage, "stage", "-")),
+                    _enum_text(getattr(stage, "status", None)),
+                    _verification_detail(stage),
+                    owner=_plain_text(getattr(stage, "owner", None)),
+                    producer=_plain_text(getattr(stage, "producer", None)),
+                    consumer=_plain_text(getattr(stage, "consumer", None)),
+                    timestamp=timestamp,
+                )
+            )
+    return tuple(rows)
+
+
+def _verification_health_name(stage: str) -> str:
+    normalized = str(stage).strip()
+    mapping = {
+        "Daily Context": "Vision Daily Context",
+        "Vision Method": "Vision Method Calculator",
+        "Validation": "Vision Validation",
+        "Runtime Adapter": "Vision Runtime Adapter",
+        "TradeCandidate": "TradeCandidate",
+        "Paper Trade": "Vision Paper Handoff",
+        "AI Explanation": "AI Explanation",
+    }
+    return mapping.get(normalized, normalized)
+
+
+def _verification_detail(stage) -> str:
+    session = getattr(stage, "session", None)
+    session_date = getattr(session, "trading_date", None)
+    reason = getattr(stage, "blocking_reason", "-")
+    parts = (
+        f"Owner={_plain_text(getattr(stage, 'owner', None))}",
+        f"Producer={_plain_text(getattr(stage, 'producer', None))}",
+        f"Consumer={_plain_text(getattr(stage, 'consumer', None))}",
+        f"Timestamp={_enum_text(getattr(stage, 'timestamp', None))}",
+        f"Session={_enum_text(session_date)}",
+        f"Reason={_enum_text(reason)}",
+    )
+    return " | ".join(parts)
 
 
 def _vision_health_detail(reason: str, diagnostics) -> str:
@@ -931,6 +980,14 @@ def _enum_text(value) -> str:
     if text.isupper():
         return text
     return text.replace("_", " ").title()
+
+
+def _plain_text(value) -> str:
+    if value is None:
+        return MISSING
+    raw = getattr(value, "value", value)
+    text = str(raw).strip()
+    return text or MISSING
 
 
 def _safe_error(value) -> str | None:

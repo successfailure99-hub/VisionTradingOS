@@ -8,7 +8,13 @@ from pathlib import Path
 
 from application.enums import ExecutionSafetyMode, RuntimeInstrument, RuntimeStatus
 from application.lifecycle_manager import LifecycleSnapshot
-from application.models import OrchestratorSnapshot, RuntimeDiagnostics, RuntimeSnapshot
+from application.models import (
+    OrchestratorSnapshot,
+    RuntimeDiagnostics,
+    RuntimeSnapshot,
+    RuntimeTradingSession,
+    RuntimeVerificationStage,
+)
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
@@ -293,6 +299,45 @@ def test_runtime_view_exposes_vision_pipeline_health_and_reasons():
     assert rows["NIFTY Vision Option Confirmation"].detail == "DAILY_OHLC"
     assert rows["NIFTY Strategy Gate"].detail == "no actionable Vision candidate"
     assert rows["NIFTY Risk Gate"].detail == "no strategy decision"
+
+
+def test_runtime_view_exposes_verification_report_ownership_details():
+    session = RuntimeTradingSession(
+        instrument=RuntimeInstrument.NIFTY,
+        exchange="NSE",
+        market_timestamp=TS,
+        trading_date=TS.date(),
+        previous_completed_trading_date=TS.date(),
+        cpr_trading_date=TS.date(),
+        camarilla_trading_date=TS.date(),
+        adr_trading_date=None,
+        vwap_trading_date=TS.date(),
+        status="READY",
+    )
+    runtime = replace(
+        empty_runtime(),
+        runtime_session=session,
+        runtime_verification_report=(
+            RuntimeVerificationStage(
+                stage="Daily Context",
+                owner="SymbolRuntime",
+                producer="CPR/Camarilla/ADR/VWAP",
+                consumer="Vision Level Context",
+                timestamp=TS,
+                session=session,
+                status="READY",
+            ),
+        ),
+    )
+
+    rows = {item.name: item for item in build_runtime_view(lifecycle(runtime)).component_health}
+
+    assert rows["Vision Daily Context"].status == "READY"
+    assert rows["Vision Daily Context"].owner == "SymbolRuntime"
+    assert rows["Vision Daily Context"].producer == "CPR/Camarilla/ADR/VWAP"
+    assert rows["Vision Daily Context"].consumer == "Vision Level Context"
+    assert "Owner=SymbolRuntime" in rows["Vision Daily Context"].detail
+    assert "Session=2026-07-12" in rows["Vision Daily Context"].detail
 
 
 def test_dashboard_package_has_no_market_context_v2_dependency():

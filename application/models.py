@@ -257,6 +257,8 @@ class RuntimeDiagnostics:
     journal_state: str
     last_successful_snapshot: str
     last_validation: str
+    market_timestamp: datetime | None = None
+    trading_date: date | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -272,6 +274,73 @@ class RuntimeDiagnostics:
             if not isinstance(value, str):
                 raise TypeError(f"{field_name} must be str")
             object.__setattr__(self, field_name, value.strip() or "-")
+        if self.market_timestamp is not None and not isinstance(self.market_timestamp, datetime):
+            raise TypeError("market_timestamp must be datetime or None")
+        if self.trading_date is not None and (isinstance(self.trading_date, datetime) or not isinstance(self.trading_date, date)):
+            raise TypeError("trading_date must be date or None")
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeTradingSession:
+    instrument: RuntimeInstrument
+    exchange: str
+    market_timestamp: datetime | None
+    trading_date: date | None
+    previous_completed_trading_date: date | None
+    cpr_trading_date: date | None
+    camarilla_trading_date: date | None
+    adr_trading_date: date | None
+    vwap_trading_date: date | None
+    status: str
+    blocking_reason: str = "-"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.instrument, RuntimeInstrument):
+            raise TypeError("instrument must be RuntimeInstrument")
+        if not isinstance(self.exchange, str) or not self.exchange.strip():
+            raise ValueError("exchange must be non-empty text")
+        object.__setattr__(self, "exchange", self.exchange.strip().upper())
+        if self.market_timestamp is not None and not isinstance(self.market_timestamp, datetime):
+            raise TypeError("market_timestamp must be datetime or None")
+        for field_name in (
+            "trading_date",
+            "previous_completed_trading_date",
+            "cpr_trading_date",
+            "camarilla_trading_date",
+            "adr_trading_date",
+            "vwap_trading_date",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and (isinstance(value, datetime) or not isinstance(value, date)):
+                raise TypeError(f"{field_name} must be date or None")
+        for field_name in ("status", "blocking_reason"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise TypeError(f"{field_name} must be text")
+            object.__setattr__(self, field_name, value.strip() or "-")
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeVerificationStage:
+    stage: str
+    owner: str
+    producer: str
+    consumer: str
+    timestamp: datetime | None
+    session: RuntimeTradingSession | None
+    status: str
+    blocking_reason: str = "-"
+
+    def __post_init__(self) -> None:
+        for field_name in ("stage", "owner", "producer", "consumer", "status", "blocking_reason"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise TypeError(f"{field_name} must be text")
+            object.__setattr__(self, field_name, value.strip() or "-")
+        if self.timestamp is not None and not isinstance(self.timestamp, datetime):
+            raise TypeError("timestamp must be datetime or None")
+        if self.session is not None and not isinstance(self.session, RuntimeTradingSession):
+            raise TypeError("session must be RuntimeTradingSession or None")
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,6 +398,17 @@ class RuntimeSnapshot:
     decision_audit: "RuntimeDecisionAudit" | None = None
     runtime_diagnostics: RuntimeDiagnostics | None = None
     vision_ai_explanation: str | None = None
+    runtime_session: RuntimeTradingSession | None = None
+    runtime_verification_report: tuple[RuntimeVerificationStage, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.runtime_session is not None and not isinstance(self.runtime_session, RuntimeTradingSession):
+            raise TypeError("runtime_session must be RuntimeTradingSession or None")
+        report = tuple(self.runtime_verification_report)
+        for item in report:
+            if not isinstance(item, RuntimeVerificationStage):
+                raise TypeError("runtime_verification_report must contain RuntimeVerificationStage values")
+        object.__setattr__(self, "runtime_verification_report", report)
 
 
 @dataclass(frozen=True, slots=True)

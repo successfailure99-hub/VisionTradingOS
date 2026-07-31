@@ -950,3 +950,49 @@ Journal entries store references, not duplicated snapshots:
 The dashboard journal panel displays the trade source for completed dry-run
 trades. VM-13 does not place broker orders, enable live trading, modify AI
 reasoning, or redesign Paper Trading.
+
+## VM-13.3 Runtime Ownership Contract
+
+VM-13.3 completes the runtime ownership boundary for the Vision Method live
+path. `SymbolRuntime` is the single owner of:
+
+- the canonical market timestamp;
+- the active trading-session snapshot;
+- the Vision Method snapshot reference;
+- the Vision Method validation report reference;
+- the latest `TradeCandidate`;
+- the decision audit;
+- the runtime verification report.
+
+The canonical market timestamp is derived from runtime market data in priority
+order:
+
+1. latest closed candle timestamp;
+2. latest accepted tick timestamp;
+3. latest candle end timestamp;
+4. last accepted runtime update timestamp.
+
+Trading engines must consume this runtime market timestamp rather than
+independent wall-clock refresh timestamps. Dashboard rendering may still use a
+UI clock for display freshness, but that clock is not market truth.
+
+The runtime trading session is represented by one immutable
+`RuntimeTradingSession` snapshot. It records the active trading date, previous
+completed-session source date, CPR date, Camarilla date, optional ADR date, and
+optional VWAP date. CPR and Camarilla are considered ready only when their
+level snapshots belong to the active trading date.
+
+The runtime verification report is an ordered, immutable ownership matrix. Each
+stage records:
+
+- owner;
+- producer;
+- consumer;
+- canonical timestamp;
+- session;
+- status;
+- blocking reason.
+
+The dashboard reads this report from the runtime snapshot. It does not calculate
+Vision Method state, infer ownership, or keep an independent cache of the
+Vision pipeline.

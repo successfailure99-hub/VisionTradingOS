@@ -29,6 +29,13 @@ RUNTIME_COMPONENT_HEALTH_LABELS = (
     "Risk",
     "Lifecycle",
     "Journal",
+    "Vision Daily Context",
+    "Vision Method Calculator",
+    "Vision Validation",
+    "Vision Runtime Adapter",
+    "TradeCandidate",
+    "Vision Paper Handoff",
+    "AI Explanation",
 )
 RUNTIME_COMPONENT_HEALTH_FIELDS = tuple(f"Health: {label}" for label in RUNTIME_COMPONENT_HEALTH_LABELS)
 
@@ -141,3 +148,4 @@ class RuntimePanel(QGroupBox):
             item = health.get(name)
             status = item.status if item is not None else "Waiting"
             self._labels[field].set_status_text(status)
+            self._labels[field].setToolTip(item.detail if item is not None else "-")

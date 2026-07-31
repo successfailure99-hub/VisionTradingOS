@@ -1,7 +1,9 @@
 from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
 
 from application import RuntimeConfiguration, RuntimeInstrument, SymbolRuntime
+from core.models.daily_ohlc import DailyOHLC
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
 from core.event_bus import EventBus
@@ -73,6 +75,53 @@ def test_long_candidate_reaches_existing_risk_lifecycle_and_paper_tick():
     assert paper_calls
     assert paper_calls[-1][0] is view.strategy_decision_v2
     assert paper_calls[-1][1] is view.risk_management_v2
+
+
+def test_runtime_snapshot_uses_canonical_market_timestamp_session_and_verification_report():
+    item = runtime()
+    previous_day = NOW.date() - timedelta(days=1)
+    item.process_daily_ohlc(
+        DailyOHLC(previous_day, 100.0, 110.0, 90.0, 105.0),
+        levels_trading_date=NOW.date(),
+    )
+    item.process_tick(tick(timestamp=NOW))
+
+    view = item.snapshot()
+
+    assert view.snapshot_created_at == view.latest_tick_at
+    assert view.runtime_session is not None
+    assert view.runtime_session.market_timestamp == view.latest_tick_at
+    assert view.runtime_session.trading_date == NOW.date()
+    assert view.runtime_session.previous_completed_trading_date == previous_day
+    assert view.runtime_session.cpr_trading_date == NOW.date()
+    assert view.runtime_session.camarilla_trading_date == NOW.date()
+    stages = {stage.stage: stage for stage in view.runtime_verification_report}
+    assert stages["Market Data"].owner == "SymbolRuntime"
+    assert stages["Daily Context"].producer == "CPR/Camarilla/ADR/VWAP"
+    assert stages["Daily Context"].session is view.runtime_session
+    assert view.runtime_diagnostics.market_timestamp == view.latest_tick_at
+    assert view.runtime_diagnostics.trading_date == NOW.date()
+
+
+def test_vision_candidate_is_single_runtime_source_for_ai_explanation():
+    item = runtime()
+
+    candidate, report = process(item, snapshot())
+    view = item.snapshot()
+
+    assert view.vision_trade_candidate is candidate
+    assert view.runtime_verification_report[-1].stage == "AI Explanation"
+    assert view.vision_ai_explanation.startswith("Vision Method produced a long candidate")
+    assert "legacy" not in view.vision_ai_explanation.lower()
+    assert view.runtime_diagnostics.current_candidate == candidate.candidate_state.value
+    assert report is item._vision_method_validation_report
+
+
+def test_symbol_runtime_does_not_create_wall_clock_market_timestamps():
+    source = Path("application/symbol_runtime.py").read_text(encoding="utf-8")
+
+    assert "datetime.now" not in source
+    assert "utcnow" not in source
 
 
 def test_short_candidate_uses_existing_risk_lifecycle_direction():

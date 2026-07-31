@@ -3,7 +3,7 @@ Per-symbol Application Orchestrator runtime.
 """
 
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 
 from core.enums.instrument import Instrument
 from core.enums.exchange import Exchange
@@ -99,7 +99,15 @@ from engines.vision_method import VisionMethodSnapshot, VisionMethodValidationRe
 from engines.vwap.vwap_engine import VWAPEngine
 
 from application.enums import RuntimeInstrument, RuntimeStatus
-from application.models import RuntimeConfiguration, RuntimeDecisionAudit, RuntimeDiagnostics, RuntimeSnapshot, RuntimeVWAPSource
+from application.models import (
+    RuntimeConfiguration,
+    RuntimeDecisionAudit,
+    RuntimeDiagnostics,
+    RuntimeSnapshot,
+    RuntimeTradingSession,
+    RuntimeVerificationStage,
+    RuntimeVWAPSource,
+)
 from application.tradingview_evidence_assembly import (
     TradingViewEvidenceAssemblyCoordinator,
     TradingViewEvidenceAssemblyInput,
@@ -981,6 +989,8 @@ class SymbolRuntime:
         if latest_candle is None:
             history = self.candle_engine.get_history(self._core_instrument)
             latest_candle = history[-1] if history else None
+        market_timestamp = self._market_timestamp(latest_candle)
+        runtime_session = self._runtime_trading_session(market_timestamp)
         return RuntimeSnapshot(
             symbol=self._instrument,
             timeframe=self._primary_timeframe.value,
@@ -1007,7 +1017,7 @@ class SymbolRuntime:
             latest_tick_at=self._latest_tick_at,
             latest_closed_candle_at=self._latest_closed_candle_at,
             latest_analysis_at=self._latest_analysis_at,
-            snapshot_created_at=datetime.now(UTC),
+            snapshot_created_at=market_timestamp,
             vwap_source=self._vwap_source_snapshot(),
             paper_trading=self.paper_trading_engine.snapshot(),
             performance_analytics=performance_analytics,
@@ -1033,8 +1043,10 @@ class SymbolRuntime:
             trade_journal_v1=self.trade_journal_v1_engine.snapshot(),
             vision_trade_candidate=self._vision_trade_candidate,
             decision_audit=self._decision_audit,
-            runtime_diagnostics=self._runtime_diagnostics(),
+            runtime_diagnostics=self._runtime_diagnostics(market_timestamp, runtime_session),
             vision_ai_explanation=self._vision_ai_explanation,
+            runtime_session=runtime_session,
+            runtime_verification_report=self._runtime_verification_report(market_timestamp, runtime_session),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
@@ -1411,7 +1423,105 @@ class SymbolRuntime:
             vision_method_validation_reference=candidate.validation_reference,
         )
 
-    def _runtime_diagnostics(self) -> RuntimeDiagnostics:
+    def _market_timestamp(self, latest_candle=None) -> datetime | None:
+        return (
+            self._latest_closed_candle_at
+            or self._latest_tick_at
+            or getattr(latest_candle, "end_time", None)
+            or getattr(self._last_tick, "timestamp", None)
+            or self._updated_at
+        )
+
+    def _runtime_trading_session(self, market_timestamp: datetime | None) -> RuntimeTradingSession:
+        trading_date = market_timestamp.date() if market_timestamp is not None else None
+        previous_completed = self._daily_context_source_date
+        adr = self.adr_engine.state
+        vwap = self.vwap_engine.get_latest(self._core_instrument)
+        cpr_date = getattr(self.cpr, "trading_date", None)
+        camarilla_date = getattr(self.camarilla, "trading_date", None)
+        adr_date = getattr(adr, "trading_date", None)
+        vwap_date = getattr(vwap, "trading_date", None)
+        status = "WAITING"
+        reason = "Market timestamp is unavailable."
+        if trading_date is not None:
+            missing = []
+            stale = []
+            if self.cpr is None:
+                missing.append("CPR")
+            elif cpr_date != trading_date:
+                stale.append("CPR")
+            if self.camarilla is None:
+                missing.append("Camarilla")
+            elif camarilla_date != trading_date:
+                stale.append("Camarilla")
+            if missing:
+                status = "WAITING_DAILY_CONTEXT"
+                reason = f"Missing daily context: {', '.join(missing)}."
+            elif stale:
+                status = "WAITING_DAILY_CONTEXT"
+                reason = f"Stale daily context: {', '.join(stale)}."
+            else:
+                status = "READY"
+                reason = "-"
+        return RuntimeTradingSession(
+            instrument=self._instrument,
+            exchange=self._configuration.exchange,
+            market_timestamp=market_timestamp,
+            trading_date=trading_date,
+            previous_completed_trading_date=previous_completed,
+            cpr_trading_date=cpr_date,
+            camarilla_trading_date=camarilla_date,
+            adr_trading_date=adr_date,
+            vwap_trading_date=vwap_date,
+            status=status,
+            blocking_reason=reason,
+        )
+
+    def _runtime_verification_report(
+        self,
+        market_timestamp: datetime | None,
+        runtime_session: RuntimeTradingSession,
+    ) -> tuple[RuntimeVerificationStage, ...]:
+        validation = self._vision_method_validation_report
+        candidate = self._vision_trade_candidate
+        audit = self._decision_audit
+        strategy = self._vision_strategy_decision_v2
+        risk = self.risk_management_v2_engine.snapshot
+        lifecycle = self.trade_lifecycle_v1.snapshot()
+        journal = self.trade_journal_v1_engine.snapshot()
+        daily_ready = runtime_session.status == "READY"
+        reason = runtime_session.blocking_reason if not daily_ready else "-"
+        candidate_state = getattr(getattr(candidate, "candidate_state", None), "value", None)
+        no_candidate_reason = getattr(candidate, "reason", None) or "No Vision trade candidate."
+        rows = (
+            ("Market Data", "SymbolRuntime", "MarketDataEngine", "CandleEngine", self._last_tick is not None, "No accepted tick."),
+            ("Candle Engine", "SymbolRuntime", "CandleEngine", "Vision Method", self._latest_closed_candle_at is not None, "No closed candle."),
+            ("Daily Context", "SymbolRuntime", "CPR/Camarilla/ADR/VWAP", "Vision Level Context", daily_ready, reason),
+            ("Vision Method", "SymbolRuntime", "Vision Method Calculator", "Vision Validation", self._vision_method_snapshot is not None, "Vision Method snapshot unavailable."),
+            ("Validation", "SymbolRuntime", "Vision Method Validation", "Runtime Adapter", validation is not None, "Validation report unavailable."),
+            ("Runtime Adapter", "SymbolRuntime", "VisionRuntimeAdapter", "TradeCandidate", candidate is not None, "TradeCandidate not evaluated."),
+            ("TradeCandidate", "SymbolRuntime", "TradeCandidate", "RiskManagementV2", candidate_state in {"long", "short"}, no_candidate_reason),
+            ("Risk", "SymbolRuntime", "RiskManagementV2", "TradeLifecycleV1", risk is not None, "Risk waiting for actionable candidate."),
+            ("Lifecycle", "SymbolRuntime", "TradeLifecycleV1", "Paper Trading", getattr(lifecycle, "processing_count", 0) > 0, "Lifecycle waiting for approved risk."),
+            ("Paper Trade", "SymbolRuntime", "PaperTradingEngine", "TradeJournalV1", _paper_trade_state(self.paper_trading_engine.snapshot()) != "No Active Paper Trade", "No active paper trade."),
+            ("Journal", "SymbolRuntime", "TradeJournalV1", "Dashboard", getattr(journal, "latest_entry", None) is not None, "No journal entry."),
+            ("AI Explanation", "SymbolRuntime", "Vision Method Explanation", "Dashboard AI", bool(self._vision_ai_explanation), "Vision explanation unavailable."),
+        )
+        return tuple(
+            RuntimeVerificationStage(
+                stage=stage,
+                owner=owner,
+                producer=producer,
+                consumer=consumer,
+                timestamp=market_timestamp,
+                session=runtime_session,
+                status="READY" if ready else ("BLOCKED" if audit is not None and audit.rejected_at == stage else "WAITING"),
+                blocking_reason="-" if ready else detail,
+            )
+            for stage, owner, producer, consumer, ready, detail in rows
+        )
+
+    def _runtime_diagnostics(self, market_timestamp: datetime | None, runtime_session: RuntimeTradingSession) -> RuntimeDiagnostics:
         audit = self._decision_audit
         candidate = self._vision_trade_candidate
         lifecycle = self.trade_lifecycle_v1.snapshot()
@@ -1438,6 +1548,8 @@ class SymbolRuntime:
             journal_state=_journal_state(journal),
             last_successful_snapshot=method_snapshot.timestamp.isoformat() if method_snapshot is not None else "-",
             last_validation=getattr(getattr(validation, "validation_result", None), "value", "-"),
+            market_timestamp=market_timestamp,
+            trading_date=runtime_session.trading_date,
         )
 
     def _build_risk_management_v2_input(self, strategy) -> RiskManagementV2Input:
