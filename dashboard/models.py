@@ -626,6 +626,11 @@ class DashboardJournalView:
     win_rate: float | None = None
     profit_factor: float | None = None
     latest_trade_source: str = "-"
+    persistence_status: str = "-"
+    active_checkpoint_status: str = "-"
+    recovery_status: str = "-"
+    recovery_reason: str = "-"
+    journal_blocking_reason: str = "-"
 
 
 @dataclass(frozen=True, slots=True)

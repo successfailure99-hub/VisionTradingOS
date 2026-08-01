@@ -13,6 +13,7 @@ from engines.trade_journal_v1.enums import (
     TradeJournalStatus,
     TradeOutcome,
     TradeRecordStatus,
+    PaperRecoveryStatus,
 )
 from engines.trade_journal_v1.models import (
     ConfidenceBucketPerformance,
@@ -20,22 +21,30 @@ from engines.trade_journal_v1.models import (
     InstrumentPerformance,
     SetupPerformance,
     TradeJournalEntry,
+    ActivePaperPositionCheckpoint,
+    PaperRecoverySnapshot,
     TradeJournalRecordResult,
     TradeJournalV1Snapshot,
+    VisionTradeJournalRecord,
     TradePerformanceAnalyticsSnapshot,
     TradePerformanceStatistics,
 )
+from engines.trade_journal_v1.persistence import TradeJournalPersistence, TradeJournalQuery
 from engines.trade_journal_v1.registry import TradeJournalRegistry
 
 __all__ = [
     "TradeOutcome",
     "TradeJournalStatus",
     "TradeRecordStatus",
+    "PaperRecoveryStatus",
     "TradeCloseCategory",
     "PerformanceTrend",
     "JournalChange",
     "TradeJournalV1Configuration",
     "TradeJournalEntry",
+    "VisionTradeJournalRecord",
+    "ActivePaperPositionCheckpoint",
+    "PaperRecoverySnapshot",
     "TradeJournalRecordResult",
     "EquityCurvePoint",
     "TradePerformanceStatistics",
@@ -45,6 +54,8 @@ __all__ = [
     "TradePerformanceAnalyticsSnapshot",
     "TradeJournalV1Snapshot",
     "TradeJournalEntryBuilder",
+    "TradeJournalPersistence",
+    "TradeJournalQuery",
     "TradeJournalRegistry",
     "TradePerformanceAnalyticsCalculator",
     "TradeJournalV1Engine",

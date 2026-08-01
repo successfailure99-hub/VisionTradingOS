@@ -46,3 +46,6 @@ dist/
 # Generated audit/export artifacts
 /repository_tree.txt
 /price_action_engine_v1.patch
+
+# Runtime journal/checkpoint artifacts
+/data/trade_journal_v1/

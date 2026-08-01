@@ -460,6 +460,39 @@ class RuntimeOptionChainStatus:
             object.__setattr__(self, "atm_strike", float(self.atm_strike))
         if isinstance(self.total_strikes, bool) or not isinstance(self.total_strikes, int) or self.total_strikes < 0:
             raise ValueError("total_strikes must be a non-negative integer")
+@dataclass(frozen=True, slots=True)
+class RuntimeJournalPersistenceSnapshot:
+    persistence_status: str
+    active_checkpoint_status: str
+    recovery_status: str
+    latest_journal_record_id: str | None
+    journal_write_timestamp: datetime | None
+    journal_blocking_reason: str
+    journal_record_count: int | None
+    checkpoint_trade_id: str | None = None
+    recovery_reason: str = "-"
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "persistence_status",
+            "active_checkpoint_status",
+            "recovery_status",
+            "journal_blocking_reason",
+            "recovery_reason",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise TypeError(f"{field_name} must be text")
+            object.__setattr__(self, field_name, value.strip() or "-")
+        for field_name in ("latest_journal_record_id", "checkpoint_trade_id"):
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(value, str):
+                raise TypeError(f"{field_name} must be text or None")
+        if self.journal_write_timestamp is not None and not isinstance(self.journal_write_timestamp, datetime):
+            raise TypeError("journal_write_timestamp must be datetime or None")
+        if self.journal_record_count is not None:
+            if isinstance(self.journal_record_count, bool) or not isinstance(self.journal_record_count, int) or self.journal_record_count < 0:
+                raise ValueError("journal_record_count must be a non-negative integer or None")
 
 @dataclass(frozen=True, slots=True)
 class RuntimeSnapshot:
@@ -516,6 +549,7 @@ class RuntimeSnapshot:
     vision_method_validation_report: VisionMethodValidationReport | None = None
     vision_trade_candidate: TradeCandidate | None = None
     canonical_paper_position: RuntimePaperPositionSnapshot | None = None
+    journal_persistence: RuntimeJournalPersistenceSnapshot | None = None
     decision_audit: "RuntimeDecisionAudit" | None = None
     runtime_diagnostics: RuntimeDiagnostics | None = None
     vision_ai_explanation: str | None = None
@@ -545,6 +579,8 @@ class RuntimeSnapshot:
             raise TypeError("vision_method_validation_report must be VisionMethodValidationReport or None")
         if self.canonical_paper_position is not None and not isinstance(self.canonical_paper_position, RuntimePaperPositionSnapshot):
             raise TypeError("canonical_paper_position must be RuntimePaperPositionSnapshot or None")
+        if self.journal_persistence is not None and not isinstance(self.journal_persistence, RuntimeJournalPersistenceSnapshot):
+            raise TypeError("journal_persistence must be RuntimeJournalPersistenceSnapshot or None")
 
 
 @dataclass(frozen=True, slots=True)

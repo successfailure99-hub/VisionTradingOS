@@ -35,11 +35,8 @@ def test_trade_journal_v1_has_no_network_persistence_or_broker_imports():
                 assert node.module.split(".")[0] not in forbidden
 
 
-def test_trade_journal_v1_does_not_call_live_or_persistence_functions():
+def test_trade_journal_v1_does_not_call_live_or_unowned_persistence_functions():
     forbidden_calls = {
-        "open",
-        "write_text",
-        "write_bytes",
         "place_order",
         "submit_order",
         "modify_order",
@@ -58,6 +55,8 @@ def test_trade_journal_v1_does_not_call_live_or_persistence_functions():
             if isinstance(node, ast.Call):
                 function = node.func
                 name = function.id if isinstance(function, ast.Name) else getattr(function, "attr", "")
+                if path.name != "persistence.py":
+                    assert name not in {"open", "write_text", "write_bytes"}, f"{path}:{node.lineno}"
                 assert name not in forbidden_calls, f"{path}:{node.lineno}"
 
 

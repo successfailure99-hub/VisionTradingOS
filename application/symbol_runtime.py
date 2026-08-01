@@ -4,6 +4,7 @@ Per-symbol Application Orchestrator runtime.
 
 from dataclasses import replace
 from datetime import date, datetime
+from pathlib import Path
 
 from core.enums.instrument import Instrument
 from core.enums.exchange import Exchange
@@ -95,7 +96,7 @@ from engines.trade_execution_policy.enums import ExecutionMode, ExecutionPlanSta
 from engines.trade_execution_policy.models import ExecutionRequest, TradeExecutionPlan
 from engines.tradingview_evidence.engine import TradingViewEvidenceMappingEngine
 from engines.tradingview_evidence.models import TradingViewEvidenceRequest
-from engines.trade_journal_v1 import TradeJournalV1Engine
+from engines.trade_journal_v1 import TradeJournalV1Configuration, TradeJournalV1Engine
 from engines.vision_method import VisionMethodSnapshot, VisionMethodValidationReport
 from engines.vwap.vwap_engine import VWAPEngine
 
@@ -104,6 +105,7 @@ from application.models import (
     RuntimeConfiguration,
     RuntimeDecisionAudit,
     RuntimeDiagnostics,
+    RuntimeJournalPersistenceSnapshot,
     RuntimeOptionChainStatus,
     RuntimePaperPositionSnapshot,
     RuntimeSnapshot,
@@ -345,7 +347,13 @@ class SymbolRuntime:
             position_engine=self.position_management_v1_engine,
             event_bus=event_bus,
         )
-        self.trade_journal_v1_engine = TradeJournalV1Engine(event_bus=event_bus)
+        self.trade_journal_v1_engine = TradeJournalV1Engine(
+            configuration=TradeJournalV1Configuration(
+                journal_path=_vision_journal_path(instrument),
+                checkpoint_path=_vision_checkpoint_path(instrument),
+            ),
+            event_bus=event_bus,
+        )
         self._decision_audit: RuntimeDecisionAudit | None = None
         self._vision_trade_candidate: TradeCandidate | None = None
         self._vision_strategy_decision_v2: StrategyDecisionV2Snapshot | None = None
@@ -355,6 +363,8 @@ class SymbolRuntime:
         self._vision_ai_explanation: str | None = None
         self._option_chain_analytics: OptionChainAnalyticsSnapshot | None = None
         self._option_chain_last_error: str | None = None
+        self._paper_recovery = None
+        self._last_journal_write_timestamp: datetime | None = None
 
     @property
     def instrument(self) -> RuntimeInstrument:
@@ -384,6 +394,7 @@ class SymbolRuntime:
         self.execution_runtime_v1.start()
         self.trade_lifecycle_v1.start()
         self.trade_journal_v1_engine.start()
+        self._paper_recovery = self.trade_journal_v1_engine.load_checkpoint(expected_instrument=self._core_instrument)
         self.execution_policy_engine.start()
         self.trade_authorization_engine.start()
         self.paper_execution_coordinator.start()
@@ -1082,6 +1093,7 @@ class SymbolRuntime:
             vision_method_validation_report=self._vision_method_validation_report,
             vision_trade_candidate=self._vision_trade_candidate,
             canonical_paper_position=self._canonical_paper_position(),
+            journal_persistence=self._journal_persistence_snapshot(),
             decision_audit=self._decision_audit,
             runtime_diagnostics=self._runtime_diagnostics(market_timestamp, runtime_session),
             vision_ai_explanation=self._vision_ai_explanation,
@@ -1384,6 +1396,7 @@ class SymbolRuntime:
             trade_lifecycle_v1=lifecycle,
             vision_trade_candidate=vision_trade_candidate,
         )
+        self._sync_paper_checkpoint()
 
     def _build_vision_strategy_decision(
         self,
@@ -1632,7 +1645,9 @@ class SymbolRuntime:
     def _canonical_paper_position(self) -> RuntimePaperPositionSnapshot | None:
         position = self._canonical_lifecycle_position()
         if position is None:
-            return None
+            if self._vision_trade_candidate is not None:
+                return None
+            return self._paper_position_from_checkpoint()
         lifecycle = self.trade_lifecycle_v1.snapshot()
         strategy = lifecycle.strategy_decision or self._vision_strategy_decision_v2
         risk = lifecycle.risk_decision or self.risk_management_v2_engine.snapshot
@@ -1678,10 +1693,100 @@ class SymbolRuntime:
             unrealized_pnl=position.unrealized_pnl,
             realized_pnl=position.realized_pnl,
             blocking_reason=getattr(audit, "reason", "-") if getattr(audit, "rejected", False) else "-",
-            recovery_status="NOT_DURABLE",
+            recovery_status=self._paper_recovery_status(),
             updated_at=position.updated_at,
         )
 
+
+    def _sync_paper_checkpoint(self) -> None:
+        canonical = self._canonical_paper_position()
+        if canonical is None:
+            return
+        trading_date = getattr(getattr(self, "_vision_method_snapshot", None), "timestamp", None)
+        date_value = trading_date.date() if trading_date is not None else (canonical.updated_at.date() if canonical.updated_at is not None else None)
+        if date_value is None:
+            return
+        if canonical.status in {"closed", "invalidated"}:
+            self.trade_journal_v1_engine.clear_checkpoint()
+            self._paper_recovery = self.trade_journal_v1_engine.load_checkpoint(expected_instrument=self._core_instrument, trading_date=date_value)
+            return
+        checkpoint = self.trade_journal_v1_engine.save_checkpoint(
+            canonical,
+            trading_date=date_value,
+            exchange=self._configuration.exchange,
+            timeframe=self._primary_timeframe.value,
+        )
+        if checkpoint is not None:
+            self._paper_recovery = self.trade_journal_v1_engine.load_checkpoint(expected_instrument=self._core_instrument, trading_date=date_value)
+
+    def _paper_recovery_status(self) -> str:
+        recovery = self._paper_recovery
+        if recovery is None:
+            return "NO_POSITION" if self._canonical_lifecycle_position() is None else "RESTORED"
+        return getattr(getattr(recovery, "status", None), "value", "NO_POSITION")
+
+    def _recovered_checkpoint(self):
+        recovery = self._paper_recovery
+        if recovery is None or getattr(getattr(recovery, "status", None), "value", None) != "RESTORED":
+            return None
+        return getattr(recovery, "checkpoint", None)
+
+    def _paper_position_from_checkpoint(self) -> RuntimePaperPositionSnapshot | None:
+        legacy_paper = self.paper_trading_engine.snapshot()
+        if getattr(legacy_paper, "order", None) is not None or getattr(legacy_paper, "position", None) is not None or getattr(legacy_paper, "latest_record", None) is not None:
+            return None
+        checkpoint = self._recovered_checkpoint()
+        if checkpoint is None:
+            return None
+        return RuntimePaperPositionSnapshot(
+            trade_id=checkpoint.trade_id,
+            instrument=self._instrument,
+            source="VISION_METHOD",
+            candidate_state=checkpoint.candidate_state,
+            direction=checkpoint.direction,
+            status=checkpoint.position_state,
+            lifecycle_state=checkpoint.lifecycle_state,
+            risk_state="RESTORED",
+            candidate_reference=checkpoint.trade_candidate_reference,
+            vision_method_snapshot_reference=checkpoint.vision_method_snapshot_reference,
+            validation_report_reference=checkpoint.vision_method_validation_reference,
+            risk_reference=checkpoint.risk_reference,
+            entry_timestamp=checkpoint.entry_timestamp,
+            entry_price=checkpoint.entry_price,
+            current_price=checkpoint.entry_price,
+            quantity=checkpoint.quantity,
+            stop_reference="Recovered checkpoint stop",
+            target_reference="Recovered checkpoint target",
+            stop_price=checkpoint.stop_price,
+            target_price=checkpoint.target_price,
+            gross_pnl=checkpoint.unrealized_pnl,
+            fees=0.0,
+            slippage=0.0,
+            net_pnl=checkpoint.unrealized_pnl,
+            unrealized_pnl=checkpoint.unrealized_pnl,
+            realized_pnl=0.0,
+            blocking_reason="Recovered from durable checkpoint.",
+            recovery_status="RESTORED",
+            updated_at=checkpoint.updated_at,
+        )
+
+    def _journal_persistence_snapshot(self) -> RuntimeJournalPersistenceSnapshot:
+        journal = self.trade_journal_v1_engine.snapshot()
+        latest = getattr(journal, "latest_entry", None)
+        recovery = self._paper_recovery
+        checkpoint = getattr(recovery, "checkpoint", None) if recovery is not None else None
+        checkpoint_exists = self.trade_journal_v1_engine.checkpoint_exists
+        return RuntimeJournalPersistenceSnapshot(
+            persistence_status="READY" if journal.ready else "ERROR",
+            active_checkpoint_status="ACTIVE" if checkpoint_exists else "NONE",
+            recovery_status=getattr(getattr(recovery, "status", None), "value", "NO_POSITION"),
+            latest_journal_record_id=getattr(latest, "trade_id", None),
+            journal_write_timestamp=self._last_journal_write_timestamp,
+            journal_blocking_reason=journal.last_error or "-",
+            journal_record_count=journal.trade_count,
+            checkpoint_trade_id=getattr(checkpoint, "trade_id", None),
+            recovery_reason=getattr(recovery, "reason", "-"),
+        )
     def _runtime_verification_report(
         self,
         market_timestamp: datetime | None,
@@ -1879,13 +1984,19 @@ class SymbolRuntime:
             return
         if lifecycle.stage.value == "position_closed":
             try:
-                self.trade_journal_v1_engine.record(lifecycle)
+                result = self.trade_journal_v1_engine.record(lifecycle)
+                if getattr(result, "entry", None) is not None:
+                    self._last_journal_write_timestamp = result.entry.closed_at
+                self.trade_journal_v1_engine.clear_checkpoint()
+                self._paper_recovery = self.trade_journal_v1_engine.load_checkpoint(expected_instrument=self._core_instrument, trading_date=tick.timestamp.date())
             except Exception as exc:
                 self._record_decision_audit(
                     "Journal",
                     f"Trade Journal V1 rejected the closed lifecycle: {_safe_error(exc)}",
                     trade_lifecycle_v1=lifecycle,
                 )
+        else:
+            self._sync_paper_checkpoint()
 
     def _record_decision_audit(
         self,
@@ -2149,6 +2260,13 @@ def _vision_method_explanation(candidate: TradeCandidate, validation_report: Vis
     )
 
 
+
+def _vision_journal_path(instrument: RuntimeInstrument) -> Path:
+    return Path("data") / "trade_journal_v1" / f"{instrument.value.lower()}_vision_journal.jsonl"
+
+
+def _vision_checkpoint_path(instrument: RuntimeInstrument) -> Path:
+    return Path("data") / "trade_journal_v1" / f"{instrument.value.lower()}_active_checkpoint.json"
 def _canonical_paper_trade_state(canonical: RuntimePaperPositionSnapshot | None, legacy_snapshot) -> str:
     if canonical is not None:
         return f"VISION_METHOD:{canonical.status}"

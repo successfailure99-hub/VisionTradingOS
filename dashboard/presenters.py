@@ -840,6 +840,7 @@ def build_position_view(runtime_snapshot: RuntimeSnapshot) -> DashboardPositionV
 
 
 def build_journal_view(runtime_snapshot: RuntimeSnapshot) -> DashboardJournalView:
+    persistence = getattr(runtime_snapshot, "journal_persistence", None)
     v1_entry = getattr(getattr(runtime_snapshot, "trade_journal_v1", None), "latest_entry", None)
     if v1_entry is not None:
         return DashboardJournalView(
@@ -849,6 +850,11 @@ def build_journal_view(runtime_snapshot: RuntimeSnapshot) -> DashboardJournalVie
             message="Latest completed DRY_RUN trade",
             latest_trade_id=getattr(v1_entry, "trade_id", None),
             latest_trade_source=getattr(v1_entry, "trade_source", "-"),
+            persistence_status=getattr(persistence, "persistence_status", "-"),
+            active_checkpoint_status=getattr(persistence, "active_checkpoint_status", "-"),
+            recovery_status=getattr(persistence, "recovery_status", "-"),
+            recovery_reason=getattr(persistence, "recovery_reason", "-"),
+            journal_blocking_reason=getattr(persistence, "journal_blocking_reason", "-"),
             latest_exit_type=_enum_text(getattr(v1_entry, "exit_reason", None)),
             latest_realized_pnl=getattr(v1_entry, "realized_pnl", None),
             latest_opened_at=getattr(v1_entry, "opened_at", None),
@@ -875,6 +881,11 @@ def build_journal_view(runtime_snapshot: RuntimeSnapshot) -> DashboardJournalVie
             message="Latest completed DRY_RUN trade" if record is not None else "No completed DRY_RUN trades",
             latest_trade_id=getattr(record, "trade_id", None),
             latest_trade_source="-",
+            persistence_status=getattr(persistence, "persistence_status", "-"),
+            active_checkpoint_status=getattr(persistence, "active_checkpoint_status", "-"),
+            recovery_status=getattr(persistence, "recovery_status", "-"),
+            recovery_reason=getattr(persistence, "recovery_reason", "-"),
+            journal_blocking_reason=getattr(persistence, "journal_blocking_reason", "-"),
             latest_exit_type=_enum_text(getattr(record, "exit_type", None)),
             latest_realized_pnl=getattr(record, "net_pnl", None),
             latest_opened_at=getattr(record, "entry_time", None),

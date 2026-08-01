@@ -1047,7 +1047,7 @@ Ownership after VM-14:
 | Fees/slippage | Not modeled by Lifecycle V1; exposed as `0.0` on the canonical snapshot until VM-15+ defines durable accounting |
 | Journal write | TradeJournalV1 |
 | Dashboard status | RuntimeSnapshot.canonical_paper_position |
-| Restart recovery | `NOT_DURABLE` until journal persistence/recovery is completed |
+| Restart recovery | VM-15 durable checkpoint policy: `NO_POSITION`, `RESTORED`, `RECOVERY_BLOCKED`, `RECOVERY_FAILED`, or `CLOSED_BEFORE_SHUTDOWN` |
 
 `RuntimePaperPositionSnapshot` is immutable and reference-based. It preserves the
 TradeCandidate, Vision Method snapshot, validation report, and risk references
@@ -1061,3 +1061,51 @@ second paper position.
 Dashboard position panels must prefer `RuntimeSnapshot.canonical_paper_position`
 whenever present. Legacy paper-trading status may still be displayed only when no
 canonical Vision paper position exists.
+
+## VM-15 Vision Analytics Journal & Durable Paper Recovery
+
+VM-15 makes the Vision Method paper-trading path durable without changing trading rules, risk calculations, lifecycle rules, or paper fill behavior.
+
+Canonical ownership after VM-15:
+
+| Concern | Current owner | Canonical owner after VM-15 |
+| --- | --- | --- |
+| Journal record creation | `TradeJournalEntryBuilder` | `TradeJournalV1Engine` using `TradeJournalEntryBuilder` |
+| Journal persistence | none / in-memory registry | `TradeJournalPersistence` append-only JSONL |
+| Open paper-position checkpoint | none | `TradeJournalPersistence` atomic checkpoint file |
+| Closed-trade record | `TradeJournalRegistry` | `TradeJournalRegistry` plus durable `VisionTradeJournalRecord` |
+| Duplicate suppression | `TradeJournalRegistry` | `TradeJournalRegistry` plus durable trade-id check |
+| Search/filter | in-memory entries | streaming `TradeJournalQuery` over durable JSONL |
+| Replay lookup | journal entry references | compact Vision, validation, candidate, risk, lifecycle, and paper-position references |
+| Restart recovery | `NOT_DURABLE` | deterministic `PaperRecoverySnapshot` |
+| Performance summaries | `TradePerformanceAnalyticsCalculator` | unchanged; fed once from completed journal entries |
+
+### Canonical Journal Schema
+
+The durable `VisionTradeJournalRecord` stores compact immutable trade evidence rather than copying large snapshot graphs. It contains the trade identity, instrument, exchange, timeframe, trading date, Vision Method references, validation references, trade candidate reference, risk reference, lifecycle reference, paper-position reference, setup classification, candidate direction and quality, validation result, entry/exit prices, quantity, stop/target prices, gross P&L, fees, slippage, net P&L, timestamps, and schema version.
+
+Retention policy: completed Vision paper records are append-only JSONL. Runtime queries stream records and malformed lines are isolated so one bad row cannot prevent valid records from being read.
+
+### Checkpoint Schema
+
+The active paper checkpoint stores exactly one open Vision paper position per instrument path. It includes trade ID, candidate identity, instrument, direction, entry, quantity, stop, target, last market timestamp, lifecycle state, position state, unrealized P&L, Vision references, risk reference, and checkpoint version. Writes use an atomic replace policy.
+
+### Restart And Session Recovery
+
+Recovery outcomes are deterministic:
+
+- `NO_POSITION`: no checkpoint exists.
+- `RESTORED`: checkpoint matches the expected instrument and trading session.
+- `RECOVERY_BLOCKED`: checkpoint exists but fails ownership validation.
+- `RECOVERY_FAILED`: checkpoint is malformed or unreadable.
+- `CLOSED_BEFORE_SHUTDOWN`: checkpoint belongs to an older trading session and must not be silently carried forward.
+
+Broker orders are never replayed. Recovery is paper-only.
+
+### Duplicate Prevention
+
+Exactly-once completed journal writes are protected by stable `trade_id`, candidate identity, lifecycle identity, and durable duplicate checks. Repeated close ticks, reconnects, dashboard refreshes, and duplicate lifecycle routing must not append a second durable record.
+
+### Security
+
+Durable journal records and checkpoints must not serialize access tokens, API keys, credentials, passwords, or broker secrets. The persistence layer rejects payloads containing sensitive field names before writing.

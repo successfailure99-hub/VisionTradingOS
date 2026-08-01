@@ -46,3 +46,11 @@ class JournalChange(str, Enum):
     DUPLICATE_SUPPRESSED = "duplicate_suppressed"
     CLEARED = "cleared"
     UNCHANGED = "unchanged"
+
+
+class PaperRecoveryStatus(str, Enum):
+    NO_POSITION = "NO_POSITION"
+    RESTORED = "RESTORED"
+    RECOVERY_BLOCKED = "RECOVERY_BLOCKED"
+    RECOVERY_FAILED = "RECOVERY_FAILED"
+    CLOSED_BEFORE_SHUTDOWN = "CLOSED_BEFORE_SHUTDOWN"

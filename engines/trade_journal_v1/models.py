@@ -3,7 +3,7 @@ Immutable Trade Journal & Performance Analytics V1 models.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from math import isfinite
 from numbers import Real
 
@@ -25,6 +25,7 @@ from engines.trade_journal_v1.enums import (
     TradeJournalStatus,
     TradeOutcome,
     TradeRecordStatus,
+    PaperRecoveryStatus,
 )
 
 
@@ -119,6 +120,164 @@ class TradeJournalEntry:
             if value is not None:
                 object.__setattr__(self, name, _non_empty(value, name))
 
+@dataclass(frozen=True, slots=True)
+class VisionTradeJournalRecord:
+    trade_id: str
+    instrument: Instrument
+    exchange: str
+    timeframe: str
+    trading_date: date
+    trade_source: str
+    setup_classification: str
+    candidate_direction: str
+    candidate_quality: str
+    validation_result: str
+    outcome: TradeOutcome
+    exit_reason: PositionExitReason
+    vision_method_snapshot_reference: str
+    vision_method_validation_reference: str
+    trade_candidate_reference: str
+    risk_reference: str
+    lifecycle_reference: str
+    paper_position_reference: str
+    validation_trace_reference: str
+    entry_timestamp: datetime
+    entry_price: float
+    quantity: int
+    stop_price: float
+    target_price: float | None
+    exit_timestamp: datetime
+    exit_price: float
+    gross_pnl: float
+    fees: float
+    slippage: float
+    net_pnl: float
+    supporting_reasons: tuple[str, ...]
+    blocking_reasons: tuple[str, ...]
+    created_at: datetime
+    updated_at: datetime
+    record_version: int = 1
+
+    def __post_init__(self) -> None:
+        _non_empty(self.trade_id, "trade_id")
+        if self.instrument not in SUPPORTED_INSTRUMENTS:
+            raise ValueError("instrument must be NIFTY, BANKNIFTY or SENSEX")
+        for name in (
+            "exchange",
+            "timeframe",
+            "trade_source",
+            "setup_classification",
+            "candidate_direction",
+            "candidate_quality",
+            "validation_result",
+            "vision_method_snapshot_reference",
+            "vision_method_validation_reference",
+            "trade_candidate_reference",
+            "risk_reference",
+            "lifecycle_reference",
+            "paper_position_reference",
+            "validation_trace_reference",
+        ):
+            object.__setattr__(self, name, _non_empty(getattr(self, name), name))
+        if not isinstance(self.trading_date, date) or isinstance(self.trading_date, datetime):
+            raise TypeError("trading_date must be date")
+        if not isinstance(self.outcome, TradeOutcome):
+            raise TypeError("outcome must be TradeOutcome")
+        if not isinstance(self.exit_reason, PositionExitReason):
+            raise TypeError("exit_reason must be PositionExitReason")
+        for name in ("entry_timestamp", "exit_timestamp", "created_at", "updated_at"):
+            _aware(getattr(self, name), name)
+        if self.exit_timestamp < self.entry_timestamp:
+            raise ValueError("exit_timestamp cannot precede entry_timestamp")
+        for name in ("entry_price", "stop_price", "exit_price"):
+            object.__setattr__(self, name, _positive_real(getattr(self, name), name))
+        if self.target_price is not None:
+            object.__setattr__(self, "target_price", _positive_real(self.target_price, "target_price"))
+        _positive_int(self.quantity, "quantity")
+        for name in ("gross_pnl", "fees", "slippage", "net_pnl"):
+            object.__setattr__(self, name, _finite_real(getattr(self, name), name))
+        object.__setattr__(self, "supporting_reasons", _strings(self.supporting_reasons, "supporting_reasons"))
+        object.__setattr__(self, "blocking_reasons", _strings(self.blocking_reasons, "blocking_reasons"))
+        _positive_int(self.record_version, "record_version")
+
+
+@dataclass(frozen=True, slots=True)
+class ActivePaperPositionCheckpoint:
+    trade_id: str
+    instrument: Instrument
+    exchange: str
+    timeframe: str
+    trading_date: date
+    candidate_identity: str
+    candidate_state: str
+    direction: str
+    entry_timestamp: datetime
+    entry_price: float
+    quantity: int
+    stop_price: float
+    target_price: float | None
+    last_market_timestamp: datetime
+    lifecycle_state: str
+    position_state: str
+    unrealized_pnl: float
+    vision_method_snapshot_reference: str
+    vision_method_validation_reference: str
+    trade_candidate_reference: str
+    risk_reference: str
+    created_at: datetime
+    updated_at: datetime
+    checkpoint_version: int = 1
+
+    def __post_init__(self) -> None:
+        _non_empty(self.trade_id, "trade_id")
+        if self.instrument not in SUPPORTED_INSTRUMENTS:
+            raise ValueError("instrument must be NIFTY, BANKNIFTY or SENSEX")
+        for name in (
+            "exchange",
+            "timeframe",
+            "candidate_identity",
+            "candidate_state",
+            "direction",
+            "lifecycle_state",
+            "position_state",
+            "vision_method_snapshot_reference",
+            "vision_method_validation_reference",
+            "trade_candidate_reference",
+            "risk_reference",
+        ):
+            object.__setattr__(self, name, _non_empty(getattr(self, name), name))
+        if not isinstance(self.trading_date, date) or isinstance(self.trading_date, datetime):
+            raise TypeError("trading_date must be date")
+        for name in ("entry_timestamp", "last_market_timestamp", "created_at", "updated_at"):
+            _aware(getattr(self, name), name)
+        if self.last_market_timestamp < self.entry_timestamp:
+            raise ValueError("last_market_timestamp cannot precede entry_timestamp")
+        object.__setattr__(self, "entry_price", _positive_real(self.entry_price, "entry_price"))
+        object.__setattr__(self, "stop_price", _positive_real(self.stop_price, "stop_price"))
+        if self.target_price is not None:
+            object.__setattr__(self, "target_price", _positive_real(self.target_price, "target_price"))
+        _positive_int(self.quantity, "quantity")
+        object.__setattr__(self, "unrealized_pnl", _finite_real(self.unrealized_pnl, "unrealized_pnl"))
+        _positive_int(self.checkpoint_version, "checkpoint_version")
+
+
+@dataclass(frozen=True, slots=True)
+class PaperRecoverySnapshot:
+    status: PaperRecoveryStatus
+    trade_id: str | None
+    checkpoint: ActivePaperPositionCheckpoint | None
+    recovered_at: datetime
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, PaperRecoveryStatus):
+            raise TypeError("status must be PaperRecoveryStatus")
+        if self.trade_id is not None:
+            _non_empty(self.trade_id, "trade_id")
+        if self.checkpoint is not None and not isinstance(self.checkpoint, ActivePaperPositionCheckpoint):
+            raise TypeError("checkpoint must be ActivePaperPositionCheckpoint or None")
+        _aware(self.recovered_at, "recovered_at")
+        object.__setattr__(self, "reason", _non_empty(self.reason, "reason"))
 
 @dataclass(frozen=True, slots=True)
 class TradeJournalRecordResult:
@@ -378,6 +537,13 @@ def _non_empty(value: str, name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be non-empty string")
     return value.strip()
+
+
+def _strings(values, name: str) -> tuple[str, ...]:
+    items = tuple(str(item).strip() for item in tuple(values or ()) if str(item).strip())
+    if len(set(items)) != len(items):
+        raise ValueError(f"{name} cannot contain duplicate values")
+    return items
 
 
 def _tuple_of(values, item_type, name: str):

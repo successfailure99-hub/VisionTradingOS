@@ -19,8 +19,17 @@ from engines.trade_journal_v1.builder import TradeJournalEntryBuilder
 from engines.trade_journal_v1.configuration import TradeJournalV1Configuration
 from engines.trade_journal_v1.enums import JournalChange, TradeJournalStatus, TradeRecordStatus
 from engines.trade_journal_v1.models import (
+    ActivePaperPositionCheckpoint,
+    PaperRecoverySnapshot,
     TradeJournalRecordResult,
     TradeJournalV1Snapshot,
+    VisionTradeJournalRecord,
+)
+from engines.trade_journal_v1.persistence import (
+    TradeJournalPersistence,
+    TradeJournalQuery,
+    checkpoint_from_runtime_position,
+    record_from_entry,
 )
 from engines.trade_journal_v1.registry import TradeJournalRegistry
 
@@ -40,6 +49,11 @@ class TradeJournalV1Engine(BaseEngine):
         self._configuration = configuration or TradeJournalV1Configuration()
         self._builder = builder or TradeJournalEntryBuilder(self._configuration)
         self._registry = registry or TradeJournalRegistry(self._configuration)
+        self._persistence = TradeJournalPersistence(
+            journal_path=self._configuration.journal_path,
+            checkpoint_path=self._configuration.checkpoint_path,
+            enabled=self._configuration.persistence_enabled,
+        )
         self._analytics = analytics or TradePerformanceAnalyticsCalculator()
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._lock = RLock()
@@ -88,6 +102,7 @@ class TradeJournalV1Engine(BaseEngine):
                     self._change = JournalChange.TRADE_RECORDED
                     self._last_error = None
                     snapshot = self._store_snapshot()
+                    self._persist_completed_record(result.entry)
                     self._event_bus.publish(TRADE_JOURNAL_ENTRY_RECORDED, result.entry)
                     self._event_bus.publish(TRADE_PERFORMANCE_ANALYTICS_UPDATED, self._analytics_snapshot)
                     self._event_bus.publish(TRADE_JOURNAL_V1_UPDATED, snapshot)
@@ -126,6 +141,40 @@ class TradeJournalV1Engine(BaseEngine):
     def entries(self):
         return self._registry.entries()
 
+    def durable_records(self, **filters) -> tuple[VisionTradeJournalRecord, ...]:
+        return self._persistence.records(TradeJournalQuery(**filters))
+
+    def get_durable_record(self, trade_id: str) -> VisionTradeJournalRecord | None:
+        return self._persistence.get_record(trade_id)
+
+    def save_checkpoint(self, runtime_paper_position, *, trading_date, exchange: str = "NSE", timeframe: str = "1m") -> ActivePaperPositionCheckpoint | None:
+        if runtime_paper_position is None:
+            return None
+        checkpoint = checkpoint_from_runtime_position(
+            runtime_paper_position,
+            trading_date=trading_date,
+            exchange=exchange,
+            timeframe=timeframe,
+            created_at=self._now(),
+        )
+        self._persistence.save_checkpoint(checkpoint)
+        return checkpoint
+
+    def load_checkpoint(self, *, expected_instrument=None, trading_date=None) -> PaperRecoverySnapshot:
+        return self._persistence.load_checkpoint(now=self._now(), expected_instrument=expected_instrument, trading_date=trading_date)
+
+    def clear_checkpoint(self) -> None:
+        self._persistence.clear_checkpoint()
+
+    @property
+    def persistence_write_count(self) -> int:
+        return self._persistence.write_count
+
+    @property
+    def checkpoint_exists(self) -> bool:
+        path = self._persistence.checkpoint_path
+        return bool(path is not None and path.exists())
+
     def analytics_snapshot(self):
         return self._analytics_snapshot
 
@@ -144,6 +193,15 @@ class TradeJournalV1Engine(BaseEngine):
             snapshot = self._store_snapshot()
         self._event_bus.publish(TRADE_JOURNAL_V1_UPDATED, snapshot)
         return snapshot
+
+    def _persist_completed_record(self, entry) -> None:
+        record = record_from_entry(
+            entry,
+            exchange=getattr(self._configuration, "exchange", "NSE"),
+            timeframe=getattr(self._configuration, "timeframe", "1m"),
+            created_at=self._now(),
+        )
+        self._persistence.append_record(record)
 
     def _calculate_analytics(self):
         return self._analytics.calculate(

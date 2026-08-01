@@ -3,6 +3,7 @@ Trade Journal & Performance Analytics V1 configuration.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from math import isfinite
 from numbers import Real
 
@@ -21,6 +22,9 @@ class TradeJournalV1Configuration:
     calculate_setup_statistics: bool = True
     calculate_instrument_statistics: bool = True
     calculate_confidence_statistics: bool = True
+    persistence_enabled: bool = True
+    journal_path: Path | None = None
+    checkpoint_path: Path | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -48,6 +52,11 @@ class TradeJournalV1Configuration:
             "calculate_setup_statistics",
             "calculate_instrument_statistics",
             "calculate_confidence_statistics",
+            "persistence_enabled",
         ):
             if type(getattr(self, name)) is not bool:
                 raise TypeError(f"{name} must be bool")
+        if self.journal_path is not None:
+            object.__setattr__(self, "journal_path", Path(self.journal_path))
+        if self.checkpoint_path is not None:
+            object.__setattr__(self, "checkpoint_path", Path(self.checkpoint_path))

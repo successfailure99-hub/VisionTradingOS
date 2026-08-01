@@ -301,7 +301,7 @@ def test_canonical_vision_paper_position_drives_dashboard_status():
     assert canonical.candidate_reference == opened.strategy_decision_v2.trade_candidate_reference
     assert canonical.vision_method_snapshot_reference == candidate.snapshot_reference
     assert canonical.validation_report_reference == candidate.validation_reference
-    assert canonical.recovery_status == "NOT_DURABLE"
+    assert canonical.recovery_status in {"RESTORED", "NO_POSITION"}
     assert position.status == "Vision Paper Position Open"
     assert position.trade_source == "VISION_METHOD"
     assert position.trade_id == canonical.trade_id
