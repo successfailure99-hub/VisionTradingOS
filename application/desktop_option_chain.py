@@ -368,8 +368,9 @@ class DesktopOptionChainRuntimeManager:
                 outcome = stack.analytics_integration.process_current()
                 state.analytics_updated = bool(getattr(outcome, "analytics_updated", False) or state.analytics_updated)
                 snapshot = stack.live_integration.snapshot().option_chain.latest_option_chain_snapshot
+                analytics = getattr(outcome, "analytics_snapshot", None)
                 if snapshot is not None:
-                    self._lifecycle.orchestrator.process_option_chain(RuntimeInstrument(underlying.value), snapshot)
+                    self._lifecycle.orchestrator.process_option_chain_runtime(RuntimeInstrument(underlying.value), snapshot, analytics)
                     state.state = DesktopOptionChainRuntimeState.RECEIVING
                     state.ready = True
                     state.log(self._clock, "Analytics updated")

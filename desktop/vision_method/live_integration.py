@@ -365,7 +365,7 @@ class VisionMethodLiveInspectorBridge:
         if setup is None:
             failures.append(_not_evaluated_failure("Option Confirmation", "Setup qualification is unavailable."))
         elif cpr is not None:
-            option_chain, option_analytics = self._option_inputs(runtime_snapshot.symbol)
+            option_chain, option_analytics = self._option_inputs(runtime_snapshot)
             option_expiry = option_chain.expiry_date if option_chain is not None else cpr.trading_date
             try:
                 option_confirmation = assemble_vision_option_confirmation_context(
@@ -624,7 +624,7 @@ class VisionMethodLiveInspectorBridge:
         except Exception as exc:
             failures.append(_failure("Setup", exc))
             setup = _fallback_setup(failures)
-        option_chain, option_analytics = self._option_inputs(runtime_snapshot.symbol)
+        option_chain, option_analytics = self._option_inputs(runtime_snapshot)
         option_expiry = option_chain.expiry_date if option_chain is not None else cpr.trading_date
         try:
             option_confirmation = assemble_vision_option_confirmation_context(
@@ -697,11 +697,12 @@ class VisionMethodLiveInspectorBridge:
 
     def _option_inputs(
         self,
-        instrument: RuntimeInstrument,
+        runtime_snapshot,
     ) -> tuple[OptionChainSnapshot | None, OptionChainAnalyticsSnapshot | None]:
-        if self._option_analytics_provider is None:
-            return None, None
-        option_chain, analytics = self._option_analytics_provider(instrument)
+        option_chain = getattr(runtime_snapshot, "option_chain_snapshot", None)
+        analytics = getattr(runtime_snapshot, "option_chain_analytics", None)
+        if option_chain is None and analytics is None and self._option_analytics_provider is not None:
+            option_chain, analytics = self._option_analytics_provider(runtime_snapshot.symbol)
         if option_chain is not None and not isinstance(option_chain, OptionChainSnapshot):
             raise TypeError("option provider must return OptionChainSnapshot or None.")
         if analytics is not None and not isinstance(analytics, OptionChainAnalyticsSnapshot):

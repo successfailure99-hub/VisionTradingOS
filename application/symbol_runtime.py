@@ -35,6 +35,7 @@ from engines.multi_timeframe_evidence_fusion.engine import MultiTimeframeEvidenc
 from engines.volume_context.engine import VolumeContextEngine
 from engines.volume_context.models import VolumeContextProfile
 from engines.option_chain.models import OptionChainSnapshot, OptionChainState
+from engines.option_chain_analytics.models import OptionChainAnalyticsSnapshot
 from engines.option_chain.option_chain_engine import OptionChainEngine
 from engines.order_management.enums import ProductType
 from engines.order_management.models import OrderCommand, OrderRequest, OrderSnapshot, OrderState
@@ -103,11 +104,14 @@ from application.models import (
     RuntimeConfiguration,
     RuntimeDecisionAudit,
     RuntimeDiagnostics,
+    RuntimeOptionChainStatus,
     RuntimeSnapshot,
     RuntimeTradingSession,
     RuntimeVerificationStage,
     RuntimeVWAPSource,
 )
+_OPTION_CHAIN_MAX_AGE_SECONDS = 180.0
+
 from application.tradingview_evidence_assembly import (
     TradingViewEvidenceAssemblyCoordinator,
     TradingViewEvidenceAssemblyInput,
@@ -347,6 +351,8 @@ class SymbolRuntime:
         self._vision_method_snapshot: VisionMethodSnapshot | None = None
         self._vision_method_validation_report: VisionMethodValidationReport | None = None
         self._vision_ai_explanation: str | None = None
+        self._option_chain_analytics: OptionChainAnalyticsSnapshot | None = None
+        self._option_chain_last_error: str | None = None
 
     @property
     def instrument(self) -> RuntimeInstrument:
@@ -615,9 +621,35 @@ class SymbolRuntime:
 
     def process_option_chain(self, snapshot: OptionChainSnapshot) -> OptionChainState:
         self._require_running()
-        state = self.option_chain_engine.process(snapshot)
+        market_timestamp = self._market_timestamp(None) or snapshot.timestamp
+        self._validate_option_chain_snapshot(snapshot, market_timestamp)
+        try:
+            state = self.option_chain_engine.process(snapshot)
+        except Exception as exc:
+            self._option_chain_last_error = _safe_error(exc)
+            raise
+        self._option_chain_last_error = None
         self._updated_at = state.timestamp
         return state
+
+    def process_option_chain_runtime(
+        self,
+        snapshot: OptionChainSnapshot,
+        analytics: OptionChainAnalyticsSnapshot | None = None,
+    ) -> RuntimeSnapshot:
+        self.process_option_chain(snapshot)
+        if analytics is not None:
+            self.process_option_chain_analytics(analytics)
+        return self.snapshot()
+
+    def process_option_chain_analytics(self, analytics: OptionChainAnalyticsSnapshot) -> OptionChainAnalyticsSnapshot:
+        self._require_running()
+        market_timestamp = self._market_timestamp(None) or analytics.timestamp
+        self._validate_option_chain_analytics(analytics, market_timestamp)
+        self._option_chain_analytics = analytics
+        self._option_chain_last_error = None
+        self._updated_at = analytics.timestamp
+        return analytics
 
     def build_market_context(
         self,
@@ -1003,6 +1035,9 @@ class SymbolRuntime:
             camarilla=self.camarilla,
             price_action=self.price_action_engine.state,
             option_chain=self.option_chain_engine.state,
+            option_chain_snapshot=self.option_chain_engine.snapshot,
+            option_chain_analytics=self._option_chain_analytics,
+            option_chain_runtime=self._option_chain_runtime_status(market_timestamp, runtime_session),
             market_context=self.market_context_engine.state,
             moving_average_context=self.moving_average_context_engine.state,
             momentum_context=self.momentum_context_engine.state,
@@ -1477,6 +1512,106 @@ class SymbolRuntime:
             blocking_reason=reason,
         )
 
+    def _validate_option_chain_snapshot(self, snapshot: OptionChainSnapshot, market_timestamp: datetime) -> None:
+        if not isinstance(snapshot, OptionChainSnapshot):
+            raise TypeError("snapshot must be OptionChainSnapshot")
+        if snapshot.symbol != self._instrument.value:
+            raise ValueError("OptionChainSnapshot instrument does not match SymbolRuntime.")
+        if snapshot.exchange != self.option_chain_engine.exchange:
+            raise ValueError("OptionChainSnapshot exchange does not match canonical runtime option-chain engine.")
+        if snapshot.expiry_date != self.option_chain_engine.expiry_date:
+            raise ValueError("OptionChainSnapshot expiry does not match canonical runtime option-chain engine.")
+        if not isinstance(snapshot.timestamp, datetime):
+            raise TypeError("OptionChainSnapshot timestamp must be datetime.")
+        snapshot_is_aware = snapshot.timestamp.tzinfo is not None and snapshot.timestamp.utcoffset() is not None
+        market_is_aware = market_timestamp.tzinfo is not None and market_timestamp.utcoffset() is not None
+        if snapshot_is_aware != market_is_aware:
+            raise ValueError("OptionChainSnapshot timestamp timezone-awareness must match runtime timestamp.")
+        if snapshot.timestamp > market_timestamp:
+            raise ValueError("OptionChainSnapshot timestamp cannot be in the future relative to runtime timestamp.")
+        if snapshot.timestamp.date() != market_timestamp.date():
+            raise ValueError("OptionChainSnapshot trading session does not match runtime session.")
+        age = (market_timestamp - snapshot.timestamp).total_seconds()
+        if age > _OPTION_CHAIN_MAX_AGE_SECONDS:
+            raise ValueError("OptionChainSnapshot is stale for the runtime timestamp.")
+
+    def _validate_option_chain_analytics(self, analytics: OptionChainAnalyticsSnapshot, market_timestamp: datetime) -> None:
+        if not isinstance(analytics, OptionChainAnalyticsSnapshot):
+            raise TypeError("analytics must be OptionChainAnalyticsSnapshot")
+        if analytics.underlying.value != self._instrument.value:
+            raise ValueError("OptionChainAnalyticsSnapshot instrument does not match SymbolRuntime.")
+        if analytics.expiry != self.option_chain_engine.expiry_date:
+            raise ValueError("OptionChainAnalyticsSnapshot expiry does not match canonical runtime option-chain engine.")
+        analytics_is_aware = analytics.timestamp.tzinfo is not None and analytics.timestamp.utcoffset() is not None
+        market_is_aware = market_timestamp.tzinfo is not None and market_timestamp.utcoffset() is not None
+        if analytics_is_aware != market_is_aware:
+            raise ValueError("OptionChainAnalyticsSnapshot timestamp timezone-awareness must match runtime timestamp.")
+        if analytics.timestamp != analytics.source_snapshot.timestamp:
+            raise ValueError("OptionChainAnalyticsSnapshot timestamp must match its source snapshot.")
+        if analytics.source_snapshot != self.option_chain_engine.snapshot:
+            raise ValueError("OptionChainAnalyticsSnapshot must reference the canonical runtime option-chain snapshot.")
+        if analytics.source_analysis != self.option_chain_engine.state:
+            raise ValueError("OptionChainAnalyticsSnapshot must reference the canonical runtime option-chain analysis.")
+        if analytics.timestamp > market_timestamp:
+            raise ValueError("OptionChainAnalyticsSnapshot timestamp cannot be in the future relative to runtime timestamp.")
+        if analytics.timestamp.date() != market_timestamp.date():
+            raise ValueError("OptionChainAnalyticsSnapshot trading session does not match runtime session.")
+        age = (market_timestamp - analytics.timestamp).total_seconds()
+        if age > _OPTION_CHAIN_MAX_AGE_SECONDS:
+            raise ValueError("OptionChainAnalyticsSnapshot is stale for the runtime timestamp.")
+
+    def _option_chain_runtime_status(
+        self,
+        market_timestamp: datetime | None,
+        runtime_session: RuntimeTradingSession,
+    ) -> RuntimeOptionChainStatus:
+        snapshot = self.option_chain_engine.snapshot
+        state = self.option_chain_engine.state
+        analytics = self._option_chain_analytics
+        last_update = getattr(snapshot, "timestamp", None)
+        age = None
+        reason = self._option_chain_last_error or "-"
+        if market_timestamp is not None and last_update is not None:
+            age = max(0.0, (market_timestamp - last_update).total_seconds())
+        if snapshot is None:
+            feed_status = "WAITING"
+            snapshot_status = "WAITING"
+            analytics_status = "WAITING"
+            reason = reason if reason != "-" else "Option-chain snapshot unavailable."
+        elif age is not None and age > _OPTION_CHAIN_MAX_AGE_SECONDS:
+            feed_status = "STALE"
+            snapshot_status = "STALE"
+            analytics_status = "WAITING" if analytics is None else "STALE"
+            reason = reason if reason != "-" else "Option-chain snapshot is stale."
+        elif runtime_session.trading_date is not None and snapshot.timestamp.date() != runtime_session.trading_date:
+            feed_status = "BLOCKED"
+            snapshot_status = "SESSION_MISMATCH"
+            analytics_status = "WAITING" if analytics is None else "SESSION_MISMATCH"
+            reason = reason if reason != "-" else "Option-chain snapshot belongs to a different trading session."
+        elif analytics is None:
+            feed_status = "READY"
+            snapshot_status = "READY"
+            analytics_status = "WAITING"
+            reason = reason if reason != "-" else "Option-chain analytics unavailable."
+        else:
+            feed_status = "READY"
+            snapshot_status = "READY"
+            analytics_status = "READY"
+        return RuntimeOptionChainStatus(
+            instrument=self._instrument,
+            market_timestamp=market_timestamp,
+            trading_date=runtime_session.trading_date,
+            feed_status=feed_status,
+            snapshot_status=snapshot_status,
+            analytics_status=analytics_status,
+            last_update=last_update,
+            age_seconds=age,
+            expiry=getattr(snapshot, "expiry_date", None),
+            atm_strike=getattr(state, "atm_strike", None),
+            total_strikes=getattr(state, "strike_count", 0) if state is not None else 0,
+            blocking_reason=reason,
+        )
+
     def _runtime_verification_report(
         self,
         market_timestamp: datetime | None,
@@ -1490,6 +1625,14 @@ class SymbolRuntime:
         lifecycle = self.trade_lifecycle_v1.snapshot()
         journal = self.trade_journal_v1_engine.snapshot()
         daily_ready = runtime_session.status == "READY"
+        option_status = self._option_chain_runtime_status(market_timestamp, runtime_session)
+        option_snapshot_ready = option_status.snapshot_status == "READY"
+        option_analytics_ready = option_status.analytics_status == "READY"
+        option_reason = option_status.blocking_reason
+        option_confirmation_ready = (
+            self._vision_method_snapshot is not None
+            and getattr(getattr(self._vision_method_snapshot, "option_confirmation_context", None), "confirmation_state", None) is not None
+        )
         reason = runtime_session.blocking_reason if not daily_ready else "-"
         candidate_state = getattr(getattr(candidate, "candidate_state", None), "value", None)
         no_candidate_reason = getattr(candidate, "reason", None) or "No Vision trade candidate."
@@ -1497,6 +1640,10 @@ class SymbolRuntime:
             ("Market Data", "SymbolRuntime", "MarketDataEngine", "CandleEngine", self._last_tick is not None, "No accepted tick."),
             ("Candle Engine", "SymbolRuntime", "CandleEngine", "Vision Method", self._latest_closed_candle_at is not None, "No closed candle."),
             ("Daily Context", "SymbolRuntime", "CPR/Camarilla/ADR/VWAP", "Vision Level Context", daily_ready, reason),
+            ("Option Feed", "SymbolRuntime", "Live Option Chain Feed", "OptionChainSnapshot", option_status.feed_status == "READY", option_reason),
+            ("Option Snapshot", "SymbolRuntime", "OptionChainEngine", "OptionChainAnalytics", option_snapshot_ready, option_reason),
+            ("Option Analytics", "SymbolRuntime", "OptionChainAnalyticsEngine", "Vision Option Confirmation", option_analytics_ready, option_reason),
+            ("Vision Option Confirmation", "SymbolRuntime", "Vision Option Confirmation", "Vision Method Calculator", option_confirmation_ready, "Vision option confirmation unavailable."),
             ("Vision Method", "SymbolRuntime", "Vision Method Calculator", "Vision Validation", self._vision_method_snapshot is not None, "Vision Method snapshot unavailable."),
             ("Validation", "SymbolRuntime", "Vision Method Validation", "Runtime Adapter", validation is not None, "Validation report unavailable."),
             ("Runtime Adapter", "SymbolRuntime", "VisionRuntimeAdapter", "TradeCandidate", candidate is not None, "TradeCandidate not evaluated."),

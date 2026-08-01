@@ -340,6 +340,10 @@ class DashboardOptionChainView:
     last_spot_tick_at: datetime | None = None
     last_option_tick_at: datetime | None = None
     analytics_updated: bool = False
+    runtime_snapshot_status: str = "Waiting"
+    runtime_analytics_status: str = "Waiting"
+    snapshot_age_seconds: float | None = None
+    runtime_blocking_reason: str = "-"
     health_market_feed: bool = False
     health_spot_feed: bool = False
     health_discovery: bool = False

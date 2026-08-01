@@ -526,6 +526,7 @@ def build_option_chain_view(
     *,
     all_option_statuses=(),
     clock=None,
+    canonical_status=None,
 ) -> DashboardOptionChainView:
     state = runtime_snapshot.option_chain
     symbol = _enum_text(runtime_snapshot.symbol)
@@ -535,6 +536,7 @@ def build_option_chain_view(
             runtime_status,
             all_option_statuses=all_option_statuses,
             clock=clock,
+            canonical_status=getattr(runtime_snapshot, "option_chain_runtime", None),
         )
     if _enum_text(state.symbol) != symbol:
         return _apply_option_runtime_status(
@@ -542,6 +544,7 @@ def build_option_chain_view(
             runtime_status,
             all_option_statuses=all_option_statuses,
             clock=clock,
+            canonical_status=getattr(runtime_snapshot, "option_chain_runtime", None),
         )
     strikes = tuple(
         _build_option_chain_strike_view(strike, state.atm_strike)
@@ -577,7 +580,7 @@ def build_option_chain_view(
         put_pressure=_enum_text(state.put_pressure),
         positioning_bias=_enum_text(state.positioning_bias),
         strikes=strikes,
-    ), runtime_status, all_option_statuses=all_option_statuses, clock=clock)
+    ), runtime_status, all_option_statuses=all_option_statuses, clock=clock, canonical_status=getattr(runtime_snapshot, "option_chain_runtime", None))
 
 
 def build_ai_view(runtime_snapshot: RuntimeSnapshot) -> DashboardAIView:
@@ -1056,6 +1059,7 @@ def _apply_option_runtime_status(
     *,
     all_option_statuses=(),
     clock=None,
+    canonical_status=None,
 ) -> DashboardOptionChainView:
     rows = _option_runtime_rows(all_option_statuses, clock=clock)
     events = _option_event_rows(all_option_statuses)
@@ -1065,6 +1069,7 @@ def _apply_option_runtime_status(
                 **_option_view_values(view),
                 "runtime_rows": rows,
                 "event_rows": events,
+                **_canonical_option_runtime_values(canonical_status),
             }
         )
     error = _safe_error(getattr(status, "last_error", None))
@@ -1095,6 +1100,7 @@ def _apply_option_runtime_status(
         health_analytics=bool(getattr(status, "analytics_updated", False)),
         health_dashboard=view.available,
         runtime_events=tuple(getattr(status, "events", ()) or ()),
+        **_canonical_option_runtime_values(canonical_status),
         runtime_rows=rows,
         event_rows=events,
     )
@@ -1133,6 +1139,17 @@ def _option_view_values(view: DashboardOptionChainView) -> dict[str, object]:
         "strikes": view.strikes,
     }
 
+
+
+def _canonical_option_runtime_values(status) -> dict[str, object]:
+    if status is None:
+        return {}
+    return {
+        "runtime_snapshot_status": _enum_text(getattr(status, "snapshot_status", None)),
+        "runtime_analytics_status": _enum_text(getattr(status, "analytics_status", None)),
+        "snapshot_age_seconds": getattr(status, "age_seconds", None),
+        "runtime_blocking_reason": _enum_text(getattr(status, "blocking_reason", None)),
+    }
 
 def _derived_option_runtime_status(view, status, error: str | None, *, clock=None) -> str:
     if error:

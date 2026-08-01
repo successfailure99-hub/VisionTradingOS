@@ -138,6 +138,10 @@ class OptionChainPanel(QGroupBox):
             "Last Spot Tick",
             "Last Option Tick",
             "Analytics Updated",
+            "Snapshot Status",
+            "Analytics Status",
+            "Snapshot Age",
+            "Blocking Reason",
             "Market Feed",
             "Spot Feed",
             "Discovery",
@@ -153,7 +157,7 @@ class OptionChainPanel(QGroupBox):
         self._cards = {field: MetricCard(field) for field in self._overview_fields + self._diagnostic_fields}
         self._overview_cards = {field: self._cards[field] for field in self._overview_fields}
         self._diagnostic_cards = {field: self._cards[field] for field in self._diagnostic_fields}
-        for field in ("Message", "Last Error"):
+        for field in ("Message", "Last Error", "Blocking Reason"):
             self._cards[field].setMinimumHeight(96)
         for field, card in self._cards.items():
             card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
@@ -283,6 +287,10 @@ class OptionChainPanel(QGroupBox):
         self._cards["Last Spot Tick"].set_value(formatters.timestamp(view.last_spot_tick_at), kind="neutral")
         self._cards["Last Option Tick"].set_value(formatters.timestamp(view.last_option_tick_at), kind="neutral")
         self._cards["Analytics Updated"].set_value(formatters.yes_no(view.analytics_updated), kind="positive" if view.analytics_updated else "warning")
+        self._cards["Snapshot Status"].set_value(view.runtime_snapshot_status, kind=_status_kind(view.runtime_snapshot_status))
+        self._cards["Analytics Status"].set_value(view.runtime_analytics_status, kind=_status_kind(view.runtime_analytics_status))
+        self._cards["Snapshot Age"].set_value(_age_text(view.snapshot_age_seconds), kind="neutral")
+        self._cards["Blocking Reason"].set_value(view.runtime_blocking_reason or formatters.MISSING, kind="warning" if view.runtime_blocking_reason and view.runtime_blocking_reason != "-" else "neutral")
         self._cards["Message"].set_value(view.runtime_message, kind=status_kind)
         self._cards["Market Feed"].set_value(_health_text(view.health_market_feed), kind=_health_kind(view.health_market_feed))
         self._cards["Spot Feed"].set_value(_health_text(view.health_spot_feed), kind=_health_kind(view.health_spot_feed))
@@ -424,6 +432,23 @@ def _runtime_kind(value: str) -> str:
         return "negative"
     return "neutral"
 
+
+
+def _status_kind(value: str) -> str:
+    normalized = str(value).strip().lower()
+    if normalized == "ready":
+        return "positive"
+    if normalized in {"waiting", "stale", "session_mismatch"}:
+        return "warning"
+    if normalized in {"blocked", "failed", "error"}:
+        return "negative"
+    return "neutral"
+
+
+def _age_text(value: float | None) -> str:
+    if value is None:
+        return formatters.MISSING
+    return f"{value:.1f}s"
 
 def _health_text(value: bool) -> str:
     return "OK" if value else "Waiting"

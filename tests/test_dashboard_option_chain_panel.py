@@ -172,6 +172,7 @@ def test_summary_uses_readable_grouped_metric_rows_without_missing_labels_or_val
         "Current Spot", "Nearest Expiry", "Resolved ATM", "Contracts Resolved",
         "Contracts Active", "Contracts Total", "Last Underlying", "Spot Ticks",
         "Option Ticks", "Last Spot Tick", "Last Option Tick", "Analytics Updated",
+        "Snapshot Status", "Analytics Status", "Snapshot Age", "Blocking Reason",
         "Market Feed", "Spot Feed", "Discovery", "Subscription", "Option Feed",
         "Analytics", "Dashboard", "Symbol", "Exchange", "Timestamp", "Strike Count",
     }

@@ -190,6 +190,10 @@ class ApplicationOrchestrator:
         self._require_running()
         return self.get_runtime(instrument).process_option_chain(snapshot)
 
+    def process_option_chain_runtime(self, instrument: str | RuntimeInstrument, snapshot, analytics=None):
+        self._require_running()
+        return self.get_runtime(instrument).process_option_chain_runtime(snapshot, analytics)
+
     def build_market_context(
         self,
         instrument: str | RuntimeInstrument,

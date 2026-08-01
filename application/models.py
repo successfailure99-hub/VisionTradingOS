@@ -40,7 +40,8 @@ from engines.volume_context.models import (
     VolumeContextProfile,
     VolumeContextSnapshot,
 )
-from engines.option_chain.models import OptionChainState
+from engines.option_chain.models import OptionChainSnapshot, OptionChainState
+from engines.option_chain_analytics.models import OptionChainAnalyticsSnapshot
 from engines.order_management.models import OrderState
 from engines.paper_trading.configuration import PaperTradingConfiguration
 from engines.paper_trading.models import PaperTradingSnapshot
@@ -344,6 +345,48 @@ class RuntimeVerificationStage:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeOptionChainStatus:
+    instrument: RuntimeInstrument
+    market_timestamp: datetime | None
+    trading_date: date | None
+    feed_status: str
+    snapshot_status: str
+    analytics_status: str
+    last_update: datetime | None
+    age_seconds: float | None
+    expiry: date | None
+    atm_strike: float | None
+    total_strikes: int
+    blocking_reason: str = "-"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.instrument, RuntimeInstrument):
+            raise TypeError("instrument must be RuntimeInstrument")
+        if self.market_timestamp is not None and not isinstance(self.market_timestamp, datetime):
+            raise TypeError("market_timestamp must be datetime or None")
+        if self.trading_date is not None and (isinstance(self.trading_date, datetime) or not isinstance(self.trading_date, date)):
+            raise TypeError("trading_date must be date or None")
+        for field_name in ("feed_status", "snapshot_status", "analytics_status", "blocking_reason"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise TypeError(f"{field_name} must be text")
+            object.__setattr__(self, field_name, value.strip() or "-")
+        if self.last_update is not None and not isinstance(self.last_update, datetime):
+            raise TypeError("last_update must be datetime or None")
+        if self.age_seconds is not None:
+            if isinstance(self.age_seconds, bool) or not isinstance(self.age_seconds, (int, float)) or self.age_seconds < 0:
+                raise ValueError("age_seconds must be a non-negative number or None")
+            object.__setattr__(self, "age_seconds", float(self.age_seconds))
+        if self.expiry is not None and (isinstance(self.expiry, datetime) or not isinstance(self.expiry, date)):
+            raise TypeError("expiry must be date or None")
+        if self.atm_strike is not None:
+            if isinstance(self.atm_strike, bool) or not isinstance(self.atm_strike, (int, float)):
+                raise TypeError("atm_strike must be numeric or None")
+            object.__setattr__(self, "atm_strike", float(self.atm_strike))
+        if isinstance(self.total_strikes, bool) or not isinstance(self.total_strikes, int) or self.total_strikes < 0:
+            raise ValueError("total_strikes must be a non-negative integer")
+
+@dataclass(frozen=True, slots=True)
 class RuntimeSnapshot:
     symbol: RuntimeInstrument
     timeframe: str
@@ -400,6 +443,9 @@ class RuntimeSnapshot:
     vision_ai_explanation: str | None = None
     runtime_session: RuntimeTradingSession | None = None
     runtime_verification_report: tuple[RuntimeVerificationStage, ...] = ()
+    option_chain_snapshot: OptionChainSnapshot | None = None
+    option_chain_analytics: OptionChainAnalyticsSnapshot | None = None
+    option_chain_runtime: RuntimeOptionChainStatus | None = None
 
     def __post_init__(self) -> None:
         if self.runtime_session is not None and not isinstance(self.runtime_session, RuntimeTradingSession):
@@ -409,6 +455,12 @@ class RuntimeSnapshot:
             if not isinstance(item, RuntimeVerificationStage):
                 raise TypeError("runtime_verification_report must contain RuntimeVerificationStage values")
         object.__setattr__(self, "runtime_verification_report", report)
+        if self.option_chain_snapshot is not None and not isinstance(self.option_chain_snapshot, OptionChainSnapshot):
+            raise TypeError("option_chain_snapshot must be OptionChainSnapshot or None")
+        if self.option_chain_analytics is not None and not isinstance(self.option_chain_analytics, OptionChainAnalyticsSnapshot):
+            raise TypeError("option_chain_analytics must be OptionChainAnalyticsSnapshot or None")
+        if self.option_chain_runtime is not None and not isinstance(self.option_chain_runtime, RuntimeOptionChainStatus):
+            raise TypeError("option_chain_runtime must be RuntimeOptionChainStatus or None")
 
 
 @dataclass(frozen=True, slots=True)
