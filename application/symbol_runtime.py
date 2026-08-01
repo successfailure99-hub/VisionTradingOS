@@ -1076,6 +1076,8 @@ class SymbolRuntime:
             risk_management_v2=self.risk_management_v2_engine.snapshot,
             trade_lifecycle_v1=self.trade_lifecycle_v1.snapshot(),
             trade_journal_v1=self.trade_journal_v1_engine.snapshot(),
+            vision_method_snapshot=self._vision_method_snapshot,
+            vision_method_validation_report=self._vision_method_validation_report,
             vision_trade_candidate=self._vision_trade_candidate,
             decision_audit=self._decision_audit,
             runtime_diagnostics=self._runtime_diagnostics(market_timestamp, runtime_session),

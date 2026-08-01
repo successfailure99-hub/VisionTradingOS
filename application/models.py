@@ -69,6 +69,7 @@ from engines.execution_reconciliation.models import ExecutionReconciliationSnaps
 from engines.shadow_trading_session.models import ShadowTradingSessionSnapshot
 from engines.vwap.levels import VWAPLevels
 from engines.tradingview_evidence.models import TradingViewEvidenceEngineSnapshot
+from engines.vision_method import VisionMethodSnapshot, VisionMethodValidationReport
 
 
 @dataclass(frozen=True, slots=True)
@@ -437,6 +438,8 @@ class RuntimeSnapshot:
     risk_management_v2: RiskManagementV2Snapshot | None = None
     trade_lifecycle_v1: TradeLifecycleV1Snapshot | None = None
     trade_journal_v1: TradeJournalV1Snapshot | None = None
+    vision_method_snapshot: VisionMethodSnapshot | None = None
+    vision_method_validation_report: VisionMethodValidationReport | None = None
     vision_trade_candidate: TradeCandidate | None = None
     decision_audit: "RuntimeDecisionAudit" | None = None
     runtime_diagnostics: RuntimeDiagnostics | None = None
@@ -461,6 +464,10 @@ class RuntimeSnapshot:
             raise TypeError("option_chain_analytics must be OptionChainAnalyticsSnapshot or None")
         if self.option_chain_runtime is not None and not isinstance(self.option_chain_runtime, RuntimeOptionChainStatus):
             raise TypeError("option_chain_runtime must be RuntimeOptionChainStatus or None")
+        if self.vision_method_snapshot is not None and not isinstance(self.vision_method_snapshot, VisionMethodSnapshot):
+            raise TypeError("vision_method_snapshot must be VisionMethodSnapshot or None")
+        if self.vision_method_validation_report is not None and not isinstance(self.vision_method_validation_report, VisionMethodValidationReport):
+            raise TypeError("vision_method_validation_report must be VisionMethodValidationReport or None")
 
 
 @dataclass(frozen=True, slots=True)

@@ -62,6 +62,8 @@ def test_long_candidate_reaches_existing_risk_lifecycle_and_paper_tick():
     assert candidate.candidate_state is TradeCandidateState.LONG
     assert candidate.direction is TradeCandidateDirection.LONG
     assert view.vision_trade_candidate is candidate
+    assert view.vision_method_snapshot is item._vision_method_snapshot
+    assert view.vision_method_validation_report is item._vision_method_validation_report
     assert view.ai_reasoning_v2 is None
     assert view.vision_ai_explanation.startswith("Vision Method produced a long candidate")
     assert view.strategy_decision_v2.action is StrategyAction.CONSIDER_LONG
@@ -110,6 +112,8 @@ def test_vision_candidate_is_single_runtime_source_for_ai_explanation():
     view = item.snapshot()
 
     assert view.vision_trade_candidate is candidate
+    assert view.vision_method_snapshot is item._vision_method_snapshot
+    assert view.vision_method_validation_report is report
     assert view.runtime_verification_report[-1].stage == "AI Explanation"
     assert view.vision_ai_explanation.startswith("Vision Method produced a long candidate")
     assert "legacy" not in view.vision_ai_explanation.lower()
@@ -235,3 +239,44 @@ def test_journal_engine_deduplicates_repeated_closed_lifecycle_reference():
     duplicate = item.trade_journal_v1_engine.record(closed)
 
     assert duplicate.status is TradeRecordStatus.DUPLICATE
+
+
+def test_end_to_end_vision_runtime_paper_journal_ai_dashboard_verification():
+    item = runtime()
+
+    candidate, report = process(item, snapshot())
+    opened_lifecycle = item.trade_lifecycle_v1.snapshot()
+    item._process_paper_tick(tick(101.0, timestamp=opened_lifecycle.timestamp + timedelta(seconds=1)))
+    open_view = item.snapshot()
+    open_stages = {stage.stage: stage for stage in open_view.runtime_verification_report}
+
+    assert open_view.vision_method_snapshot is item._vision_method_snapshot
+    assert open_view.vision_method_validation_report is report
+    assert open_view.vision_trade_candidate is candidate
+    assert open_view.strategy_decision_v2.trade_source == "VISION_METHOD"
+    assert open_view.risk_management_v2.strategy is open_view.strategy_decision_v2
+    assert open_view.trade_lifecycle_v1.strategy_decision is open_view.strategy_decision_v2
+    assert open_stages["Vision Method"].status == "READY"
+    assert open_stages["Validation"].status == "READY"
+    assert open_stages["Runtime Adapter"].status == "READY"
+    assert open_stages["TradeCandidate"].status == "READY"
+    assert open_stages["Risk"].status == "READY"
+    assert open_stages["Lifecycle"].status == "READY"
+    assert open_stages["Paper Trade"].status == "READY"
+    assert open_stages["AI Explanation"].status == "READY"
+    assert open_view.runtime_diagnostics.paper_trade_state != "No Active Paper Trade"
+    assert open_view.vision_ai_explanation.startswith("Vision Method produced a long candidate")
+
+    objective = open_view.trade_lifecycle_v1.risk_decision.objective_price
+    closed_lifecycle = item.trade_lifecycle_v1.close_position(exit_price=objective + 0.5)
+    item.trade_journal_v1_engine.record(closed_lifecycle)
+    closed_view = item.snapshot()
+    closed_stages = {stage.stage: stage for stage in closed_view.runtime_verification_report}
+
+    assert closed_view.trade_journal_v1.latest_entry is not None
+    assert closed_view.trade_journal_v1.latest_entry.trade_source == "VISION_METHOD"
+    assert closed_view.trade_journal_v1.latest_entry.trade_candidate_reference == closed_view.strategy_decision_v2.trade_candidate_reference
+    assert closed_view.trade_journal_v1.latest_entry.vision_method_snapshot_reference == candidate.snapshot_reference
+    assert closed_view.trade_journal_v1.latest_entry.vision_method_validation_reference == candidate.validation_reference
+    assert closed_stages["Journal"].status == "READY"
+    assert build_journal_view(closed_view).latest_trade_source == "VISION_METHOD"
