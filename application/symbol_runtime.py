@@ -45,7 +45,7 @@ from engines.paper_execution_coordinator.models import PaperExecutionReceipt, Pa
 from engines.paper_trading.engine import PaperTradingEngine
 from engines.position.models import PositionFill, PositionMark, PositionState
 from engines.position.position_engine import PositionEngine
-from engines.position_management_v1 import PositionManagementV1Engine, PositionPriceUpdate
+from engines.position_management_v1 import PositionManagementV1Configuration, PositionManagementV1Engine, PositionPriceUpdate
 from engines.execution_reconciliation.engine import ExecutionReconciliationEngine
 from engines.execution_reconciliation.models import ExecutionReconciliationRequest, ExecutionReconciliationReport
 from engines.expert_setup_classification.engine import ExpertSetupClassificationEngine
@@ -105,6 +105,7 @@ from application.models import (
     RuntimeDecisionAudit,
     RuntimeDiagnostics,
     RuntimeOptionChainStatus,
+    RuntimePaperPositionSnapshot,
     RuntimeSnapshot,
     RuntimeTradingSession,
     RuntimeVerificationStage,
@@ -336,6 +337,7 @@ class SymbolRuntime:
         self.position_management_v1_engine = PositionManagementV1Engine(
             instrument=self._core_instrument,
             event_bus=event_bus,
+            configuration=PositionManagementV1Configuration(auto_full_exit_on_objective=True),
         )
         self.trade_lifecycle_v1 = TradeLifecycleCoordinatorV1(
             instrument=self._core_instrument,
@@ -1079,6 +1081,7 @@ class SymbolRuntime:
             vision_method_snapshot=self._vision_method_snapshot,
             vision_method_validation_report=self._vision_method_validation_report,
             vision_trade_candidate=self._vision_trade_candidate,
+            canonical_paper_position=self._canonical_paper_position(),
             decision_audit=self._decision_audit,
             runtime_diagnostics=self._runtime_diagnostics(market_timestamp, runtime_session),
             vision_ai_explanation=self._vision_ai_explanation,
@@ -1087,14 +1090,16 @@ class SymbolRuntime:
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
-        strategy = self._vision_strategy_decision_v2 or self.strategy_decision_v2_engine.snapshot or self.strategy_engine.state
+        if self._vision_strategy_decision_v2 is not None or self._canonical_lifecycle_position() is not None:
+            self._process_trade_lifecycle_price(tick)
+            return
+        strategy = self.strategy_decision_v2_engine.snapshot or self.strategy_engine.state
         risk = self.risk_management_v2_engine.snapshot or self.risk_engine.state
         record = self.paper_trading_engine.on_tick(
             tick,
             strategy=strategy,
             risk=risk,
         )
-        self._process_trade_lifecycle_price(tick)
         if record is not None:
             updated = self.trade_plan_engine.record_paper_trade_close(realized_pnl=record.net_pnl)
             if updated is not None:
@@ -1614,6 +1619,69 @@ class SymbolRuntime:
             blocking_reason=reason,
         )
 
+    def _canonical_lifecycle_position(self):
+        lifecycle = self.trade_lifecycle_v1.snapshot()
+        strategy = lifecycle.strategy_decision
+        if getattr(strategy, "trade_source", None) != "VISION_METHOD":
+            return None
+        result = lifecycle.position_result
+        if result is not None and result.position is not None:
+            return result.position
+        return lifecycle.position_snapshot.active_position
+
+    def _canonical_paper_position(self) -> RuntimePaperPositionSnapshot | None:
+        position = self._canonical_lifecycle_position()
+        if position is None:
+            return None
+        lifecycle = self.trade_lifecycle_v1.snapshot()
+        strategy = lifecycle.strategy_decision or self._vision_strategy_decision_v2
+        risk = lifecycle.risk_decision or self.risk_management_v2_engine.snapshot
+        candidate = self._vision_trade_candidate
+        audit = self._decision_audit
+        candidate_reference = getattr(strategy, "trade_candidate_reference", None) or (
+            _vision_trade_identity(candidate) if candidate is not None else "-"
+        )
+        snapshot_reference = getattr(strategy, "vision_method_snapshot_reference", None) or getattr(candidate, "snapshot_reference", "-")
+        validation_reference = getattr(strategy, "vision_method_validation_reference", None) or getattr(candidate, "validation_reference", "-")
+        risk_reference = "-"
+        if risk is not None:
+            risk_reference = ":".join((risk.instrument.value, risk.timestamp.isoformat(), risk.decision.value))
+        quantity = position.open_quantity if position.open_quantity > 0 else position.closed_quantity
+        fees = 0.0
+        slippage = 0.0
+        gross_pnl = position.total_pnl + fees
+        return RuntimePaperPositionSnapshot(
+            trade_id=position.position_id,
+            instrument=self._instrument,
+            source="VISION_METHOD",
+            candidate_state=getattr(getattr(candidate, "candidate_state", None), "value", "-"),
+            direction=position.side.value,
+            status=position.status.value,
+            lifecycle_state=lifecycle.stage.value,
+            risk_state=getattr(getattr(risk, "decision", None), "value", "-"),
+            candidate_reference=candidate_reference,
+            vision_method_snapshot_reference=snapshot_reference,
+            validation_report_reference=validation_reference,
+            risk_reference=risk_reference,
+            entry_timestamp=position.opened_at,
+            entry_price=position.average_entry_price,
+            current_price=position.current_price,
+            quantity=quantity,
+            stop_reference=getattr(candidate, "stop_loss_zone", None) or "Risk invalidation",
+            target_reference=getattr(candidate, "target_zone", None) or "Risk objective",
+            stop_price=position.invalidation_price,
+            target_price=position.objective_price,
+            gross_pnl=gross_pnl,
+            fees=fees,
+            slippage=slippage,
+            net_pnl=position.total_pnl,
+            unrealized_pnl=position.unrealized_pnl,
+            realized_pnl=position.realized_pnl,
+            blocking_reason=getattr(audit, "reason", "-") if getattr(audit, "rejected", False) else "-",
+            recovery_status="NOT_DURABLE",
+            updated_at=position.updated_at,
+        )
+
     def _runtime_verification_report(
         self,
         market_timestamp: datetime | None,
@@ -1626,6 +1694,7 @@ class SymbolRuntime:
         risk = self.risk_management_v2_engine.snapshot
         lifecycle = self.trade_lifecycle_v1.snapshot()
         journal = self.trade_journal_v1_engine.snapshot()
+        canonical_position = self._canonical_paper_position()
         daily_ready = runtime_session.status == "READY"
         option_status = self._option_chain_runtime_status(market_timestamp, runtime_session)
         option_snapshot_ready = option_status.snapshot_status == "READY"
@@ -1649,10 +1718,15 @@ class SymbolRuntime:
             ("Vision Method", "SymbolRuntime", "Vision Method Calculator", "Vision Validation", self._vision_method_snapshot is not None, "Vision Method snapshot unavailable."),
             ("Validation", "SymbolRuntime", "Vision Method Validation", "Runtime Adapter", validation is not None, "Validation report unavailable."),
             ("Runtime Adapter", "SymbolRuntime", "VisionRuntimeAdapter", "TradeCandidate", candidate is not None, "TradeCandidate not evaluated."),
+            ("VISION_CANDIDATE", "SymbolRuntime", "VisionRuntimeAdapter", "RiskManagementV2", candidate is not None, "TradeCandidate not evaluated."),
             ("TradeCandidate", "SymbolRuntime", "TradeCandidate", "RiskManagementV2", candidate_state in {"long", "short"}, no_candidate_reason),
+            ("RISK_HANDOFF", "SymbolRuntime", "RiskManagementV2", "TradeLifecycleV1", risk is not None, "Risk waiting for actionable candidate."),
             ("Risk", "SymbolRuntime", "RiskManagementV2", "TradeLifecycleV1", risk is not None, "Risk waiting for actionable candidate."),
-            ("Lifecycle", "SymbolRuntime", "TradeLifecycleV1", "Paper Trading", getattr(lifecycle, "processing_count", 0) > 0, "Lifecycle waiting for approved risk."),
-            ("Paper Trade", "SymbolRuntime", "PaperTradingEngine", "TradeJournalV1", _paper_trade_state(self.paper_trading_engine.snapshot()) != "No Active Paper Trade", "No active paper trade."),
+            ("LIFECYCLE", "SymbolRuntime", "TradeLifecycleV1", "PositionManagementV1", getattr(lifecycle, "processing_count", 0) > 0, "Lifecycle waiting for approved risk."),
+            ("Lifecycle", "SymbolRuntime", "TradeLifecycleV1", "PositionManagementV1", getattr(lifecycle, "processing_count", 0) > 0, "Lifecycle waiting for approved risk."),
+            ("PAPER_POSITION", "SymbolRuntime", "PositionManagementV1", "TradeJournalV1", canonical_position is not None, "No canonical Vision paper position."),
+            ("Paper Trade", "SymbolRuntime", "PositionManagementV1", "TradeJournalV1", canonical_position is not None, "No canonical Vision paper position."),
+            ("PAPER_JOURNAL", "SymbolRuntime", "TradeJournalV1", "Dashboard", getattr(journal, "latest_entry", None) is not None, "No journal entry."),
             ("Journal", "SymbolRuntime", "TradeJournalV1", "Dashboard", getattr(journal, "latest_entry", None) is not None, "No journal entry."),
             ("AI Explanation", "SymbolRuntime", "Vision Method Explanation", "Dashboard AI", bool(self._vision_ai_explanation), "Vision explanation unavailable."),
         )
@@ -1675,6 +1749,7 @@ class SymbolRuntime:
         candidate = self._vision_trade_candidate
         lifecycle = self.trade_lifecycle_v1.snapshot()
         journal = self.trade_journal_v1_engine.snapshot()
+        canonical_position = self._canonical_paper_position()
         validation = self._vision_method_validation_report
         method_snapshot = self._vision_method_snapshot
         if audit is not None and audit.rejected:
@@ -1693,7 +1768,7 @@ class SymbolRuntime:
             current_stage=current_stage,
             blocking_stage=blocking_stage,
             current_candidate=getattr(getattr(candidate, "candidate_state", None), "value", "not_evaluated"),
-            paper_trade_state=_paper_trade_state(self.paper_trading_engine.snapshot()),
+            paper_trade_state=_canonical_paper_trade_state(self._canonical_paper_position(), self.paper_trading_engine.snapshot()),
             journal_state=_journal_state(journal),
             last_successful_snapshot=method_snapshot.timestamp.isoformat() if method_snapshot is not None else "-",
             last_validation=getattr(getattr(validation, "validation_result", None), "value", "-"),
@@ -2073,6 +2148,11 @@ def _vision_method_explanation(candidate: TradeCandidate, validation_report: Vis
         f"Validation result: {status}."
     )
 
+
+def _canonical_paper_trade_state(canonical: RuntimePaperPositionSnapshot | None, legacy_snapshot) -> str:
+    if canonical is not None:
+        return f"VISION_METHOD:{canonical.status}"
+    return _paper_trade_state(legacy_snapshot)
 
 def _paper_trade_state(snapshot) -> str:
     if snapshot is None:

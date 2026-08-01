@@ -8,7 +8,7 @@ from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
 from core.event_bus import EventBus
 from core.models.tick import Tick
-from dashboard.presenters import build_journal_view
+from dashboard.presenters import build_journal_view, build_position_view
 from engines.risk_management_v2 import AccountRiskState, InstrumentExposureState, RiskManagementV2Input, SessionRiskState
 from engines.risk_management_v2.enums import RiskDecision
 from engines.runtime_adapter import TradeCandidateDirection, TradeCandidateState
@@ -56,7 +56,7 @@ def test_long_candidate_reaches_existing_risk_lifecycle_and_paper_tick():
 
     candidate, _ = process(item, snapshot())
     lifecycle_timestamp = item.trade_lifecycle_v1.snapshot().timestamp
-    item._process_paper_tick(tick(101.0, timestamp=lifecycle_timestamp + timedelta(seconds=1)))
+    item._process_paper_tick(tick(100.1, timestamp=lifecycle_timestamp + timedelta(seconds=1)))
 
     view = item.snapshot()
     assert candidate.candidate_state is TradeCandidateState.LONG
@@ -74,9 +74,11 @@ def test_long_candidate_reaches_existing_risk_lifecycle_and_paper_tick():
     assert view.decision_audit.rejected is False
     assert view.runtime_diagnostics.current_candidate == "long"
     assert view.runtime_diagnostics.last_validation == "valid"
-    assert paper_calls
-    assert paper_calls[-1][0] is view.strategy_decision_v2
-    assert paper_calls[-1][1] is view.risk_management_v2
+    assert paper_calls == []
+    assert view.canonical_paper_position is not None
+    assert view.canonical_paper_position.source == "VISION_METHOD"
+    assert view.canonical_paper_position.candidate_reference == view.strategy_decision_v2.trade_candidate_reference
+    assert view.canonical_paper_position.risk_state in {"approved", "approved_reduced"}
 
 
 def test_runtime_snapshot_uses_canonical_market_timestamp_session_and_verification_report():
@@ -246,7 +248,7 @@ def test_end_to_end_vision_runtime_paper_journal_ai_dashboard_verification():
 
     candidate, report = process(item, snapshot())
     opened_lifecycle = item.trade_lifecycle_v1.snapshot()
-    item._process_paper_tick(tick(101.0, timestamp=opened_lifecycle.timestamp + timedelta(seconds=1)))
+    item._process_paper_tick(tick(100.1, timestamp=opened_lifecycle.timestamp + timedelta(seconds=1)))
     open_view = item.snapshot()
     open_stages = {stage.stage: stage for stage in open_view.runtime_verification_report}
 
@@ -262,9 +264,12 @@ def test_end_to_end_vision_runtime_paper_journal_ai_dashboard_verification():
     assert open_stages["TradeCandidate"].status == "READY"
     assert open_stages["Risk"].status == "READY"
     assert open_stages["Lifecycle"].status == "READY"
+    assert open_stages["PAPER_POSITION"].producer == "PositionManagementV1"
+    assert open_stages["Paper Trade"].producer == "PositionManagementV1"
     assert open_stages["Paper Trade"].status == "READY"
     assert open_stages["AI Explanation"].status == "READY"
-    assert open_view.runtime_diagnostics.paper_trade_state != "No Active Paper Trade"
+    assert open_view.canonical_paper_position is not None
+    assert open_view.runtime_diagnostics.paper_trade_state.startswith("VISION_METHOD:")
     assert open_view.vision_ai_explanation.startswith("Vision Method produced a long candidate")
 
     objective = open_view.trade_lifecycle_v1.risk_decision.objective_price
@@ -280,3 +285,94 @@ def test_end_to_end_vision_runtime_paper_journal_ai_dashboard_verification():
     assert closed_view.trade_journal_v1.latest_entry.vision_method_validation_reference == candidate.validation_reference
     assert closed_stages["Journal"].status == "READY"
     assert build_journal_view(closed_view).latest_trade_source == "VISION_METHOD"
+
+
+def test_canonical_vision_paper_position_drives_dashboard_status():
+    item = runtime()
+    candidate, _ = process(item, snapshot())
+    opened = item.snapshot()
+
+    canonical = opened.canonical_paper_position
+    position = build_position_view(opened)
+
+    assert canonical is not None
+    assert canonical.source == "VISION_METHOD"
+    assert canonical.trade_id
+    assert canonical.candidate_reference == opened.strategy_decision_v2.trade_candidate_reference
+    assert canonical.vision_method_snapshot_reference == candidate.snapshot_reference
+    assert canonical.validation_report_reference == candidate.validation_reference
+    assert canonical.recovery_status == "NOT_DURABLE"
+    assert position.status == "Vision Paper Position Open"
+    assert position.trade_source == "VISION_METHOD"
+    assert position.trade_id == canonical.trade_id
+    assert position.candidate_state == "long"
+    assert position.risk_state in {"approved", "approved_reduced"}
+    assert position.lifecycle_state == opened.trade_lifecycle_v1.stage.value
+
+
+def test_target_tick_closes_canonical_position_and_records_journal_once():
+    item = runtime()
+    process(item, snapshot())
+    opened = item.snapshot()
+    objective = opened.risk_management_v2.objective_price
+    close_tick = tick(objective + 0.5, timestamp=opened.trade_lifecycle_v1.timestamp + timedelta(seconds=1))
+
+    item._process_paper_tick(close_tick)
+    first = item.snapshot()
+    item._process_paper_tick(close_tick)
+    second = item.snapshot()
+
+    assert first.canonical_paper_position.status in {"closed", "objective_reached"}
+    assert first.canonical_paper_position.realized_pnl > 0
+    assert first.trade_journal_v1.trade_count == 1
+    assert second.trade_journal_v1.trade_count == 1
+    assert build_position_view(first).status in {"Vision Paper Position Open", "Vision Paper Position Closed"}
+
+
+def test_stop_tick_closes_canonical_position_without_legacy_paper_engine():
+    item = runtime()
+    paper_calls = []
+    original_on_tick = item.paper_trading_engine.on_tick
+
+    def paper_spy(live_tick, *, strategy=None, risk=None):
+        paper_calls.append((strategy, risk))
+        return original_on_tick(live_tick, strategy=strategy, risk=risk)
+
+    item.paper_trading_engine.on_tick = paper_spy
+    process(item, snapshot())
+    opened = item.snapshot()
+    invalidation = opened.risk_management_v2.invalidation_price
+
+    item._process_paper_tick(tick(invalidation - 0.5, timestamp=opened.trade_lifecycle_v1.timestamp + timedelta(seconds=1)))
+    closed = item.snapshot()
+
+    assert paper_calls == []
+    assert closed.canonical_paper_position.status == "invalidated"
+    assert closed.canonical_paper_position.realized_pnl < 0
+    assert closed.trade_journal_v1.trade_count == 1
+
+
+def test_duplicate_refresh_and_reconnect_do_not_duplicate_vision_position():
+    item = runtime()
+    method_snapshot = snapshot()
+    process(item, method_snapshot)
+    first = item.snapshot()
+
+    item.snapshot()
+    process(item, method_snapshot)
+    item._process_paper_tick(tick(100.1, timestamp=first.trade_lifecycle_v1.timestamp + timedelta(seconds=1)))
+    second = item.snapshot()
+
+    assert second.canonical_paper_position.trade_id == first.canonical_paper_position.trade_id
+    assert second.trade_lifecycle_v1.position_open_count == 1
+    assert second.trade_lifecycle_v1.processing_count == first.trade_lifecycle_v1.processing_count
+    assert second.paper_trading.position is None
+
+
+def test_non_actionable_candidate_has_no_canonical_paper_position():
+    item = runtime()
+    process(item, replace(snapshot(), candidate_state=VisionCandidateState.WAIT))
+    view = item.snapshot()
+
+    assert view.canonical_paper_position is None
+    assert build_position_view(view).status == "No Active Position"

@@ -745,6 +745,38 @@ def build_strategy_view(runtime_snapshot: RuntimeSnapshot) -> DashboardStrategyV
 
 
 def build_position_view(runtime_snapshot: RuntimeSnapshot) -> DashboardPositionView:
+    canonical = getattr(runtime_snapshot, "canonical_paper_position", None)
+    if canonical is not None:
+        has_position = str(getattr(canonical, "status", "")).lower() in {"open", "partially_closed", "objective_reached"}
+        return DashboardPositionView(
+            symbol=_enum_text(runtime_snapshot.symbol),
+            status="Vision Paper Position Open" if has_position else "Vision Paper Position Closed",
+            has_position=has_position,
+            side=_enum_text(getattr(canonical, "direction", None)),
+            quantity=getattr(canonical, "quantity", None),
+            average_price=getattr(canonical, "entry_price", None),
+            last_price=getattr(canonical, "current_price", None),
+            unrealized_pnl=getattr(canonical, "unrealized_pnl", None),
+            realized_pnl=getattr(canonical, "realized_pnl", None),
+            stop_price=getattr(canonical, "stop_price", None),
+            target_price=getattr(canonical, "target_price", None),
+            entry_price=getattr(canonical, "entry_price", None),
+            plan_id=_short_id(getattr(canonical, "candidate_reference", None)),
+            opened_at=getattr(canonical, "entry_timestamp", None),
+            closed_at=None if has_position else getattr(canonical, "updated_at", None),
+            exit_type=_enum_text(getattr(canonical, "status", None)),
+            trade_source=getattr(canonical, "source", "-"),
+            trade_id=getattr(canonical, "trade_id", None),
+            candidate_state=getattr(canonical, "candidate_state", "-"),
+            risk_state=getattr(canonical, "risk_state", "-"),
+            lifecycle_state=getattr(canonical, "lifecycle_state", "-"),
+            blocking_reason=getattr(canonical, "blocking_reason", "-"),
+            recovery_status=getattr(canonical, "recovery_status", "-"),
+            gross_pnl=getattr(canonical, "gross_pnl", None),
+            fees=getattr(canonical, "fees", None),
+            slippage=getattr(canonical, "slippage", None),
+            net_pnl=getattr(canonical, "net_pnl", None),
+        )
     position = runtime_snapshot.position
     tick = runtime_snapshot.latest_tick
     paper = runtime_snapshot.paper_trading

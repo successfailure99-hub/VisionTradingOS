@@ -283,6 +283,80 @@ class RuntimeDiagnostics:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimePaperPositionSnapshot:
+    trade_id: str
+    instrument: RuntimeInstrument
+    source: str
+    candidate_state: str
+    direction: str
+    status: str
+    lifecycle_state: str
+    risk_state: str
+    candidate_reference: str
+    vision_method_snapshot_reference: str
+    validation_report_reference: str
+    risk_reference: str
+    entry_timestamp: datetime | None
+    entry_price: float | None
+    current_price: float | None
+    quantity: int
+    stop_reference: str
+    target_reference: str
+    stop_price: float | None
+    target_price: float | None
+    gross_pnl: float
+    fees: float
+    slippage: float
+    net_pnl: float
+    unrealized_pnl: float
+    realized_pnl: float
+    blocking_reason: str
+    recovery_status: str
+    updated_at: datetime | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.instrument, RuntimeInstrument):
+            raise TypeError("instrument must be RuntimeInstrument")
+        for field_name in (
+            "trade_id",
+            "source",
+            "candidate_state",
+            "direction",
+            "status",
+            "lifecycle_state",
+            "risk_state",
+            "candidate_reference",
+            "vision_method_snapshot_reference",
+            "validation_report_reference",
+            "risk_reference",
+            "stop_reference",
+            "target_reference",
+            "blocking_reason",
+            "recovery_status",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise TypeError(f"{field_name} must be str")
+            object.__setattr__(self, field_name, value.strip() or "-")
+        for field_name in ("entry_timestamp", "updated_at"):
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(value, datetime):
+                raise TypeError(f"{field_name} must be datetime or None")
+        for field_name in ("entry_price", "current_price", "stop_price", "target_price"):
+            value = getattr(self, field_name)
+            if value is not None:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise TypeError(f"{field_name} must be numeric or None")
+                object.__setattr__(self, field_name, float(value))
+        if isinstance(self.quantity, bool) or not isinstance(self.quantity, int) or self.quantity < 0:
+            raise ValueError("quantity must be a non-negative integer")
+        for field_name in ("gross_pnl", "fees", "slippage", "net_pnl", "unrealized_pnl", "realized_pnl"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"{field_name} must be numeric")
+            object.__setattr__(self, field_name, float(value))
+
+@dataclass(frozen=True, slots=True)
 class RuntimeTradingSession:
     instrument: RuntimeInstrument
     exchange: str
@@ -441,6 +515,7 @@ class RuntimeSnapshot:
     vision_method_snapshot: VisionMethodSnapshot | None = None
     vision_method_validation_report: VisionMethodValidationReport | None = None
     vision_trade_candidate: TradeCandidate | None = None
+    canonical_paper_position: RuntimePaperPositionSnapshot | None = None
     decision_audit: "RuntimeDecisionAudit" | None = None
     runtime_diagnostics: RuntimeDiagnostics | None = None
     vision_ai_explanation: str | None = None
@@ -468,6 +543,8 @@ class RuntimeSnapshot:
             raise TypeError("vision_method_snapshot must be VisionMethodSnapshot or None")
         if self.vision_method_validation_report is not None and not isinstance(self.vision_method_validation_report, VisionMethodValidationReport):
             raise TypeError("vision_method_validation_report must be VisionMethodValidationReport or None")
+        if self.canonical_paper_position is not None and not isinstance(self.canonical_paper_position, RuntimePaperPositionSnapshot):
+            raise TypeError("canonical_paper_position must be RuntimePaperPositionSnapshot or None")
 
 
 @dataclass(frozen=True, slots=True)

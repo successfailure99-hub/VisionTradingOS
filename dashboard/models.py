@@ -588,6 +588,17 @@ class DashboardPositionView:
     exit_type: str = "-"
     mfe: float | None = None
     mae: float | None = None
+    trade_source: str = "-"
+    trade_id: str | None = None
+    candidate_state: str = "-"
+    risk_state: str = "-"
+    lifecycle_state: str = "-"
+    blocking_reason: str = "-"
+    recovery_status: str = "-"
+    gross_pnl: float | None = None
+    fees: float | None = None
+    slippage: float | None = None
+    net_pnl: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

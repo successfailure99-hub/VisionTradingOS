@@ -996,3 +996,68 @@ stage records:
 The dashboard reads this report from the runtime snapshot. It does not calculate
 Vision Method state, infer ownership, or keep an independent cache of the
 Vision pipeline.
+
+## VM-14 Paper Trading Runtime Unification
+
+VM-14 makes `SymbolRuntime` the canonical owner of Vision Method paper-trading
+state. The older plan-based `PaperTradingEngine` remains available for legacy
+trade-plan compatibility, but it is not the primary Vision Method paper-position
+source.
+
+Canonical Vision paper flow:
+
+```text
+VisionMethodSnapshot
+        |
+        v
+VisionMethodValidationReport
+        |
+        v
+TradeCandidate
+        |
+        v
+RiskManagementV2Snapshot
+        |
+        v
+TradeLifecycleV1
+        |
+        v
+PositionManagementV1
+        |
+        v
+RuntimePaperPositionSnapshot
+        |
+        v
+TradeJournalV1
+        |
+        v
+RuntimeSnapshot / Dashboard
+```
+
+Ownership after VM-14:
+
+| Concern | Canonical owner |
+| --- | --- |
+| Paper order request | TradeLifecycleV1 / ExecutionRuntimeV1 dry-run intent |
+| Fill simulation | ExecutionRuntimeV1 dry-run simulator |
+| Open paper position | PositionManagementV1, exposed by SymbolRuntime |
+| Stop/target processing | PositionManagementV1 via TradeLifecycleV1 price updates |
+| Position closure | TradeLifecycleV1 / PositionManagementV1 |
+| P&L | PositionManagementV1 |
+| Fees/slippage | Not modeled by Lifecycle V1; exposed as `0.0` on the canonical snapshot until VM-15+ defines durable accounting |
+| Journal write | TradeJournalV1 |
+| Dashboard status | RuntimeSnapshot.canonical_paper_position |
+| Restart recovery | `NOT_DURABLE` until journal persistence/recovery is completed |
+
+`RuntimePaperPositionSnapshot` is immutable and reference-based. It preserves the
+TradeCandidate, Vision Method snapshot, validation report, and risk references
+without duplicating the underlying snapshots.
+
+Every actionable Vision candidate is identified by a deterministic candidate
+identity. Repeated dashboard refreshes, duplicate candidate submissions, and
+reconnect callbacks reuse the existing lifecycle state instead of opening a
+second paper position.
+
+Dashboard position panels must prefer `RuntimeSnapshot.canonical_paper_position`
+whenever present. Legacy paper-trading status may still be displayed only when no
+canonical Vision paper position exists.
