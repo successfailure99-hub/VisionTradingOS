@@ -337,11 +337,19 @@ def _runtime_verification_health_rows(snapshots) -> tuple[DashboardRuntimeCompon
 def _verification_health_name(stage: str) -> str:
     normalized = str(stage).strip()
     mapping = {
+        "Reference Data": "Reference Data",
         "Daily Context": "Vision Daily Context",
+        "Opening Range": "Vision Opening Range",
+        "Structure": "Vision Structure",
+        "Liquidity": "Vision Liquidity",
+        "Structure Events": "Vision Structure Events",
+        "Setup Qualification": "Vision Setup Qualification",
+        "Option Confirmation": "Vision Option Confirmation",
         "Vision Method": "Vision Method Calculator",
         "Validation": "Vision Validation",
         "Runtime Adapter": "Vision Runtime Adapter",
         "TradeCandidate": "TradeCandidate",
+        "Paper Position": "Paper Position",
         "Paper Trade": "Vision Paper Handoff",
         "AI Explanation": "AI Explanation",
     }
@@ -352,12 +360,16 @@ def _verification_detail(stage) -> str:
     session = getattr(stage, "session", None)
     session_date = getattr(session, "trading_date", None)
     reason = getattr(stage, "blocking_reason", "-")
+    latency = getattr(stage, "latency_ms", None)
+    latency_text = "-" if latency is None else f"{latency:.0f}ms"
     parts = (
         f"Owner={_plain_text(getattr(stage, 'owner', None))}",
         f"Producer={_plain_text(getattr(stage, 'producer', None))}",
         f"Consumer={_plain_text(getattr(stage, 'consumer', None))}",
         f"Timestamp={_enum_text(getattr(stage, 'timestamp', None))}",
         f"Session={_enum_text(session_date)}",
+        f"Latency={latency_text}",
+        f"Recovery={_enum_text(getattr(stage, 'recovery_state', None))}",
         f"Reason={_enum_text(reason)}",
     )
     return " | ".join(parts)

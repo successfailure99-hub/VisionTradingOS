@@ -406,9 +406,11 @@ class RuntimeVerificationStage:
     session: RuntimeTradingSession | None
     status: str
     blocking_reason: str = "-"
+    latency_ms: float | None = None
+    recovery_state: str = "-"
 
     def __post_init__(self) -> None:
-        for field_name in ("stage", "owner", "producer", "consumer", "status", "blocking_reason"):
+        for field_name in ("stage", "owner", "producer", "consumer", "status", "blocking_reason", "recovery_state"):
             value = getattr(self, field_name)
             if not isinstance(value, str):
                 raise TypeError(f"{field_name} must be text")
@@ -417,6 +419,11 @@ class RuntimeVerificationStage:
             raise TypeError("timestamp must be datetime or None")
         if self.session is not None and not isinstance(self.session, RuntimeTradingSession):
             raise TypeError("session must be RuntimeTradingSession or None")
+        if self.latency_ms is not None:
+            value = self.latency_ms
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+                raise ValueError("latency_ms must be a non-negative number or None")
+            object.__setattr__(self, "latency_ms", float(value))
 
 
 @dataclass(frozen=True, slots=True)

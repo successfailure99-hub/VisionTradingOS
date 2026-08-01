@@ -1109,3 +1109,37 @@ Exactly-once completed journal writes are protected by stable `trade_id`, candid
 ### Security
 
 Durable journal records and checkpoints must not serialize access tokens, API keys, credentials, passwords, or broker secrets. The persistence layer rejects payloads containing sensitive field names before writing.
+
+## VM-16 Live Session Validation and Dashboard Finalization
+
+VM-16 certifies the existing Vision Method runtime as the dashboard-facing production workstation. It does not add trading logic, indicators, broker execution, AI rules, or strategy behavior.
+
+The canonical live-session sequence is:
+
+Application Startup
+-> Reference Data Warmup
+-> Daily Context
+-> Market Data
+-> Candle Engine
+-> Opening Range
+-> Structure
+-> Liquidity
+-> Structure Events
+-> Setup Qualification
+-> Option Confirmation
+-> Vision Method
+-> Validation
+-> Runtime Adapter
+-> TradeCandidate
+-> Risk
+-> Lifecycle
+-> Paper Position
+-> Journal
+-> AI Explanation
+-> Dashboard
+
+`SymbolRuntime` remains the single owner of the production runtime snapshot. Dashboard panels consume `RuntimeSnapshot` and its immutable child snapshots only. They must not calculate Vision Method state, risk, paper trading state, journal state, or AI explanation text.
+
+Each runtime verification row exposes owner, producer, consumer, timestamp, trading session, status, latency, recovery state, and blocking reason. This lets the dashboard show `READY`, `WAITING`, `BLOCKED`, or `FAILED` for every production stage without reading logs or maintaining a second cache.
+
+Session rollover requires the active runtime trading date to match CPR and Camarilla trading dates before Vision Method evaluation is considered ready. If daily context is missing or stale, the runtime reports `WAITING_DAILY_CONTEXT` and blocks Vision Method readiness until fresh daily context is available.

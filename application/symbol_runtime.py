@@ -1479,13 +1479,20 @@ class SymbolRuntime:
         )
 
     def _market_timestamp(self, latest_candle=None) -> datetime | None:
-        return (
-            self._latest_closed_candle_at
-            or self._latest_tick_at
-            or getattr(latest_candle, "end_time", None)
-            or getattr(self._last_tick, "timestamp", None)
-            or self._updated_at
+        market_events = tuple(
+            value
+            for value in (
+                self._latest_closed_candle_at,
+                self._latest_tick_at,
+                getattr(self._last_tick, "timestamp", None),
+                self._updated_at,
+            )
+            if isinstance(value, datetime)
         )
+        if market_events:
+            return max(market_events)
+        candle_end = getattr(latest_candle, "end_time", None)
+        return candle_end if isinstance(candle_end, datetime) else None
 
     def _runtime_trading_session(self, market_timestamp: datetime | None) -> RuntimeTradingSession:
         trading_date = market_timestamp.date() if market_timestamp is not None else None
@@ -1793,9 +1800,9 @@ class SymbolRuntime:
         runtime_session: RuntimeTradingSession,
     ) -> tuple[RuntimeVerificationStage, ...]:
         validation = self._vision_method_validation_report
+        method_snapshot = self._vision_method_snapshot
         candidate = self._vision_trade_candidate
         audit = self._decision_audit
-        strategy = self._vision_strategy_decision_v2
         risk = self.risk_management_v2_engine.snapshot
         lifecycle = self.trade_lifecycle_v1.snapshot()
         journal = self.trade_journal_v1_engine.snapshot()
@@ -1805,48 +1812,99 @@ class SymbolRuntime:
         option_snapshot_ready = option_status.snapshot_status == "READY"
         option_analytics_ready = option_status.analytics_status == "READY"
         option_reason = option_status.blocking_reason
-        option_confirmation_ready = (
-            self._vision_method_snapshot is not None
-            and getattr(getattr(self._vision_method_snapshot, "option_confirmation_context", None), "confirmation_state", None) is not None
-        )
-        reason = runtime_session.blocking_reason if not daily_ready else "-"
+        context_failures = {
+            getattr(failure, "stage", "").casefold(): failure
+            for failure in tuple(getattr(method_snapshot, "assembly_failures", ()) or ())
+        }
+
+        def context_ready(name: str, attr: str) -> bool:
+            return method_snapshot is not None and getattr(method_snapshot, attr, None) is not None and name.casefold() not in context_failures
+
+        def context_reason(name: str, default: str) -> str:
+            failure = context_failures.get(name.casefold())
+            if failure is None:
+                return default
+            return f"{failure.status.value}: {failure.failure_reason}"
+
+        def status_for(stage: str, ready: bool, detail: str) -> str:
+            if ready:
+                return "READY"
+            failure = context_failures.get(stage.casefold())
+            if failure is not None and getattr(getattr(failure, "status", None), "value", "") == "failed":
+                return "FAILED"
+            if audit is not None and audit.rejected_at == stage:
+                return "BLOCKED"
+            if detail.startswith("Stale") or detail.startswith("Missing") or "rejected" in detail.lower():
+                return "BLOCKED"
+            return "WAITING"
+
+        def latency_for(stage_timestamp: datetime | None) -> float | None:
+            if market_timestamp is None or stage_timestamp is None:
+                return None
+            market_aware = market_timestamp.tzinfo is not None and market_timestamp.utcoffset() is not None
+            stage_aware = stage_timestamp.tzinfo is not None and stage_timestamp.utcoffset() is not None
+            if market_aware != stage_aware:
+                return None
+            return max(0.0, (market_timestamp - stage_timestamp).total_seconds() * 1000.0)
+
+        def recovery_state() -> str:
+            recovery = self._paper_recovery
+            state = getattr(getattr(recovery, "status", None), "value", "NO_POSITION")
+            if self.trade_journal_v1_engine.checkpoint_exists:
+                return "CHECKPOINT_ACTIVE"
+            return str(state).upper()
+
+        daily_reason = runtime_session.blocking_reason if not daily_ready else "-"
         candidate_state = getattr(getattr(candidate, "candidate_state", None), "value", None)
         no_candidate_reason = getattr(candidate, "reason", None) or "No Vision trade candidate."
+        method_timestamp = getattr(method_snapshot, "timestamp", None)
+        validation_timestamp = getattr(validation, "timestamp", None)
+        candidate_timestamp = getattr(candidate, "timestamp", None)
+        journal_ready = getattr(journal, "latest_entry", None) is not None
+        lifecycle_ready = getattr(lifecycle, "processing_count", 0) > 0
+        paper_ready = canonical_position is not None
+
         rows = (
-            ("Market Data", "SymbolRuntime", "MarketDataEngine", "CandleEngine", self._last_tick is not None, "No accepted tick."),
-            ("Candle Engine", "SymbolRuntime", "CandleEngine", "Vision Method", self._latest_closed_candle_at is not None, "No closed candle."),
-            ("Daily Context", "SymbolRuntime", "CPR/Camarilla/ADR/VWAP", "Vision Level Context", daily_ready, reason),
-            ("Option Feed", "SymbolRuntime", "Live Option Chain Feed", "OptionChainSnapshot", option_status.feed_status == "READY", option_reason),
-            ("Option Snapshot", "SymbolRuntime", "OptionChainEngine", "OptionChainAnalytics", option_snapshot_ready, option_reason),
-            ("Option Analytics", "SymbolRuntime", "OptionChainAnalyticsEngine", "Vision Option Confirmation", option_analytics_ready, option_reason),
-            ("Vision Option Confirmation", "SymbolRuntime", "Vision Option Confirmation", "Vision Method Calculator", option_confirmation_ready, "Vision option confirmation unavailable."),
-            ("Vision Method", "SymbolRuntime", "Vision Method Calculator", "Vision Validation", self._vision_method_snapshot is not None, "Vision Method snapshot unavailable."),
-            ("Validation", "SymbolRuntime", "Vision Method Validation", "Runtime Adapter", validation is not None, "Validation report unavailable."),
-            ("Runtime Adapter", "SymbolRuntime", "VisionRuntimeAdapter", "TradeCandidate", candidate is not None, "TradeCandidate not evaluated."),
-            ("VISION_CANDIDATE", "SymbolRuntime", "VisionRuntimeAdapter", "RiskManagementV2", candidate is not None, "TradeCandidate not evaluated."),
-            ("TradeCandidate", "SymbolRuntime", "TradeCandidate", "RiskManagementV2", candidate_state in {"long", "short"}, no_candidate_reason),
-            ("RISK_HANDOFF", "SymbolRuntime", "RiskManagementV2", "TradeLifecycleV1", risk is not None, "Risk waiting for actionable candidate."),
-            ("Risk", "SymbolRuntime", "RiskManagementV2", "TradeLifecycleV1", risk is not None, "Risk waiting for actionable candidate."),
-            ("LIFECYCLE", "SymbolRuntime", "TradeLifecycleV1", "PositionManagementV1", getattr(lifecycle, "processing_count", 0) > 0, "Lifecycle waiting for approved risk."),
-            ("Lifecycle", "SymbolRuntime", "TradeLifecycleV1", "PositionManagementV1", getattr(lifecycle, "processing_count", 0) > 0, "Lifecycle waiting for approved risk."),
-            ("PAPER_POSITION", "SymbolRuntime", "PositionManagementV1", "TradeJournalV1", canonical_position is not None, "No canonical Vision paper position."),
-            ("Paper Trade", "SymbolRuntime", "PositionManagementV1", "TradeJournalV1", canonical_position is not None, "No canonical Vision paper position."),
-            ("PAPER_JOURNAL", "SymbolRuntime", "TradeJournalV1", "Dashboard", getattr(journal, "latest_entry", None) is not None, "No journal entry."),
-            ("Journal", "SymbolRuntime", "TradeJournalV1", "Dashboard", getattr(journal, "latest_entry", None) is not None, "No journal entry."),
-            ("AI Explanation", "SymbolRuntime", "Vision Method Explanation", "Dashboard AI", bool(self._vision_ai_explanation), "Vision explanation unavailable."),
+            ("Application Startup", "SymbolRuntime", "ApplicationLifecycle", "Reference Data", self._status is RuntimeStatus.RUNNING, market_timestamp, "Runtime not started."),
+            ("Market Data", "SymbolRuntime", "MarketDataEngine", "CandleEngine", self._last_tick is not None, getattr(self._last_tick, "timestamp", None), "No accepted tick."),
+            ("Reference Data", "SymbolRuntime", "Daily OHLC Warmup", "Daily Context", daily_ready, market_timestamp, daily_reason),
+            ("Candle Engine", "SymbolRuntime", "CandleEngine", "Vision Method", self._latest_closed_candle_at is not None, self._latest_closed_candle_at, "No closed candle."),
+            ("Daily Context", "SymbolRuntime", "CPR/Camarilla/ADR/VWAP", "Vision Level Context", daily_ready, market_timestamp, daily_reason),
+            ("Opening Range", "SymbolRuntime", "Vision Opening Range", "Vision Method Calculator", context_ready("Opening Range", "opening_range_context"), method_timestamp, context_reason("Opening Range", "Opening Range context unavailable.")),
+            ("Structure", "SymbolRuntime", "Vision Structure", "Vision Structure Events", context_ready("Structure", "structure_context"), method_timestamp, context_reason("Structure", "Structure context unavailable.")),
+            ("Liquidity", "SymbolRuntime", "Vision Liquidity", "Vision Structure Events", context_ready("Liquidity", "liquidity_context"), method_timestamp, context_reason("Liquidity", "Liquidity context unavailable.")),
+            ("Structure Events", "SymbolRuntime", "Vision Structure Events", "Setup Qualification", context_ready("Structure Events", "structure_event_context"), method_timestamp, context_reason("Structure Events", "Structure Events context unavailable.")),
+            ("Setup Qualification", "SymbolRuntime", "Vision Setup Qualification", "Option Confirmation", context_ready("Setup Qualification", "setup_qualification_context"), method_timestamp, context_reason("Setup Qualification", "Setup Qualification context unavailable.")),
+            ("Option Feed", "SymbolRuntime", "Live Option Chain Feed", "OptionChainSnapshot", option_status.feed_status == "READY", option_status.last_update, option_reason),
+            ("Option Snapshot", "SymbolRuntime", "OptionChainEngine", "OptionChainAnalytics", option_snapshot_ready, option_status.last_update, option_reason),
+            ("Option Analytics", "SymbolRuntime", "OptionChainAnalyticsEngine", "Vision Option Confirmation", option_analytics_ready, option_status.last_update, option_reason),
+            ("Option Confirmation", "SymbolRuntime", "Vision Option Confirmation", "Vision Method Calculator", context_ready("Option Confirmation", "option_confirmation_context"), method_timestamp, context_reason("Option Confirmation", "Vision option confirmation unavailable.")),
+            ("Vision Method", "SymbolRuntime", "Vision Method Calculator", "Vision Validation", method_snapshot is not None, method_timestamp, "Vision Method snapshot unavailable."),
+            ("Validation", "SymbolRuntime", "Vision Method Validation", "Runtime Adapter", validation is not None, validation_timestamp, "Validation report unavailable."),
+            ("Runtime Adapter", "SymbolRuntime", "VisionRuntimeAdapter", "TradeCandidate", candidate is not None, candidate_timestamp, "TradeCandidate not evaluated."),
+            ("TradeCandidate", "SymbolRuntime", "TradeCandidate", "RiskManagementV2", candidate_state in {"long", "short"}, candidate_timestamp, no_candidate_reason),
+            ("Risk", "SymbolRuntime", "RiskManagementV2", "TradeLifecycleV1", risk is not None, getattr(risk, "timestamp", None), "Risk waiting for actionable candidate."),
+            ("Lifecycle", "SymbolRuntime", "TradeLifecycleV1", "PositionManagementV1", lifecycle_ready, getattr(lifecycle, "timestamp", None), "Lifecycle waiting for approved risk."),
+            ("Paper Position", "SymbolRuntime", "PositionManagementV1", "TradeJournalV1", paper_ready, getattr(canonical_position, "updated_at", None), "No canonical Vision paper position."),
+            ("Paper Trade", "SymbolRuntime", "PositionManagementV1", "TradeJournalV1", paper_ready, getattr(canonical_position, "updated_at", None), "No canonical Vision paper position."),
+            ("Journal", "SymbolRuntime", "TradeJournalV1", "Dashboard", journal_ready, getattr(journal, "timestamp", None), "No journal entry."),
+            ("AI Explanation", "SymbolRuntime", "Vision Method Explanation", "Dashboard AI", bool(self._vision_ai_explanation), candidate_timestamp, "Vision explanation unavailable."),
         )
+        state = recovery_state()
         return tuple(
             RuntimeVerificationStage(
                 stage=stage,
                 owner=owner,
                 producer=producer,
                 consumer=consumer,
-                timestamp=market_timestamp,
+                timestamp=stage_timestamp,
                 session=runtime_session,
-                status="READY" if ready else ("BLOCKED" if audit is not None and audit.rejected_at == stage else "WAITING"),
+                status=status_for(stage, ready, detail),
                 blocking_reason="-" if ready else detail,
+                latency_ms=latency_for(stage_timestamp),
+                recovery_state=state,
             )
-            for stage, owner, producer, consumer, ready, detail in rows
+            for stage, owner, producer, consumer, ready, stage_timestamp, detail in rows
         )
 
     def _runtime_diagnostics(self, market_timestamp: datetime | None, runtime_session: RuntimeTradingSession) -> RuntimeDiagnostics:

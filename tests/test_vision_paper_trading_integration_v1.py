@@ -264,7 +264,7 @@ def test_end_to_end_vision_runtime_paper_journal_ai_dashboard_verification():
     assert open_stages["TradeCandidate"].status == "READY"
     assert open_stages["Risk"].status == "READY"
     assert open_stages["Lifecycle"].status == "READY"
-    assert open_stages["PAPER_POSITION"].producer == "PositionManagementV1"
+    assert open_stages["Paper Position"].producer == "PositionManagementV1"
     assert open_stages["Paper Trade"].producer == "PositionManagementV1"
     assert open_stages["Paper Trade"].status == "READY"
     assert open_stages["AI Explanation"].status == "READY"
