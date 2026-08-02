@@ -117,6 +117,10 @@ def _bootstrap_previous_session_only(
                 end_at=end_at,
             )
             if result.candles:
+                lifecycle.orchestrator.warm_up_candles(
+                    resolution.instrument.value,
+                    result.candles,
+                )
                 daily = derive_daily_ohlc(result.candles, instrument=resolution.instrument)
                 lifecycle.orchestrator.process_daily_ohlc(
                     resolution.instrument.value,

@@ -734,7 +734,7 @@ def test_futures_ticks_route_only_to_vwap_and_preserve_spot_candle_isolation():
     dashboard.shutdown()
 
 
-def test_reference_bootstrap_before_open_loads_previous_levels_without_current_history():
+def test_reference_bootstrap_before_open_loads_previous_levels_and_historical_candles():
     qt_app()
     historical_clients = []
     before_open = datetime(2026, 7, 15, 8, 55, tzinfo=ZoneInfo("Asia/Kolkata"))
@@ -751,8 +751,10 @@ def test_reference_bootstrap_before_open_loads_previous_levels_without_current_h
     for market in view.markets:
         assert market.cpr_pivot is not None
         assert market.camarilla_h3 is not None
-        assert market.latest_candle_close is None
-        assert market.vwap is None
+        assert market.latest_candle_close is not None
+        assert market.vwap is not None
+    assert len(dashboard.lifecycle.orchestrator.get_candle_history("NIFTY")) > 0
+    assert dashboard.main_window._vision_method_bridge.last_status.blocking_stage != "CANDLE_ENGINE"
     dashboard.shutdown()
 
 
