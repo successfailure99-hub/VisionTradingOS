@@ -5,7 +5,7 @@ Desktop reference-data bootstrap helpers.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from application.historical_warmup import HistoricalWarmupConfiguration, HistoricalWarmupCoordinator, derive_daily_ohlc
@@ -19,6 +19,7 @@ from core.enums.timeframe import TimeFrame
 IST = ZoneInfo("Asia/Kolkata")
 SESSION_OPEN = time(9, 15)
 SESSION_CLOSE = time(15, 30)
+DAILY_HISTORY_LOOKBACK_BUFFER_DAYS = 40
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +82,14 @@ def run_reference_data_bootstrap(
         configuration=HistoricalWarmupConfiguration(),
         clock=clock,
     )
+    active_trading_date = (bounds.current_start or now.astimezone(IST)).date()
+    completed_daily_results = _seed_completed_daily_history(
+        lifecycle=lifecycle,
+        historical_manager=manager,
+        resolutions=resolutions,
+        completed_session_date=bounds.previous_start.date(),
+        levels_trading_date=active_trading_date,
+    )
     if bounds.current_start is None or bounds.current_end is None:
         return _bootstrap_previous_session_only(
             lifecycle=lifecycle,
@@ -88,13 +97,12 @@ def run_reference_data_bootstrap(
             resolutions=resolutions,
             start_at=bounds.previous_start,
             end_at=bounds.previous_end,
-            levels_trading_date=now.astimezone(IST).date(),
+            levels_trading_date=active_trading_date,
+            seeded_daily_results=completed_daily_results,
         )
     return coordinator.warm_up(
         start_at=bounds.current_start,
         end_at=bounds.current_end,
-        previous_day_start_at=bounds.previous_start,
-        previous_day_end_at=bounds.previous_end,
     )
 
 
@@ -106,31 +114,91 @@ def _bootstrap_previous_session_only(
     start_at: datetime,
     end_at: datetime,
     levels_trading_date,
+    seeded_daily_results: dict[tuple[object, date], object] | None = None,
 ) -> tuple[object, ...]:
     results = []
+    seeded_daily_results = seeded_daily_results or {}
     for resolution in resolutions:
         try:
-            result = historical_manager.fetch_resolution(
-                resolution,
-                timeframe=TimeFrame.ONE_MINUTE,
-                start_at=start_at,
-                end_at=end_at,
-            )
-            if result.candles:
+            result = seeded_daily_results.get((resolution.instrument, start_at.date()))
+            if result is None:
+                result = historical_manager.fetch_resolution(
+                    resolution,
+                    timeframe=TimeFrame.ONE_MINUTE,
+                    start_at=start_at,
+                    end_at=end_at,
+                )
+                if result.candles:
+                    daily = derive_daily_ohlc(result.candles, instrument=resolution.instrument)
+                    lifecycle.orchestrator.process_daily_ohlc(
+                        resolution.instrument.value,
+                        daily,
+                        levels_trading_date=levels_trading_date,
+                    )
+            if getattr(result, "candles", ()):
                 lifecycle.orchestrator.warm_up_candles(
                     resolution.instrument.value,
                     result.candles,
-                )
-                daily = derive_daily_ohlc(result.candles, instrument=resolution.instrument)
-                lifecycle.orchestrator.process_daily_ohlc(
-                    resolution.instrument.value,
-                    daily,
-                    levels_trading_date=levels_trading_date,
                 )
             results.append(result)
         except Exception as exc:
             results.append(exc)
     return tuple(results)
+
+
+def _seed_completed_daily_history(
+    *,
+    lifecycle: ApplicationLifecycleManager,
+    historical_manager: ZerodhaHistoricalDataManager,
+    resolutions: tuple[ZerodhaInstrumentResolution, ...],
+    completed_session_date: date,
+    levels_trading_date: date,
+) -> dict[tuple[object, date], object]:
+    required_sessions = _required_daily_history_sessions(lifecycle)
+    seeded: dict[tuple[object, date], object] = {}
+    for resolution in resolutions:
+        collected = []
+        cursor = completed_session_date
+        attempts = 0
+        max_attempts = required_sessions + DAILY_HISTORY_LOOKBACK_BUFFER_DAYS
+        while len(collected) < required_sessions and attempts < max_attempts:
+            attempts += 1
+            if cursor.weekday() >= 5:
+                cursor -= timedelta(days=1)
+                continue
+            start_at = datetime.combine(cursor, SESSION_OPEN, tzinfo=IST)
+            end_at = datetime.combine(cursor, SESSION_CLOSE, tzinfo=IST)
+            try:
+                result = historical_manager.fetch_resolution(
+                    resolution,
+                    timeframe=TimeFrame.ONE_MINUTE,
+                    start_at=start_at,
+                    end_at=end_at,
+                )
+            except Exception:
+                cursor -= timedelta(days=1)
+                continue
+            seeded[(resolution.instrument, cursor)] = result
+            if result.candles:
+                try:
+                    daily = derive_daily_ohlc(result.candles, instrument=resolution.instrument)
+                except Exception:
+                    cursor -= timedelta(days=1)
+                    continue
+                collected.append((daily, cursor))
+            cursor -= timedelta(days=1)
+        for daily, trading_date in reversed(collected):
+            lifecycle.orchestrator.process_daily_ohlc(
+                resolution.instrument.value,
+                daily,
+                levels_trading_date=levels_trading_date if trading_date == completed_session_date else None,
+            )
+    return seeded
+
+
+def _required_daily_history_sessions(lifecycle: ApplicationLifecycleManager) -> int:
+    period = getattr(getattr(lifecycle.orchestrator, "configuration", None), "adr_period", 20)
+    return period if isinstance(period, int) and not isinstance(period, bool) and period > 0 else 20
 
 
 def _resolution_for(subscription: ZerodhaInstrumentSubscription) -> ZerodhaInstrumentResolution:

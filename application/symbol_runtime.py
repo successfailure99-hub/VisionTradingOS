@@ -627,7 +627,9 @@ class SymbolRuntime:
             self.candle_engine.get_history(self._core_instrument)
         )
         if accepted:
-            self._updated_at = accepted[-1].end_time
+            latest = accepted[-1]
+            self._refresh_adr(latest.end_time, latest.close)
+            self._updated_at = latest.end_time
         return accepted
 
     def get_candle_history(self, timeframe: str | TimeFrame | None = None) -> tuple[Candle, ...]:

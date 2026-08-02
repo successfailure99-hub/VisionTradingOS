@@ -488,12 +488,43 @@ def test_desktop_startup_bootstraps_reference_data_per_instrument_when_available
     )
     view = dashboard.main_window.refresh()
     assert len(historical_clients) == 1
-    assert len(historical_clients[0].calls) == 6
+    assert len(historical_clients[0].calls) == 63
     assert [market.symbol for market in view.markets] == ["NIFTY", "BANKNIFTY", "SENSEX"]
-    for market in view.markets:
+    runtime_snapshots = dashboard.lifecycle.orchestrator.snapshot().runtime_snapshots
+    for market, runtime_snapshot in zip(view.markets, runtime_snapshots):
         assert market.cpr_pivot is not None
         assert market.camarilla_h3 is not None
         assert market.vwap is not None
+        assert runtime_snapshot.adr_runtime.required_sessions == 20
+        assert runtime_snapshot.adr_runtime.valid_sessions == 20
+        assert runtime_snapshot.adr_runtime.state == "READY"
+    dashboard.shutdown()
+
+
+def test_weekend_reference_bootstrap_loads_adr_history_for_all_instruments():
+    qt_app()
+    ticker = FakeTickerClient()
+    historical_clients = []
+    sunday = datetime(2026, 7, 19, 9, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    dashboard = create_dashboard_application(
+        environ=live_env(LIVE_MARKET_DATA_AUTO_CONNECT="false"),
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: sunday),
+        historical_client_factory=historical_factory_factory(historical_clients),
+        ticker_client=ticker,
+        clock=lambda: sunday,
+    )
+
+    snapshots = dashboard.lifecycle.orchestrator.snapshot().runtime_snapshots
+
+    assert len(historical_clients) == 1
+    assert len(historical_clients[0].calls) == 60
+    assert [snapshot.symbol.value for snapshot in snapshots] == ["NIFTY", "BANKNIFTY", "SENSEX"]
+    for snapshot in snapshots:
+        assert snapshot.adr_runtime.required_sessions == 20
+        assert snapshot.adr_runtime.valid_sessions == 20
+        assert snapshot.adr_runtime.state == "READY"
+        assert snapshot.adr is not None
     dashboard.shutdown()
 
 
@@ -778,12 +809,16 @@ def test_reference_bootstrap_before_open_loads_previous_levels_and_historical_ca
         clock=lambda: before_open,
     )
     view = dashboard.main_window.refresh()
-    assert len(historical_clients[0].calls) == 3
-    for market in view.markets:
+    assert len(historical_clients[0].calls) == 60
+    runtime_snapshots = dashboard.lifecycle.orchestrator.snapshot().runtime_snapshots
+    for market, runtime_snapshot in zip(view.markets, runtime_snapshots):
         assert market.cpr_pivot is not None
         assert market.camarilla_h3 is not None
         assert market.latest_candle_close is not None
         assert market.vwap is not None
+        assert runtime_snapshot.adr_runtime.required_sessions == 20
+        assert runtime_snapshot.adr_runtime.valid_sessions == 20
+        assert runtime_snapshot.adr_runtime.state == "READY"
     assert len(dashboard.lifecycle.orchestrator.get_candle_history("NIFTY")) > 0
     assert dashboard.main_window._vision_method_bridge.last_status.blocking_stage != "CANDLE_ENGINE"
     dashboard.shutdown()
