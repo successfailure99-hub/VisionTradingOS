@@ -441,6 +441,8 @@ class RuntimeOptionChainStatus:
     atm_strike: float | None
     total_strikes: int
     blocking_reason: str = "-"
+    state: str = "WAITING_FOR_DATA"
+    recovery_condition: str = "-"
 
     def __post_init__(self) -> None:
         if not isinstance(self.instrument, RuntimeInstrument):
@@ -449,7 +451,7 @@ class RuntimeOptionChainStatus:
             raise TypeError("market_timestamp must be datetime or None")
         if self.trading_date is not None and (isinstance(self.trading_date, datetime) or not isinstance(self.trading_date, date)):
             raise TypeError("trading_date must be date or None")
-        for field_name in ("feed_status", "snapshot_status", "analytics_status", "blocking_reason"):
+        for field_name in ("feed_status", "snapshot_status", "analytics_status", "blocking_reason", "state", "recovery_condition"):
             value = getattr(self, field_name)
             if not isinstance(value, str):
                 raise TypeError(f"{field_name} must be text")
@@ -468,6 +470,37 @@ class RuntimeOptionChainStatus:
             object.__setattr__(self, "atm_strike", float(self.atm_strike))
         if isinstance(self.total_strikes, bool) or not isinstance(self.total_strikes, int) or self.total_strikes < 0:
             raise ValueError("total_strikes must be a non-negative integer")
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeADRStatus:
+    state: str
+    period: int
+    required_sessions: int
+    loaded_sessions: int
+    valid_sessions: int
+    latest_history_date: date | None
+    adr_trading_date: date | None
+    blocking_reason: str
+    recovery_condition: str
+    owner: str = "SymbolRuntime"
+    producer: str = "ADREngine"
+    consumer: str = "Vision Level Context"
+
+    def __post_init__(self) -> None:
+        for field_name in ("state", "blocking_reason", "recovery_condition", "owner", "producer", "consumer"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise TypeError(f"{field_name} must be text")
+            object.__setattr__(self, field_name, value.strip() or "-")
+        for field_name in ("period", "required_sessions", "loaded_sessions", "valid_sessions"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
+        for field_name in ("latest_history_date", "adr_trading_date"):
+            value = getattr(self, field_name)
+            if value is not None and (isinstance(value, datetime) or not isinstance(value, date)):
+                raise TypeError(f"{field_name} must be date or None")
 @dataclass(frozen=True, slots=True)
 class RuntimeJournalPersistenceSnapshot:
     persistence_status: str
@@ -479,6 +512,8 @@ class RuntimeJournalPersistenceSnapshot:
     journal_record_count: int | None
     checkpoint_trade_id: str | None = None
     recovery_reason: str = "-"
+    operational_state: str = "READY_EMPTY"
+    operational_message: str = "Ready - No completed Vision paper trades"
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -487,6 +522,8 @@ class RuntimeJournalPersistenceSnapshot:
             "recovery_status",
             "journal_blocking_reason",
             "recovery_reason",
+            "operational_state",
+            "operational_message",
         ):
             value = getattr(self, field_name)
             if not isinstance(value, str):
@@ -566,6 +603,8 @@ class RuntimeSnapshot:
     option_chain_snapshot: OptionChainSnapshot | None = None
     option_chain_analytics: OptionChainAnalyticsSnapshot | None = None
     option_chain_runtime: RuntimeOptionChainStatus | None = None
+    adr_runtime: RuntimeADRStatus | None = None
+    operational_readiness: OperationalReadinessSnapshot | None = None
 
     def __post_init__(self) -> None:
         if self.runtime_session is not None and not isinstance(self.runtime_session, RuntimeTradingSession):
@@ -581,6 +620,10 @@ class RuntimeSnapshot:
             raise TypeError("option_chain_analytics must be OptionChainAnalyticsSnapshot or None")
         if self.option_chain_runtime is not None and not isinstance(self.option_chain_runtime, RuntimeOptionChainStatus):
             raise TypeError("option_chain_runtime must be RuntimeOptionChainStatus or None")
+        if self.adr_runtime is not None and not isinstance(self.adr_runtime, RuntimeADRStatus):
+            raise TypeError("adr_runtime must be RuntimeADRStatus or None")
+        if self.operational_readiness is not None and not isinstance(self.operational_readiness, OperationalReadinessSnapshot):
+            raise TypeError("operational_readiness must be OperationalReadinessSnapshot or None")
         if self.vision_method_snapshot is not None and not isinstance(self.vision_method_snapshot, VisionMethodSnapshot):
             raise TypeError("vision_method_snapshot must be VisionMethodSnapshot or None")
         if self.vision_method_validation_report is not None and not isinstance(self.vision_method_validation_report, VisionMethodValidationReport):
@@ -603,6 +646,49 @@ class RuntimeDecisionAudit:
     risk_management_v2: RiskManagementV2Snapshot | None = None
     trade_lifecycle_v1: TradeLifecycleV1Snapshot | None = None
     vision_trade_candidate: TradeCandidate | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OperationalReadinessSnapshot:
+    overall_state: str
+    live_analysis_ready: bool
+    vision_evaluation_ready: bool
+    paper_trading_ready: bool
+    journal_ready: bool
+    broker_read_only_ready: bool
+    mandatory_blockers: tuple[str, ...]
+    optional_degradations: tuple[str, ...]
+    intentional_disabled_features: tuple[str, ...]
+    timestamp: datetime | None
+    session: RuntimeTradingSession | None
+    primary_blocker: str = "-"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.overall_state, str) or not self.overall_state.strip():
+            raise ValueError("overall_state must be non-empty text")
+        object.__setattr__(self, "overall_state", self.overall_state.strip())
+        for field_name in (
+            "live_analysis_ready",
+            "vision_evaluation_ready",
+            "paper_trading_ready",
+            "journal_ready",
+            "broker_read_only_ready",
+        ):
+            if not isinstance(getattr(self, field_name), bool):
+                raise TypeError(f"{field_name} must be bool")
+        for field_name in ("mandatory_blockers", "optional_degradations", "intentional_disabled_features"):
+            values = tuple(getattr(self, field_name))
+            for value in values:
+                if not isinstance(value, str):
+                    raise TypeError(f"{field_name} must contain text")
+            object.__setattr__(self, field_name, values)
+        if self.timestamp is not None and not isinstance(self.timestamp, datetime):
+            raise TypeError("timestamp must be datetime or None")
+        if self.session is not None and not isinstance(self.session, RuntimeTradingSession):
+            raise TypeError("session must be RuntimeTradingSession or None")
+        if not isinstance(self.primary_blocker, str):
+            raise TypeError("primary_blocker must be text")
+        object.__setattr__(self, "primary_blocker", self.primary_blocker.strip() or "-")
 
 
 @dataclass(frozen=True, slots=True)

@@ -89,6 +89,13 @@ class DashboardRuntimeView:
     broker_orders_count: int = 0
     broker_blocking_reason: str = "-"
     broker_mutation_mode: str = "DISABLED"
+    market_session_state: str = "-"
+    analysis_readiness: str = "-"
+    vision_readiness: str = "-"
+    paper_readiness: str = "-"
+    journal_persistence_status: str = "-"
+    broker_read_only_sync: str = "-"
+    primary_blocker: str = "-"
     component_health: tuple[DashboardRuntimeComponentHealthView, ...] = ()
     def __post_init__(self) -> None:
         rows = tuple(self.component_health)
@@ -577,6 +584,15 @@ class DashboardStrategyView:
     plan_valid_until: datetime | None
     risk_reason: str
     latest_order_status: str
+    candidate_state: str = "-"
+    candidate_direction: str = "-"
+    candidate_quality: str = "-"
+    candidate_validation: str = "-"
+    candidate_reference: str = "-"
+    candidate_reason: str = "-"
+    candidate_source: str = "VISION_METHOD"
+    strategy_source: str = "-"
+    recovered_position_note: str = "-"
 
 
 @dataclass(frozen=True, slots=True)

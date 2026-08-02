@@ -125,11 +125,12 @@ class BrokerAccountSyncCoordinator:
             return stale
 
     def snapshot(self, *, timestamp: datetime | None = None) -> BrokerAccountSnapshot:
+        explicit_timestamp = timestamp is not None
         now = _aware(timestamp or _now(), "timestamp")
         with self._lock:
             if self._last_snapshot is None:
                 return self._status_snapshot(now, self._current_session_state(), "Broker account sync has not refreshed yet.")
-            if self._last_snapshot.latest_refresh_timestamp is None:
+            if not explicit_timestamp or self._last_snapshot.latest_refresh_timestamp is None:
                 return self._last_snapshot
             if _age(self._last_snapshot.latest_refresh_timestamp, now) > self._policy.stale_after_seconds:
                 return self.mark_stale(timestamp=now)

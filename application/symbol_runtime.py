@@ -102,6 +102,8 @@ from engines.vwap.vwap_engine import VWAPEngine
 
 from application.enums import RuntimeInstrument, RuntimeStatus
 from application.models import (
+    OperationalReadinessSnapshot,
+    RuntimeADRStatus,
     RuntimeConfiguration,
     RuntimeDecisionAudit,
     RuntimeDiagnostics,
@@ -1051,6 +1053,7 @@ class SymbolRuntime:
             option_chain_snapshot=self.option_chain_engine.snapshot,
             option_chain_analytics=self._option_chain_analytics,
             option_chain_runtime=self._option_chain_runtime_status(market_timestamp, runtime_session),
+            adr_runtime=self._adr_runtime_status(runtime_session),
             market_context=self.market_context_engine.state,
             moving_average_context=self.moving_average_context_engine.state,
             momentum_context=self.momentum_context_engine.state,
@@ -1099,6 +1102,7 @@ class SymbolRuntime:
             vision_ai_explanation=self._vision_ai_explanation,
             runtime_session=runtime_session,
             runtime_verification_report=self._runtime_verification_report(market_timestamp, runtime_session),
+            operational_readiness=self._operational_readiness_snapshot(market_timestamp, runtime_session),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
@@ -1587,43 +1591,88 @@ class SymbolRuntime:
         if age > _OPTION_CHAIN_MAX_AGE_SECONDS:
             raise ValueError("OptionChainAnalyticsSnapshot is stale for the runtime timestamp.")
 
+    def _adr_runtime_status(self, runtime_session: RuntimeTradingSession) -> RuntimeADRStatus:
+        diagnostics = self.adr_engine.snapshot()
+        period = int(getattr(diagnostics, "period", self._configuration.adr_period) or self._configuration.adr_period)
+        history = tuple(self._daily_ohlc_history)
+        valid_history = tuple(item for item in history if getattr(item, "trading_date", None) is not None)
+        latest_history_date = max((item.trading_date for item in valid_history), default=None)
+        snapshot = self.adr_engine.state
+        if snapshot is not None:
+            state = "READY"
+            reason = "-"
+            recovery = "-"
+        elif len(valid_history) < period:
+            state = "INSUFFICIENT_HISTORY"
+            reason = f"Insufficient history - {len(valid_history)}/{period} completed sessions."
+            recovery = f"Load {period - len(valid_history)} more completed daily sessions."
+        elif getattr(diagnostics, "last_error", None):
+            state = "INVALID_HISTORY"
+            reason = str(diagnostics.last_error)
+            recovery = "Load valid completed DailyOHLC history."
+        else:
+            state = "LOADING_HISTORY"
+            reason = "ADR waiting for runtime refresh."
+            recovery = "Process the next market tick or daily context refresh."
+        return RuntimeADRStatus(
+            state=state,
+            period=period,
+            required_sessions=period,
+            loaded_sessions=len(history),
+            valid_sessions=len(valid_history),
+            latest_history_date=latest_history_date,
+            adr_trading_date=getattr(snapshot, "trading_date", None),
+            blocking_reason=reason,
+            recovery_condition=recovery,
+        )
+
     def _option_chain_runtime_status(
         self,
         market_timestamp: datetime | None,
         runtime_session: RuntimeTradingSession,
     ) -> RuntimeOptionChainStatus:
         snapshot = self.option_chain_engine.snapshot
-        state = self.option_chain_engine.state
+        option_state = self.option_chain_engine.state
         analytics = self._option_chain_analytics
         last_update = getattr(snapshot, "timestamp", None)
         age = None
         reason = self._option_chain_last_error or "-"
         if market_timestamp is not None and last_update is not None:
             age = max(0.0, (market_timestamp - last_update).total_seconds())
+        recovery = "-"
         if snapshot is None:
-            feed_status = "WAITING"
-            snapshot_status = "WAITING"
-            analytics_status = "WAITING"
+            feed_status = "WAITING_FOR_OPTION_TICKS"
+            snapshot_status = "WAITING_FOR_DATA"
+            analytics_status = "NOT_APPLICABLE"
+            operational_state = "WAITING_FOR_OPTION_TICKS"
             reason = reason if reason != "-" else "Option-chain snapshot unavailable."
+            recovery = "Receive a complete live option-chain snapshot."
         elif age is not None and age > _OPTION_CHAIN_MAX_AGE_SECONDS:
             feed_status = "STALE"
             snapshot_status = "STALE"
-            analytics_status = "WAITING" if analytics is None else "STALE"
+            analytics_status = "WAITING_FOR_ANALYTICS" if analytics is None else "STALE"
+            operational_state = "STALE"
             reason = reason if reason != "-" else "Option-chain snapshot is stale."
+            recovery = "Receive a fresh option-chain snapshot and analytics for the active session."
         elif runtime_session.trading_date is not None and snapshot.timestamp.date() != runtime_session.trading_date:
             feed_status = "BLOCKED"
             snapshot_status = "SESSION_MISMATCH"
-            analytics_status = "WAITING" if analytics is None else "SESSION_MISMATCH"
+            analytics_status = "WAITING_FOR_ANALYTICS" if analytics is None else "SESSION_MISMATCH"
+            operational_state = "SESSION_MISMATCH"
             reason = reason if reason != "-" else "Option-chain snapshot belongs to a different trading session."
+            recovery = "Discard stale session data and collect active-session option-chain data."
         elif analytics is None:
             feed_status = "READY"
             snapshot_status = "READY"
-            analytics_status = "WAITING"
+            analytics_status = "WAITING_FOR_ANALYTICS"
+            operational_state = "WAITING_FOR_ANALYTICS"
             reason = reason if reason != "-" else "Option-chain analytics unavailable."
+            recovery = "Run OptionChainAnalytics for the canonical snapshot."
         else:
             feed_status = "READY"
             snapshot_status = "READY"
             analytics_status = "READY"
+            operational_state = "READY"
         return RuntimeOptionChainStatus(
             instrument=self._instrument,
             market_timestamp=market_timestamp,
@@ -1634,9 +1683,11 @@ class SymbolRuntime:
             last_update=last_update,
             age_seconds=age,
             expiry=getattr(snapshot, "expiry_date", None),
-            atm_strike=getattr(state, "atm_strike", None),
-            total_strikes=getattr(state, "strike_count", 0) if state is not None else 0,
+            atm_strike=getattr(option_state, "atm_strike", None),
+            total_strikes=getattr(option_state, "strike_count", 0) if option_state is not None else 0,
             blocking_reason=reason,
+            state=operational_state,
+            recovery_condition=recovery,
         )
 
     def _canonical_lifecycle_position(self):
@@ -1783,6 +1834,19 @@ class SymbolRuntime:
         recovery = self._paper_recovery
         checkpoint = getattr(recovery, "checkpoint", None) if recovery is not None else None
         checkpoint_exists = self.trade_journal_v1_engine.checkpoint_exists
+        if journal.last_error:
+            operational_state = "PERSISTENCE_ERROR"
+            operational_message = f"Persistence error - {journal.last_error}"
+        elif recovery is not None and getattr(getattr(recovery, "status", None), "value", "") == "BLOCKED":
+            reason = getattr(recovery, "reason", "Recovery blocked.")
+            operational_state = "RECOVERY_BLOCKED"
+            operational_message = f"Recovery blocked - {reason}"
+        elif journal.trade_count > 0:
+            operational_state = "READY_WITH_RECORDS"
+            operational_message = f"Ready - {journal.trade_count} completed Vision paper trades"
+        else:
+            operational_state = "READY_EMPTY"
+            operational_message = "Ready - No completed Vision paper trades"
         return RuntimeJournalPersistenceSnapshot(
             persistence_status="READY" if journal.ready else "ERROR",
             active_checkpoint_status="ACTIVE" if checkpoint_exists else "NONE",
@@ -1793,7 +1857,67 @@ class SymbolRuntime:
             journal_record_count=journal.trade_count,
             checkpoint_trade_id=getattr(checkpoint, "trade_id", None),
             recovery_reason=getattr(recovery, "reason", "-"),
+            operational_state=operational_state,
+            operational_message=operational_message,
         )
+    def _operational_readiness_snapshot(
+        self,
+        market_timestamp: datetime | None,
+        runtime_session: RuntimeTradingSession,
+    ) -> OperationalReadinessSnapshot:
+        adr_status = self._adr_runtime_status(runtime_session)
+        vwap_source = self._vwap_source_snapshot()
+        option_status = self._option_chain_runtime_status(market_timestamp, runtime_session)
+        journal = self._journal_persistence_snapshot()
+        mandatory_blockers = []
+        optional_degradations = []
+        disabled = ["Broker mutation disabled"]
+        candle_ready = bool(self.candle_engine.get_history(self._core_instrument) or self.candle_engine.get_current(self._core_instrument))
+        daily_ready = runtime_session.status == "READY"
+        if not candle_ready:
+            mandatory_blockers.append("Candle warmup unavailable")
+        if not daily_ready:
+            mandatory_blockers.append(runtime_session.blocking_reason)
+        if adr_status.state != "READY":
+            optional_degradations.append(f"ADR {adr_status.state}: {adr_status.blocking_reason}")
+        if not vwap_source.ready:
+            optional_degradations.append(f"VWAP {vwap_source.state}: {vwap_source.message}")
+        if option_status.state != "READY":
+            optional_degradations.append(f"Option Chain {option_status.state}: {option_status.blocking_reason}")
+        journal_ready = journal.operational_state in {"READY_EMPTY", "READY_WITH_RECORDS"}
+        if not journal_ready:
+            mandatory_blockers.append(journal.operational_message)
+        live_analysis_ready = candle_ready and daily_ready
+        vision_ready = self._vision_method_snapshot is not None or live_analysis_ready
+        paper_ready = journal_ready and self.trade_lifecycle_v1.snapshot().running
+        broker_ready = False
+        if mandatory_blockers:
+            overall = "BLOCKED"
+        elif runtime_session.trading_date is None:
+            overall = "STARTING"
+        elif optional_degradations:
+            overall = "DEGRADED"
+        elif self._vision_trade_candidate is not None:
+            overall = "READY_FOR_PAPER"
+        elif vision_ready:
+            overall = "READY_FOR_VISION"
+        else:
+            overall = "READY_FOR_ANALYSIS"
+        return OperationalReadinessSnapshot(
+            overall_state=overall,
+            live_analysis_ready=live_analysis_ready,
+            vision_evaluation_ready=vision_ready,
+            paper_trading_ready=paper_ready,
+            journal_ready=journal_ready,
+            broker_read_only_ready=broker_ready,
+            mandatory_blockers=tuple(item for item in mandatory_blockers if item and item != "-"),
+            optional_degradations=tuple(optional_degradations),
+            intentional_disabled_features=tuple(disabled),
+            timestamp=market_timestamp,
+            session=runtime_session,
+            primary_blocker=mandatory_blockers[0] if mandatory_blockers else "-",
+        )
+
     def _runtime_verification_report(
         self,
         market_timestamp: datetime | None,
@@ -1827,6 +1951,10 @@ class SymbolRuntime:
             return f"{failure.status.value}: {failure.failure_reason}"
 
         def status_for(stage: str, ready: bool, detail: str) -> str:
+            if detail.startswith("NO_ACTIONABLE_CANDIDATE"):
+                return "NO_ACTIONABLE_CANDIDATE"
+            if detail.startswith("NOT_APPLICABLE"):
+                return "NOT_APPLICABLE"
             if ready:
                 return "READY"
             failure = context_failures.get(stage.casefold())
@@ -1857,6 +1985,10 @@ class SymbolRuntime:
         daily_reason = runtime_session.blocking_reason if not daily_ready else "-"
         candidate_state = getattr(getattr(candidate, "candidate_state", None), "value", None)
         no_candidate_reason = getattr(candidate, "reason", None) or "No Vision trade candidate."
+        actionable_candidate = candidate_state in {"long", "short"}
+        trade_candidate_detail = "-" if actionable_candidate else f"NO_ACTIONABLE_CANDIDATE - {no_candidate_reason}"
+        risk_detail = "Risk waiting for actionable candidate." if actionable_candidate else "NOT_APPLICABLE - No actionable candidate."
+        lifecycle_detail = "Lifecycle waiting for approved risk." if risk is not None else "NOT_APPLICABLE - Risk was not invoked."
         method_timestamp = getattr(method_snapshot, "timestamp", None)
         validation_timestamp = getattr(validation, "timestamp", None)
         candidate_timestamp = getattr(candidate, "timestamp", None)
@@ -1882,9 +2014,9 @@ class SymbolRuntime:
             ("Vision Method", "SymbolRuntime", "Vision Method Calculator", "Vision Validation", method_snapshot is not None, method_timestamp, "Vision Method snapshot unavailable."),
             ("Validation", "SymbolRuntime", "Vision Method Validation", "Runtime Adapter", validation is not None, validation_timestamp, "Validation report unavailable."),
             ("Runtime Adapter", "SymbolRuntime", "VisionRuntimeAdapter", "TradeCandidate", candidate is not None, candidate_timestamp, "TradeCandidate not evaluated."),
-            ("TradeCandidate", "SymbolRuntime", "TradeCandidate", "RiskManagementV2", candidate_state in {"long", "short"}, candidate_timestamp, no_candidate_reason),
-            ("Risk", "SymbolRuntime", "RiskManagementV2", "TradeLifecycleV1", risk is not None, getattr(risk, "timestamp", None), "Risk waiting for actionable candidate."),
-            ("Lifecycle", "SymbolRuntime", "TradeLifecycleV1", "PositionManagementV1", lifecycle_ready, getattr(lifecycle, "timestamp", None), "Lifecycle waiting for approved risk."),
+            ("TradeCandidate", "SymbolRuntime", "TradeCandidate", "RiskManagementV2", candidate is not None and actionable_candidate, candidate_timestamp, trade_candidate_detail),
+            ("Risk", "SymbolRuntime", "RiskManagementV2", "TradeLifecycleV1", risk is not None, getattr(risk, "timestamp", None), risk_detail),
+            ("Lifecycle", "SymbolRuntime", "TradeLifecycleV1", "PositionManagementV1", lifecycle_ready, getattr(lifecycle, "timestamp", None), lifecycle_detail),
             ("Paper Position", "SymbolRuntime", "PositionManagementV1", "TradeJournalV1", paper_ready, getattr(canonical_position, "updated_at", None), "No canonical Vision paper position."),
             ("Paper Trade", "SymbolRuntime", "PositionManagementV1", "TradeJournalV1", paper_ready, getattr(canonical_position, "updated_at", None), "No canonical Vision paper position."),
             ("Journal", "SymbolRuntime", "TradeJournalV1", "Dashboard", journal_ready, getattr(journal, "timestamp", None), "No journal entry."),

@@ -19,11 +19,13 @@ class StrategyPanel(QGroupBox):
         layout.setSpacing(12)
         layout.setAlignment(Qt.AlignTop)
         self._fields = (
+            "Candidate State", "Candidate Direction", "Candidate Quality", "Candidate Validation",
+            "Candidate Reference", "Candidate Reason", "Candidate Source",
             "Decision", "Direction", "Setup", "Entry", "Stop",
             "Target", "Block", "Risk", "Approved Qty",
             "Risk Amount", "Reward/Risk", "Entry Price", "Stop Price",
             "Target Price", "Lot Size", "Approved Lots", "Plan Status",
-            "Plan Valid Until", "Risk Reason", "Trade Plan",
+            "Plan Valid Until", "Risk Reason", "Trade Plan", "Strategy Source", "Recovery",
         )
         grid = FieldGrid(self._fields)
         layout.addWidget(grid)
@@ -36,6 +38,13 @@ class StrategyPanel(QGroupBox):
 
     def render(self, view: DashboardStrategyView) -> None:
         values = {
+            "Candidate State": view.candidate_state,
+            "Candidate Direction": view.candidate_direction,
+            "Candidate Quality": view.candidate_quality,
+            "Candidate Validation": view.candidate_validation,
+            "Candidate Reference": view.candidate_reference,
+            "Candidate Reason": view.candidate_reason,
+            "Candidate Source": view.candidate_source,
             "Decision": view.decision,
             "Direction": view.direction,
             "Setup": view.setup_quality,
@@ -56,6 +65,8 @@ class StrategyPanel(QGroupBox):
             "Plan Valid Until": formatters.timestamp(view.plan_valid_until),
             "Risk Reason": view.risk_reason,
             "Trade Plan": view.latest_order_status,
+            "Strategy Source": view.strategy_source,
+            "Recovery": view.recovered_position_note,
         }
         for field, value in values.items():
             if isinstance(self._labels[field], StatusBadge):

@@ -189,13 +189,17 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
     replay = getattr(orchestrator, "historical_replay", None)
     latency = tuple(getattr(validation, "latency_summaries", ()) or ())
     p95 = max((item.p95_ms for item in latency), default=None)
+    runtime_snapshots = tuple(getattr(orchestrator, "runtime_snapshots", ()) or ())
+    operational = next((getattr(snapshot, "operational_readiness", None) for snapshot in runtime_snapshots if getattr(snapshot, "operational_readiness", None) is not None), None)
+    journal_persistence = next((getattr(snapshot, "journal_persistence", None) for snapshot in runtime_snapshots if getattr(snapshot, "journal_persistence", None) is not None), None)
+    canonical_journal_ready = bool(journal_persistence is not None and getattr(journal_persistence, "operational_state", "") in {"READY_EMPTY", "READY_WITH_RECORDS"})
     return DashboardRuntimeView(
         application_status=_enum_text(lifecycle_snapshot.status),
         broker_mode=_enum_text(orchestrator.broker_mode),
         safety_mode=_enum_text(orchestrator.safety_mode),
         configured_instruments=tuple(_enum_text(instrument) for instrument in orchestrator.configured_instruments),
         market_data_ready=orchestrator.shared_market_data_ready,
-        trade_journal_ready=orchestrator.shared_trade_journal_ready,
+        trade_journal_ready=canonical_journal_ready,
         start_count=lifecycle_snapshot.start_count,
         stop_count=lifecycle_snapshot.stop_count,
         restart_count=lifecycle_snapshot.restart_count,
@@ -237,6 +241,13 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
         broker_orders_count=len(tuple(getattr(getattr(orchestrator, "broker_account", None), "orders", ()) or ())),
         broker_blocking_reason=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "blocking_reason", None)),
         broker_mutation_mode=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "mutation_mode", None)),
+        market_session_state=_enum_text(getattr(getattr(operational, "session", None), "status", None)),
+        analysis_readiness=_enum_text(getattr(operational, "overall_state", None)),
+        vision_readiness="READY" if bool(getattr(operational, "vision_evaluation_ready", False)) else "WAITING_FOR_DATA",
+        paper_readiness="READY" if bool(getattr(operational, "paper_trading_ready", False)) else "NOT_APPLICABLE",
+        journal_persistence_status=_enum_text(getattr(journal_persistence, "operational_state", None)),
+        broker_read_only_sync="READY" if bool(getattr(operational, "broker_read_only_ready", False)) else "AUTH_REQUIRED",
+        primary_blocker=_enum_text(getattr(operational, "primary_blocker", None)),
         component_health=_runtime_component_health(orchestrator),
     )
 
@@ -259,10 +270,10 @@ def _runtime_component_health(orchestrator) -> tuple[DashboardRuntimeComponentHe
         ready_row("Market Data", bool(getattr(orchestrator, "shared_market_data_ready", False))),
         ready_row("CPR", any_snapshot("cpr")),
         ready_row("Camarilla", any_snapshot("camarilla")),
-        ready_row("VWAP", any_snapshot("vwap")),
-        ready_row("ADR", any_snapshot("adr"), _adr_health_detail(snapshots)),
+        _vwap_health_row(snapshots),
+        _adr_health_row(snapshots),
         ready_row("Price Action", any_snapshot("price_action")),
-        ready_row("Option Chain", any_snapshot("option_chain")),
+        _option_chain_health_row(snapshots),
         ready_row("TradingView Evidence", any_snapshot("tradingview_evidence")),
         ready_row("Fusion", any_snapshot("multi_timeframe_evidence")),
         ready_row("Market State", any_snapshot("market_state")),
@@ -271,10 +282,12 @@ def _runtime_component_health(orchestrator) -> tuple[DashboardRuntimeComponentHe
         ready_row("AI Reasoning", any_snapshot("ai_reasoning_v2") or any_snapshot("ai_reasoning")),
         ready_row("Strategy", any_snapshot("strategy_decision_v2") or any_snapshot("strategy")),
         ready_row("Risk", any_snapshot("risk_management_v2") or any_snapshot("risk")),
-        ready_row("Lifecycle", any_snapshot("trade_lifecycle_v1") or bool(snapshots)),
-        ready_row("Journal", any_snapshot("trade_journal_v1") or bool(getattr(orchestrator, "shared_trade_journal_ready", False))),
+        _lifecycle_health_row(snapshots),
+        _journal_health_row(snapshots),
         *_broker_account_health_rows(orchestrator),
+        _replay_health_row(orchestrator),
         *_runtime_verification_health_rows(snapshots),
+        _journal_health_row(snapshots),
         *_vision_runtime_health_rows(snapshots),
         *_runtime_diagnostic_rows(snapshots),
     )
@@ -322,39 +335,104 @@ def _adr_health_detail(snapshots) -> str:
     return f"WAITING_HISTORY: required={period}" if period else "WAITING_HISTORY"
 
 
+def _adr_health_row(snapshots) -> DashboardRuntimeComponentHealthView:
+    status = next((getattr(snapshot, "adr_runtime", None) for snapshot in snapshots if getattr(snapshot, "adr_runtime", None) is not None), None)
+    if status is None:
+        if any(getattr(snapshot, "adr", None) is not None for snapshot in snapshots):
+            return DashboardRuntimeComponentHealthView("ADR", "Ready", "AVAILABLE")
+        return DashboardRuntimeComponentHealthView("ADR", "WAITING_FOR_DATA", "ADR runtime status unavailable.")
+    detail = (
+        f"{status.blocking_reason} | "
+        f"Loaded={status.valid_sessions}/{status.required_sessions} | "
+        f"LatestHistory={_enum_text(status.latest_history_date)} | "
+        f"Recovery={status.recovery_condition}"
+    )
+    return DashboardRuntimeComponentHealthView(
+        "ADR",
+        status.state,
+        detail,
+        owner=status.owner,
+        producer=status.producer,
+        consumer=status.consumer,
+    )
+
+
+def _vwap_health_row(snapshots) -> DashboardRuntimeComponentHealthView:
+    source = next((getattr(snapshot, "vwap_source", None) for snapshot in snapshots if getattr(snapshot, "vwap_source", None) is not None), None)
+    if source is None:
+        return DashboardRuntimeComponentHealthView("VWAP", "WAITING_FOR_DATA", "VWAP source status unavailable.")
+    if source.ready:
+        state = "READY"
+        detail = f"{source.message} | Source={source.source_type} | Volume={source.cumulative_volume}"
+    else:
+        state = "WAITING_FOR_DATA" if source.state in {"Unavailable", "-"} else source.state.upper()
+        detail = source.message or source.unavailable_reason or "VWAP source unavailable."
+    return DashboardRuntimeComponentHealthView("VWAP", state, detail, owner="SymbolRuntime", producer="VWAPEngine", consumer="Vision Level Context")
+
+
+def _option_chain_health_row(snapshots) -> DashboardRuntimeComponentHealthView:
+    status = next((getattr(snapshot, "option_chain_runtime", None) for snapshot in snapshots if getattr(snapshot, "option_chain_runtime", None) is not None), None)
+    if status is None:
+        return DashboardRuntimeComponentHealthView("Option Chain", "DISABLED", "Live option-chain runtime is not configured.")
+    detail = f"{status.blocking_reason} | Snapshot={status.snapshot_status} | Analytics={status.analytics_status} | Recovery={status.recovery_condition}"
+    return DashboardRuntimeComponentHealthView("Option Chain", status.state, detail, owner="SymbolRuntime", producer="OptionChainRuntime", consumer="Vision Option Confirmation", timestamp=status.last_update)
+
+
+def _journal_health_row(snapshots) -> DashboardRuntimeComponentHealthView:
+    persistence = next((getattr(snapshot, "journal_persistence", None) for snapshot in snapshots if getattr(snapshot, "journal_persistence", None) is not None), None)
+    if persistence is None:
+        return DashboardRuntimeComponentHealthView("Journal", "WAITING_FOR_DATA", "TradeJournalV1 persistence status unavailable.")
+    return DashboardRuntimeComponentHealthView("Journal", persistence.operational_state, persistence.operational_message, owner="SymbolRuntime", producer="TradeJournalV1", consumer="Dashboard", timestamp=persistence.journal_write_timestamp)
+
+
+def _lifecycle_health_row(snapshots) -> DashboardRuntimeComponentHealthView:
+    stage = next((stage for snapshot in snapshots for stage in tuple(getattr(snapshot, "runtime_verification_report", ()) or ()) if getattr(stage, "stage", None) == "Lifecycle"), None)
+    if stage is None:
+        return DashboardRuntimeComponentHealthView("Lifecycle", "Ready" if snapshots else "NOT_APPLICABLE", "Lifecycle snapshot available." if snapshots else "Lifecycle has not been invoked.")
+    return DashboardRuntimeComponentHealthView("Lifecycle", _enum_text(getattr(stage, "status", None)), _verification_detail(stage), owner=stage.owner, producer=stage.producer, consumer=stage.consumer, timestamp=stage.timestamp)
+
+
+def _replay_health_row(orchestrator) -> DashboardRuntimeComponentHealthView:
+    replay = getattr(orchestrator, "historical_replay", None)
+    state = _enum_text(getattr(replay, "lifecycle_state", None))
+    mode = _enum_text(getattr(replay, "mode", None))
+    if mode in {"Off", "OFF", "-"}:
+        status = "DISABLED"
+        detail = "Historical replay is disabled by configuration."
+    elif state in {"Idle", "IDLE"}:
+        status = "NOT_APPLICABLE"
+        detail = "No replay session is running."
+    else:
+        status = state.upper()
+        detail = f"Mode={mode}"
+    return DashboardRuntimeComponentHealthView("Replay", status, detail, owner="ApplicationOrchestrator", producer="HistoricalMarketReplayEngine", consumer="Dashboard")
+
+
 def _vision_runtime_health_rows(snapshots) -> tuple[DashboardRuntimeComponentHealthView, ...]:
+    if any(tuple(getattr(snapshot, "runtime_verification_report", ()) or ()) for snapshot in snapshots):
+        return ()
     rows = []
     for snapshot in snapshots:
         prefix = _enum_text(getattr(snapshot, "symbol", None))
-        candidate = getattr(snapshot, "vision_trade_candidate", None)
-        audit = getattr(snapshot, "decision_audit", None)
         diagnostics = getattr(snapshot, "runtime_diagnostics", None)
-        blocked = bool(getattr(audit, "rejected", False))
-        reason = getattr(audit, "reason", "-") if audit is not None else "-"
+        reason = _vision_health_detail("-", diagnostics)
+        candidate = getattr(snapshot, "vision_trade_candidate", None)
         candidate_ready = candidate is not None
-        strategy = getattr(snapshot, "strategy_decision_v2", None)
-        risk = getattr(snapshot, "risk_management_v2", None)
-        diagnostics_detail = _vision_health_detail(reason, diagnostics)
-        daily_ready = getattr(snapshot, "cpr", None) is not None and getattr(snapshot, "camarilla", None) is not None
-        pipeline_ready = candidate_ready
-        rows.extend(
-            (
-                _health_row(f"{prefix} Vision Daily Context", daily_ready, diagnostics_detail),
-                _health_row(f"{prefix} Vision Level Context", pipeline_ready, diagnostics_detail),
-                _health_row(f"{prefix} Vision Opening Range", pipeline_ready, diagnostics_detail),
-                _health_row(f"{prefix} Vision Structure", pipeline_ready, diagnostics_detail),
-                _health_row(f"{prefix} Vision Liquidity", pipeline_ready, diagnostics_detail),
-                _health_row(f"{prefix} Vision Structure Events", pipeline_ready, diagnostics_detail),
-                _health_row(f"{prefix} Vision Setup Qualification", pipeline_ready, diagnostics_detail),
-                _health_row(f"{prefix} Vision Option Confirmation", pipeline_ready, diagnostics_detail),
-                _health_row(f"{prefix} Vision Method Calculator", candidate_ready, diagnostics_detail),
-                _health_row(f"{prefix} Vision Validation", diagnostics is not None and diagnostics.last_validation != "-", getattr(diagnostics, "last_validation", "-")),
-                _health_row(f"{prefix} Vision Runtime Adapter", candidate_ready, getattr(getattr(candidate, "candidate_state", None), "value", "-")),
-                _health_row(f"{prefix} Vision Paper Handoff", strategy is not None and risk is not None and not blocked, reason if blocked else "ready"),
-                _health_row(f"{prefix} Strategy Gate", strategy is not None, "no actionable Vision candidate" if strategy is None else "ready"),
-                _health_row(f"{prefix} Risk Gate", risk is not None, "no strategy decision" if strategy is None else ("ready" if risk is not None else "not applicable")),
-            )
-        )
+        rows.extend((
+            _health_row(f"{prefix} Vision Daily Context", getattr(snapshot, "cpr", None) is not None and getattr(snapshot, "camarilla", None) is not None, reason),
+            _health_row(f"{prefix} Vision Level Context", candidate_ready, reason),
+            _health_row(f"{prefix} Vision Opening Range", candidate_ready, reason),
+            _health_row(f"{prefix} Vision Structure", candidate_ready, reason),
+            _health_row(f"{prefix} Vision Liquidity", candidate_ready, reason),
+            _health_row(f"{prefix} Vision Structure Events", candidate_ready, reason),
+            _health_row(f"{prefix} Vision Setup Qualification", candidate_ready, reason),
+            _health_row(f"{prefix} Vision Option Confirmation", candidate_ready, reason),
+            _health_row(f"{prefix} Vision Method Calculator", candidate_ready, reason),
+            _health_row(f"{prefix} Vision Validation", diagnostics is not None and diagnostics.last_validation != "-", getattr(diagnostics, "last_validation", "-")),
+            _health_row(f"{prefix} Vision Runtime Adapter", candidate_ready, getattr(getattr(candidate, "candidate_state", None), "value", "-")),
+            _health_row(f"{prefix} Strategy Gate", getattr(snapshot, "strategy_decision_v2", None) is not None, "no actionable Vision candidate" if getattr(snapshot, "strategy_decision_v2", None) is None else "ready"),
+            _health_row(f"{prefix} Risk Gate", getattr(snapshot, "risk_management_v2", None) is not None, "no strategy decision" if getattr(snapshot, "strategy_decision_v2", None) is None else "ready"),
+        ))
     return tuple(rows)
 
 
@@ -771,9 +849,14 @@ def _risk_reason(risk) -> str:
 
 
 def build_strategy_view(runtime_snapshot: RuntimeSnapshot) -> DashboardStrategyView:
+    candidate = getattr(runtime_snapshot, "vision_trade_candidate", None)
+    canonical_position = getattr(runtime_snapshot, "canonical_paper_position", None)
     strategy = runtime_snapshot.strategy_decision_v2 or runtime_snapshot.strategy
     risk = runtime_snapshot.risk_management_v2 or runtime_snapshot.risk
     order = runtime_snapshot.latest_order
+    recovered_note = "-"
+    if candidate is None and canonical_position is not None and getattr(canonical_position, "recovery_status", "") == "RESTORED":
+        recovered_note = f"Recovered position; original live StrategyDecision is unavailable. Checkpoint reference: {getattr(canonical_position, 'candidate_reference', '-')}"
     return DashboardStrategyView(
         symbol=_enum_text(runtime_snapshot.symbol),
         decision=_enum_text(getattr(strategy, "decision", None) or getattr(strategy, "action", None)),
@@ -796,6 +879,15 @@ def build_strategy_view(runtime_snapshot: RuntimeSnapshot) -> DashboardStrategyV
         plan_valid_until=getattr(risk, "valid_until", None),
         risk_reason=getattr(risk, "risk_reason", None) or _risk_reason(risk),
         latest_order_status="Trade Plan Ready" if bool(getattr(risk, "trade_plan_ready", False)) else _enum_text(getattr(order, "status", None)),
+        candidate_state=_enum_text(getattr(candidate, "candidate_state", None)),
+        candidate_direction=_enum_text(getattr(candidate, "direction", None)),
+        candidate_quality=_enum_text(getattr(candidate, "confidence", None)),
+        candidate_validation=_enum_text(getattr(getattr(runtime_snapshot, "vision_method_validation_report", None), "validation_result", None)),
+        candidate_reference=getattr(candidate, "snapshot_reference", None) or getattr(canonical_position, "vision_method_snapshot_reference", "-"),
+        candidate_reason=getattr(candidate, "reason", None) or getattr(canonical_position, "blocking_reason", "-"),
+        candidate_source="VISION_METHOD" if candidate is not None or canonical_position is not None else "-",
+        strategy_source=getattr(strategy, "trade_source", None) or ("LEGACY_DIAGNOSTIC" if runtime_snapshot.strategy is not None else "-"),
+        recovered_position_note=recovered_note,
     )
 
 
@@ -896,13 +988,33 @@ def build_position_view(runtime_snapshot: RuntimeSnapshot) -> DashboardPositionV
 
 def build_journal_view(runtime_snapshot: RuntimeSnapshot) -> DashboardJournalView:
     persistence = getattr(runtime_snapshot, "journal_persistence", None)
-    v1_entry = getattr(getattr(runtime_snapshot, "trade_journal_v1", None), "latest_entry", None)
+    v1 = getattr(runtime_snapshot, "trade_journal_v1", None)
+    v1_entry = getattr(v1, "latest_entry", None)
+    legacy_paper_record = getattr(getattr(runtime_snapshot.paper_trading, "journal_summary", None), "latest_record", None)
+    if v1 is not None and v1_entry is None and legacy_paper_record is None:
+        return DashboardJournalView(
+            symbol=_enum_text(runtime_snapshot.symbol),
+            status=getattr(persistence, "operational_state", "READY_EMPTY"),
+            records=getattr(v1, "trade_count", 0),
+            message=getattr(persistence, "operational_message", "Ready - No completed Vision paper trades"),
+            latest_trade_id=None,
+            latest_trade_source="VISION_METHOD",
+            persistence_status=getattr(persistence, "persistence_status", "-"),
+            active_checkpoint_status=getattr(persistence, "active_checkpoint_status", "-"),
+            recovery_status=getattr(persistence, "recovery_status", "-"),
+            recovery_reason=getattr(persistence, "recovery_reason", "-"),
+            journal_blocking_reason=getattr(persistence, "journal_blocking_reason", "-"),
+            latest_exit_type="-",
+            latest_realized_pnl=None,
+            latest_opened_at=None,
+            latest_closed_at=None,
+        )
     if v1_entry is not None:
         return DashboardJournalView(
             symbol=_enum_text(runtime_snapshot.symbol),
             status="Ready",
             records=getattr(getattr(runtime_snapshot, "trade_journal_v1", None), "trade_count", 1),
-            message="Latest completed DRY_RUN trade",
+            message=getattr(persistence, "operational_message", "Latest completed Vision paper trade"),
             latest_trade_id=getattr(v1_entry, "trade_id", None),
             latest_trade_source=getattr(v1_entry, "trade_source", "-"),
             persistence_status=getattr(persistence, "persistence_status", "-"),

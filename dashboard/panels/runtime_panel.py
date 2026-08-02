@@ -44,6 +44,7 @@ RUNTIME_COMPONENT_HEALTH_LABELS = (
     "Broker Orders",
     "Broker Account Sync",
     "Broker Mutation Mode",
+    "Replay",
 )
 RUNTIME_COMPONENT_HEALTH_FIELDS = tuple(f"Health: {label}" for label in RUNTIME_COMPONENT_HEALTH_LABELS)
 
@@ -111,6 +112,13 @@ class RuntimePanel(QGroupBox):
                 "Broker Orders",
                 "Broker Blocking Reason",
                 "Broker Mutation Mode",
+                "Market Session",
+                "Analysis Readiness",
+                "Vision Readiness",
+                "Paper Readiness",
+                "Journal Persistence",
+                "Broker Read-only Sync",
+                "Primary Blocker",
                 *RUNTIME_COMPONENT_HEALTH_FIELDS,
             )
         )
@@ -177,6 +185,13 @@ class RuntimePanel(QGroupBox):
         self._labels["Broker Orders"].setText(formatters.integer(view.broker_orders_count))
         self._labels["Broker Blocking Reason"].setText(formatters.text(view.broker_blocking_reason))
         self._labels["Broker Mutation Mode"].setText(formatters.text(view.broker_mutation_mode))
+        self._labels["Market Session"].setText(formatters.text(view.market_session_state))
+        self._labels["Analysis Readiness"].setText(formatters.text(view.analysis_readiness))
+        self._labels["Vision Readiness"].setText(formatters.text(view.vision_readiness))
+        self._labels["Paper Readiness"].setText(formatters.text(view.paper_readiness))
+        self._labels["Journal Persistence"].setText(formatters.text(view.journal_persistence_status))
+        self._labels["Broker Read-only Sync"].setText(formatters.text(view.broker_read_only_sync))
+        self._labels["Primary Blocker"].setText(formatters.text(view.primary_blocker))
         health = {item.name: item for item in view.component_health}
         for name, field in zip(RUNTIME_COMPONENT_HEALTH_LABELS, RUNTIME_COMPONENT_HEALTH_FIELDS):
             item = health.get(name)
