@@ -26,3 +26,9 @@
 - Added deterministic auth/session, stale-preservation, retry-suppression, reconnection, and mutation-disabled states.
 - Added dashboard runtime visibility for broker authentication, connection, margins, positions, holdings, orders, snapshot age, blocking reason, and mutation mode.
 - Added architecture tests proving the VM-17 path preserves read-only broker safety, avoids per-symbol account duplication, redacts sensitive material, suppresses duplicate refreshes, preserves stale snapshots after transient failures, and never exposes broker mutation through the dashboard/runtime path.
+
+## VM-18 Production Hardening & Stress Validation
+
+- Added focused production hardening tests for runtime ownership, memory growth, CPU/latency guardrails, thread cleanup, event bus behavior, reconnect recovery, session rollover, dashboard rendering, journal duplication protection, and secret redaction.
+- Added `docs/VM_18_PRODUCTION_HARDENING_REPORT.md` with the runtime verification matrix, production risk register, and Version 1.0 readiness matrix.
+- Confirmed VM-18 introduces no new trading logic, indicators, broker execution, risk changes, lifecycle changes, or journal schema changes.

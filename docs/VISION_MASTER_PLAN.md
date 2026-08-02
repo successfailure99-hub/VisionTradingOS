@@ -366,3 +366,11 @@ Current broker status:
 - Read-only broker account synchronization: COMPLETE for margins, positions, holdings, and order status observability.
 - Live broker order placement: DISABLED BY DESIGN.
 - Broker-side order modification/cancellation and position mutation: DISABLED BY DESIGN.
+
+## VM-18 Production Hardening & Stress Validation
+
+Status: COMPLETE.
+
+VM-18 is the final engineering hardening milestone before Version 1.0 certification. It does not add trading features. It validates runtime stability, memory growth, CPU/latency guardrails, thread cleanup, event bus behavior, reconnect recovery, session rollover, dashboard rendering, journal duplication protection, and secret redaction. The detailed report is maintained in `docs/VM_18_PRODUCTION_HARDENING_REPORT.md`.
+
+Remaining step after VM-18: VM-19 Version 1.0 Final Certification, which should be read-only.

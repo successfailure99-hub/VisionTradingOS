@@ -239,3 +239,7 @@ python -m pytest tests/test_price_action* -v
 VM-17 adds read-only broker account synchronization owned once by `ApplicationOrchestrator`. It observes broker authentication state and, when authenticated, refreshes immutable account snapshots for margins, positions, holdings, and order status. The dashboard consumes only the `OrchestratorSnapshot` broker account fields and runtime verification rows; dashboard panels do not call broker APIs directly.
 
 Broker mutation remains disabled by design. The active account synchronization path rejects clients that expose reachable `place_order`, `modify_order`, `cancel_order`, or `exit_position` methods, unless those methods are explicitly marked as read-only-disabled stubs. Live order placement, order modification, order cancellation, holdings synchronization for trading decisions, and broker-side position mutation remain outside Version 1 production enablement.
+
+## VM-18 Production Hardening
+
+VM-18 adds production hardening stress validation without changing trading logic. The validation covers runtime verification ownership, bounded memory growth, CPU/latency guardrails, thread cleanup, event bus duplicate handling, reconnect recovery, session rollover, dashboard rendering, journal duplication protection, and secret redaction. The report is maintained in `docs/VM_18_PRODUCTION_HARDENING_REPORT.md`.
