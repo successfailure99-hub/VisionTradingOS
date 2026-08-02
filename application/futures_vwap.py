@@ -184,6 +184,11 @@ class DesktopFuturesVWAPRuntimeManager:
             state = FuturesVWAPRuntimeState.PARTIAL
         elif self._stopped:
             state = FuturesVWAPRuntimeState.STOPPED
+        elif instruments and all(
+            item.state is FuturesVWAPRuntimeState.WAITING_FOR_TICK and item.last_error is None
+            for item in instruments
+        ):
+            state = FuturesVWAPRuntimeState.WAITING_FOR_TICK
         else:
             state = FuturesVWAPRuntimeState.ERROR
         return FuturesVWAPRuntimeSnapshot(

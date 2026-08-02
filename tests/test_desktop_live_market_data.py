@@ -544,6 +544,37 @@ def test_futures_vwap_discovers_valid_contracts_warms_vwap_and_surfaces_source_m
     assert ticker.unsubscriptions.count((201, 202, 203)) == 1
 
 
+def test_futures_vwap_before_open_reports_waiting_not_error_on_market_closed_startup():
+    qt_app()
+    ticker = FakeTickerClient()
+    historical_clients = []
+    current = datetime(2026, 7, 19, 8, 45, tzinfo=ZoneInfo("Asia/Kolkata"))
+    dashboard = create_dashboard_application(
+        environ=live_env(
+            LIVE_MARKET_DATA_AUTO_CONNECT="false",
+            LIVE_FUTURES_VWAP_ENABLED="true",
+            REFERENCE_DATA_BOOTSTRAP_ENABLED="false",
+        ),
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: current),
+        instrument_client_factory=instrument_factory_factory([], futures_records()),
+        historical_client_factory=historical_factory_factory(historical_clients),
+        ticker_client=ticker,
+        clock=lambda: current,
+    )
+
+    snapshot = dashboard.live_futures_vwap_runtime.snapshot()
+    view = dashboard.main_window.refresh()
+    rows = {row.name: row for row in view.runtime.component_health}
+
+    assert snapshot.state.value == "Waiting For Futures Tick"
+    assert all(item.state.value == "Waiting For Futures Tick" for item in snapshot.instruments)
+    assert historical_clients[0].calls == []
+    assert rows["VWAP"].status != "ERROR"
+    assert rows["VWAP"].status == "WAITING FOR FUTURES TICK"
+    dashboard.shutdown()
+
+
 def test_futures_vwap_bootstraps_once_after_open_edge_before_first_live_delta():
     qt_app()
     ticker = FakeTickerClient()
