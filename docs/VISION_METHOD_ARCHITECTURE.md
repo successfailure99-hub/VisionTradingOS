@@ -1143,3 +1143,22 @@ Application Startup
 Each runtime verification row exposes owner, producer, consumer, timestamp, trading session, status, latency, recovery state, and blocking reason. This lets the dashboard show `READY`, `WAITING`, `BLOCKED`, or `FAILED` for every production stage without reading logs or maintaining a second cache.
 
 Session rollover requires the active runtime trading date to match CPR and Camarilla trading dates before Vision Method evaluation is considered ready. If daily context is missing or stale, the runtime reports `WAITING_DAILY_CONTEXT` and blocks Vision Method readiness until fresh daily context is available.
+
+## VM-17 Broker Account Boundary
+
+Vision Method remains the deterministic methodology source. VM-17 does not change Vision Method calculations, candidate generation, risk, lifecycle, paper trading, or AI behavior. It adds a read-only account observability boundary downstream of the runtime so the workstation can see broker account health without enabling execution.
+
+```text
+Broker Authentication
+        |
+        v
+Read-Only Broker Account Sync
+        |
+        v
+BrokerAccountSnapshot
+        |
+        v
+OrchestratorSnapshot -> Dashboard Runtime Health
+```
+
+The account snapshot is account-wide and owned by `ApplicationOrchestrator`, not by individual symbol runtimes. It may reconcile broker positions with paper positions for observability, but it must not create trades, alter Vision Method state, or mutate broker state.

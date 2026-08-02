@@ -5,6 +5,7 @@ Application Orchestrator V1.
 from application.enums import ExecutionSafetyMode, RuntimeInstrument, RuntimeStatus
 from application.models import OrchestratorSnapshot, RuntimeConfiguration, RuntimeSnapshot
 from application.authorized_paper_execution import AuthorizedPaperExecutionCoordinator, AuthorizedPaperHandoffRequest
+from application.broker_account_sync import BrokerAccountSyncCoordinator
 from application.symbol_runtime import SymbolRuntime
 from application.live_shadow_session import LiveShadowMarketSessionCoordinator, LiveShadowSessionRequest
 from adapters.zerodha import ZerodhaCredentials, ZerodhaReadOnlyAdapter
@@ -98,6 +99,7 @@ class ApplicationOrchestrator:
         }
         self.live_shadow_session_coordinator = LiveShadowMarketSessionCoordinator(event_bus, orchestrator=self)
         self.authorized_paper_execution_coordinator = AuthorizedPaperExecutionCoordinator(event_bus, orchestrator=self)
+        self.broker_account_sync = BrokerAccountSyncCoordinator()
         self.zerodha_adapter = zerodha_adapter or ZerodhaReadOnlyAdapter(event_bus, tick_consumer=self.process_live_zerodha_tick)
         self.deterministic_backtest_engine = DeterministicBacktestEngine(
             event_bus,
@@ -367,7 +369,21 @@ class ApplicationOrchestrator:
     def get_zerodha_connection_snapshot(self):
         return self.zerodha_adapter.snapshot()
 
+    def configure_broker_account_client(self, client):
+        self.broker_account_sync.configure_client(client)
+
+    def observe_broker_authentication(self, auth_snapshot):
+        return self.broker_account_sync.observe_authentication(auth_snapshot)
+
+    def refresh_broker_account(self, *, timestamp=None, force: bool = False):
+        self._require_running()
+        return self.broker_account_sync.refresh(timestamp=timestamp, force=force)
+
+    def get_broker_account_snapshot(self):
+        return self.broker_account_sync.snapshot()
+
     def reset_zerodha_adapter(self):
+        self.broker_account_sync.reset()
         return self.zerodha_adapter.reset()
 
     def start_live_shadow_coordinator(self):
@@ -435,6 +451,7 @@ class ApplicationOrchestrator:
         self.historical_replay_engine.reset(clear_persistent_data=False)
         self.deterministic_backtest_engine.reset()
         self.zerodha_adapter.reset()
+        self.broker_account_sync.reset()
         self.live_shadow_session_coordinator.reset()
         self.authorized_paper_execution_coordinator.reset()
         for runtime in self._runtimes.values():
@@ -509,6 +526,8 @@ class ApplicationOrchestrator:
             zerodha_connection=self.zerodha_adapter.snapshot(),
             live_shadow_session=self.live_shadow_session_coordinator.snapshot(),
             authorized_paper_handoff=self.authorized_paper_execution_coordinator.snapshot(),
+            broker_account=self.broker_account_sync.snapshot(),
+            broker_account_verification_report=self.broker_account_sync.verification_report(),
         )
 
     def _runtime_for_core_instrument(self, instrument: Instrument) -> SymbolRuntime:

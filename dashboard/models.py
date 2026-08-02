@@ -76,8 +76,20 @@ class DashboardRuntimeView:
     replay_outcome: str = "-"
     replay_findings: int = 0
     replay_failure_summary: str | None = None
+    broker_account_broker: str = "-"
+    broker_account_id: str = "-"
+    broker_authentication: str = "-"
+    broker_connection: str = "-"
+    broker_last_refresh: datetime | None = None
+    broker_data_age_seconds: float | None = None
+    broker_available_margin: float | None = None
+    broker_used_margin: float | None = None
+    broker_open_positions: int = 0
+    broker_holdings_count: int = 0
+    broker_orders_count: int = 0
+    broker_blocking_reason: str = "-"
+    broker_mutation_mode: str = "DISABLED"
     component_health: tuple[DashboardRuntimeComponentHealthView, ...] = ()
-
     def __post_init__(self) -> None:
         rows = tuple(self.component_health)
         for row in rows:

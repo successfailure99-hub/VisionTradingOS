@@ -224,6 +224,19 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
         replay_outcome=_enum_text(getattr(replay, "final_outcome", None)),
         replay_findings=len(tuple(getattr(replay, "active_findings", ()) or ())),
         replay_failure_summary=getattr(replay, "failure_reason", None),
+        broker_account_broker=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "broker", None)),
+        broker_account_id=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "account_id_masked", None)),
+        broker_authentication=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "authentication_state", None)),
+        broker_connection=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "connection_state", None)),
+        broker_last_refresh=getattr(getattr(orchestrator, "broker_account", None), "latest_refresh_timestamp", None),
+        broker_data_age_seconds=getattr(getattr(orchestrator, "broker_account", None), "data_age", None),
+        broker_available_margin=getattr(getattr(orchestrator, "broker_account", None), "total_available_margin", None),
+        broker_used_margin=(getattr(getattr(orchestrator, "broker_account", None), "equity_used", 0.0) or 0.0) + (getattr(getattr(orchestrator, "broker_account", None), "commodity_used", 0.0) or 0.0),
+        broker_open_positions=len(tuple(getattr(getattr(orchestrator, "broker_account", None), "positions", ()) or ())),
+        broker_holdings_count=len(tuple(getattr(getattr(orchestrator, "broker_account", None), "holdings", ()) or ())),
+        broker_orders_count=len(tuple(getattr(getattr(orchestrator, "broker_account", None), "orders", ()) or ())),
+        broker_blocking_reason=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "blocking_reason", None)),
+        broker_mutation_mode=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "mutation_mode", None)),
         component_health=_runtime_component_health(orchestrator),
     )
 
@@ -260,11 +273,41 @@ def _runtime_component_health(orchestrator) -> tuple[DashboardRuntimeComponentHe
         ready_row("Risk", any_snapshot("risk_management_v2") or any_snapshot("risk")),
         ready_row("Lifecycle", any_snapshot("trade_lifecycle_v1") or bool(snapshots)),
         ready_row("Journal", any_snapshot("trade_journal_v1") or bool(getattr(orchestrator, "shared_trade_journal_ready", False))),
+        *_broker_account_health_rows(orchestrator),
         *_runtime_verification_health_rows(snapshots),
         *_vision_runtime_health_rows(snapshots),
         *_runtime_diagnostic_rows(snapshots),
     )
 
+
+def _broker_account_health_rows(orchestrator) -> tuple[DashboardRuntimeComponentHealthView, ...]:
+    rows = []
+    for stage in tuple(getattr(orchestrator, "broker_account_verification_report", ()) or ()):
+        age = getattr(stage, "data_age", None)
+        age_text = "-" if age is None else f"{age:.0f}s"
+        detail = " | ".join(
+            (
+                f"Owner={_plain_text(getattr(stage, 'owner', None))}",
+                f"Producer={_plain_text(getattr(stage, 'producer', None))}",
+                f"Consumer={_plain_text(getattr(stage, 'consumer', None))}",
+                f"Timestamp={_enum_text(getattr(stage, 'timestamp', None))}",
+                f"DataAge={age_text}",
+                f"Recovery={_enum_text(getattr(stage, 'recovery_state', None))}",
+                f"Reason={_enum_text(getattr(stage, 'blocking_reason', None))}",
+            )
+        )
+        rows.append(
+            DashboardRuntimeComponentHealthView(
+                _plain_text(getattr(stage, "stage", "Broker Account")),
+                _enum_text(getattr(stage, "status", None)),
+                detail,
+                owner=_plain_text(getattr(stage, "owner", None)),
+                producer=_plain_text(getattr(stage, "producer", None)),
+                consumer=_plain_text(getattr(stage, "consumer", None)),
+                timestamp=getattr(stage, "timestamp", None),
+            )
+        )
+    return tuple(rows)
 
 def _adr_health_detail(snapshots) -> str:
     diagnostics = next((getattr(snapshot, "adr_diagnostics", None) for snapshot in snapshots if getattr(snapshot, "adr_diagnostics", None) is not None), None)

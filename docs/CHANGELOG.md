@@ -18,3 +18,11 @@
 - Removed remaining runtime imports of `SUPPORTED_INSTRUMENTS` from the legacy MarketContextV2 package.
 - Documented the RC1 dependency graph, legacy-reference audit, dead-code status, architecture validation, performance notes, and regression requirements.
 - Confirmed the active AI V2 chain no longer consumes MarketContextV2, raw indicators, raw candles, or evidence-engine internals.
+
+## VM-17 Broker Readiness & Read-Only Account Synchronization
+
+- Added account-wide read-only broker synchronization owned by `ApplicationOrchestrator`.
+- Added immutable broker account, position, holding, order-status, reconciliation, and runtime-verification models.
+- Added deterministic auth/session, stale-preservation, retry-suppression, reconnection, and mutation-disabled states.
+- Added dashboard runtime visibility for broker authentication, connection, margins, positions, holdings, orders, snapshot age, blocking reason, and mutation mode.
+- Added architecture tests proving the VM-17 path preserves read-only broker safety, avoids per-symbol account duplication, redacts sensitive material, suppresses duplicate refreshes, preserves stale snapshots after transient failures, and never exposes broker mutation through the dashboard/runtime path.

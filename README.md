@@ -233,3 +233,9 @@ Focused price-action suite:
 ```powershell
 python -m pytest tests/test_price_action* -v
 ```
+
+## Broker Account Read-Only Synchronization
+
+VM-17 adds read-only broker account synchronization owned once by `ApplicationOrchestrator`. It observes broker authentication state and, when authenticated, refreshes immutable account snapshots for margins, positions, holdings, and order status. The dashboard consumes only the `OrchestratorSnapshot` broker account fields and runtime verification rows; dashboard panels do not call broker APIs directly.
+
+Broker mutation remains disabled by design. The active account synchronization path rejects clients that expose reachable `place_order`, `modify_order`, `cancel_order`, or `exit_position` methods, unless those methods are explicitly marked as read-only-disabled stubs. Live order placement, order modification, order cancellation, holdings synchronization for trading decisions, and broker-side position mutation remain outside Version 1 production enablement.

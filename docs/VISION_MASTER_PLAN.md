@@ -341,3 +341,28 @@ Future milestones should extend the canonical architecture without introducing
 duplicate engines or reverse dependencies. Known future areas are Price Action
 V2, Option Chain V2, dashboard/runtime exposure polish, broker synchronization,
 and product-surface hardening.
+
+## VM-17 Broker Readiness & Read-Only Account Synchronization
+
+Status: COMPLETE for read-only account observability; live broker mutation remains DISABLED BY DESIGN.
+
+Runtime ownership:
+
+- `ApplicationOrchestrator` owns one shared broker account synchronization coordinator.
+- Broker account state is account-wide and is not duplicated inside per-symbol `SymbolRuntime` objects.
+- The coordinator consumes broker authentication/session state plus read-only account endpoints for margins, positions, holdings, and order status.
+- Runtime snapshots and dashboard presenters consume immutable `BrokerAccountSnapshot` values and verification rows.
+
+Safety boundary:
+
+- New code must not call broker mutation APIs from the read-only synchronization path.
+- Live `place_order`, `modify_order`, `cancel_order`, and `exit_position` remain disabled unless a future explicitly approved live-trading milestone changes the safety model.
+- Broker snapshots must not contain access tokens, request tokens, API secrets, passwords, PINs, TOTP material, or raw credential payloads.
+
+Current broker status:
+
+- Zerodha live market data: COMPLETE.
+- Zerodha live option chain: COMPLETE but disabled by default.
+- Read-only broker account synchronization: COMPLETE for margins, positions, holdings, and order status observability.
+- Live broker order placement: DISABLED BY DESIGN.
+- Broker-side order modification/cancellation and position mutation: DISABLED BY DESIGN.

@@ -36,6 +36,14 @@ RUNTIME_COMPONENT_HEALTH_LABELS = (
     "TradeCandidate",
     "Vision Paper Handoff",
     "AI Explanation",
+    "Broker Auth",
+    "Broker Connection",
+    "Broker Margins",
+    "Broker Positions",
+    "Broker Holdings",
+    "Broker Orders",
+    "Broker Account Sync",
+    "Broker Mutation Mode",
 )
 RUNTIME_COMPONENT_HEALTH_FIELDS = tuple(f"Health: {label}" for label in RUNTIME_COMPONENT_HEALTH_LABELS)
 
@@ -90,6 +98,19 @@ class RuntimePanel(QGroupBox):
                 "Replay Outcome",
                 "Replay Findings",
                 "Replay Failure",
+                "Broker Account",
+                "Broker Account ID",
+                "Broker Authentication",
+                "Broker Connection",
+                "Broker Last Refresh",
+                "Broker Data Age",
+                "Broker Available Margin",
+                "Broker Used Margin",
+                "Broker Positions",
+                "Broker Holdings",
+                "Broker Orders",
+                "Broker Blocking Reason",
+                "Broker Mutation Mode",
                 *RUNTIME_COMPONENT_HEALTH_FIELDS,
             )
         )
@@ -143,6 +164,19 @@ class RuntimePanel(QGroupBox):
         self._labels["Replay Outcome"].setText(formatters.text(view.replay_outcome))
         self._labels["Replay Findings"].setText(formatters.integer(view.replay_findings))
         self._labels["Replay Failure"].setText(formatters.text(view.replay_failure_summary))
+        self._labels["Broker Account"].setText(formatters.text(view.broker_account_broker))
+        self._labels["Broker Account ID"].setText(formatters.text(view.broker_account_id))
+        self._labels["Broker Authentication"].setText(formatters.text(view.broker_authentication))
+        self._labels["Broker Connection"].setText(formatters.text(view.broker_connection))
+        self._labels["Broker Last Refresh"].setText(formatters.timestamp(view.broker_last_refresh))
+        self._labels["Broker Data Age"].setText(formatters.ratio(view.broker_data_age_seconds))
+        self._labels["Broker Available Margin"].setText(formatters.price(view.broker_available_margin))
+        self._labels["Broker Used Margin"].setText(formatters.price(view.broker_used_margin))
+        self._labels["Broker Positions"].setText(formatters.integer(view.broker_open_positions))
+        self._labels["Broker Holdings"].setText(formatters.integer(view.broker_holdings_count))
+        self._labels["Broker Orders"].setText(formatters.integer(view.broker_orders_count))
+        self._labels["Broker Blocking Reason"].setText(formatters.text(view.broker_blocking_reason))
+        self._labels["Broker Mutation Mode"].setText(formatters.text(view.broker_mutation_mode))
         health = {item.name: item for item in view.component_health}
         for name, field in zip(RUNTIME_COMPONENT_HEALTH_LABELS, RUNTIME_COMPONENT_HEALTH_FIELDS):
             item = health.get(name)
