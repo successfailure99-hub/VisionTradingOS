@@ -115,6 +115,7 @@ from application.models import (
     RuntimeVerificationStage,
     RuntimeVWAPSource,
 )
+from application.runtime_contract import RuntimeContractContext, RuntimeContractSubject, RuntimeContractValidator
 _OPTION_CHAIN_MAX_AGE_SECONDS = 180.0
 
 from application.tradingview_evidence_assembly import (
@@ -145,6 +146,8 @@ class SymbolRuntime:
         self._last_tick: Tick | None = None
         self._updated_at = None
         self._canonical_market_timestamp = None
+        self._previous_runtime_snapshot_timestamp = None
+        self._runtime_contract_validator = RuntimeContractValidator()
         self._latest_tick_at = None
         self._latest_closed_candle_at = None
         self._latest_analysis_at = None
@@ -1042,20 +1045,37 @@ class SymbolRuntime:
             latest_candle = history[-1] if history else None
         market_timestamp = self._market_timestamp(latest_candle)
         runtime_session = self._runtime_trading_session(market_timestamp)
+        vwap = self.vwap_engine.get_latest(self._core_instrument)
+        adr = self.adr_engine.state
+        price_action = self.price_action_engine.state
+        option_chain = self.option_chain_engine.state
+        option_chain_snapshot = self.option_chain_engine.snapshot
+        option_chain_analytics = self._option_chain_analytics
+        runtime_contract_report = self._runtime_contract_report(
+            market_timestamp=market_timestamp,
+            runtime_session=runtime_session,
+            latest_candle=latest_candle,
+            vwap=vwap,
+            adr=adr,
+            price_action=price_action,
+            option_chain_snapshot=option_chain_snapshot,
+            option_chain_analytics=option_chain_analytics,
+        )
+        self._previous_runtime_snapshot_timestamp = market_timestamp
         return RuntimeSnapshot(
             symbol=self._instrument,
             timeframe=self._primary_timeframe.value,
             status=self._status,
             latest_tick=self._last_tick,
             latest_candle=latest_candle,
-            vwap=self.vwap_engine.get_latest(self._core_instrument),
-            adr=self.adr_engine.state,
+            vwap=vwap,
+            adr=adr,
             cpr=self.cpr,
             camarilla=self.camarilla,
-            price_action=self.price_action_engine.state,
-            option_chain=self.option_chain_engine.state,
-            option_chain_snapshot=self.option_chain_engine.snapshot,
-            option_chain_analytics=self._option_chain_analytics,
+            price_action=price_action,
+            option_chain=option_chain,
+            option_chain_snapshot=option_chain_snapshot,
+            option_chain_analytics=option_chain_analytics,
             option_chain_runtime=self._option_chain_runtime_status(market_timestamp, runtime_session),
             adr_runtime=self._adr_runtime_status(runtime_session),
             market_context=self.market_context_engine.state,
@@ -1107,6 +1127,7 @@ class SymbolRuntime:
             runtime_session=runtime_session,
             runtime_verification_report=self._runtime_verification_report(market_timestamp, runtime_session),
             operational_readiness=self._operational_readiness_snapshot(market_timestamp, runtime_session),
+            runtime_contract_report=runtime_contract_report,
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
@@ -1882,6 +1903,56 @@ class SymbolRuntime:
             operational_state=operational_state,
             operational_message=operational_message,
         )
+
+    def _runtime_contract_report(
+        self,
+        *,
+        market_timestamp: datetime | None,
+        runtime_session: RuntimeTradingSession,
+        latest_candle,
+        vwap,
+        adr,
+        price_action,
+        option_chain_snapshot,
+        option_chain_analytics,
+    ):
+        context = RuntimeContractContext(
+            instrument=self._instrument,
+            timeframe=self._primary_timeframe.value,
+            runtime_timestamp=market_timestamp,
+            trading_date=runtime_session.trading_date,
+            session=runtime_session,
+            previous_runtime_timestamp=self._previous_runtime_snapshot_timestamp,
+        )
+        runtime_subject = RuntimeContractSubject(
+            instrument=self._instrument,
+            timeframe=self._primary_timeframe.value,
+            timestamp=market_timestamp,
+            trading_date=runtime_session.trading_date,
+            session=runtime_session,
+        )
+        return self._runtime_contract_validator.validate_many(
+            (
+                ("RuntimeSnapshot", runtime_subject, "SymbolRuntime", "RuntimeSnapshot", "Dashboard"),
+                ("Candle", latest_candle, "SymbolRuntime", "CandleEngine", "Vision Method"),
+                ("DailyOHLC", self._daily_ohlc_history[-1] if self._daily_ohlc_history else None, "SymbolRuntime", "Daily OHLC Warmup", "Daily Context"),
+                ("CPR", self.cpr, "SymbolRuntime", "CPREngine", "Vision Level Context"),
+                ("Camarilla", self.camarilla, "SymbolRuntime", "CamarillaEngine", "Vision Level Context"),
+                ("ADR", adr, "SymbolRuntime", "ADREngine", "Vision Level Context"),
+                ("VWAP", vwap, "SymbolRuntime", "VWAPEngine", "Vision Level Context"),
+                ("OptionChainSnapshot", option_chain_snapshot, "SymbolRuntime", "OptionChainEngine", "Vision Option Confirmation"),
+                ("OptionChainAnalyticsSnapshot", option_chain_analytics, "SymbolRuntime", "OptionChainAnalyticsEngine", "Vision Option Confirmation"),
+                ("PriceAction", price_action, "SymbolRuntime", "PriceActionEngine", "TradingView Evidence"),
+                ("Fusion", self.multi_timeframe_evidence_fusion_engine.snapshot(), "SymbolRuntime", "MultiTimeframeEvidenceFusionEngine", "Market State"),
+                ("MarketState", self.market_state_engine.snapshot(), "SymbolRuntime", "MarketStateEngine", "Expert Setup"),
+                ("ExpertSetup", self.setup_classification_engine.snapshot(), "SymbolRuntime", "ExpertSetupClassificationEngine", "Chart Explanation"),
+                ("ChartExplanation", self.chart_explanation_engine.snapshot(), "SymbolRuntime", "ChartExplanationEngine", "AI Reasoning V2"),
+                ("VisionMethodSnapshot", self._vision_method_snapshot, "SymbolRuntime", "Vision Method Calculator", "Vision Validation"),
+                ("ValidationReport", self._vision_method_validation_report, "SymbolRuntime", "Vision Method Validation", "Runtime Adapter"),
+            ),
+            context,
+        )
+
     def _operational_readiness_snapshot(
         self,
         market_timestamp: datetime | None,

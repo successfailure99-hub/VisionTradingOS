@@ -55,6 +55,7 @@ from application.live_shadow_session.models import LiveShadowSessionSnapshot
 from application.authorized_paper_execution.models import AuthorizedPaperHandoffSnapshot
 from application.broker_account_sync.models import BrokerAccountSnapshot, BrokerRuntimeVerificationStage
 from application.broker_session_persistence import BrokerSessionPersistenceSnapshot
+from application.runtime_contract import RuntimeContractReport
 from engines.position.models import PositionState
 from engines.price_action.models import PriceActionState
 from engines.risk.models import RiskConfiguration, RiskDecisionState
@@ -606,6 +607,7 @@ class RuntimeSnapshot:
     option_chain_runtime: RuntimeOptionChainStatus | None = None
     adr_runtime: RuntimeADRStatus | None = None
     operational_readiness: OperationalReadinessSnapshot | None = None
+    runtime_contract_report: RuntimeContractReport | None = None
 
     def __post_init__(self) -> None:
         if self.runtime_session is not None and not isinstance(self.runtime_session, RuntimeTradingSession):
@@ -625,6 +627,8 @@ class RuntimeSnapshot:
             raise TypeError("adr_runtime must be RuntimeADRStatus or None")
         if self.operational_readiness is not None and not isinstance(self.operational_readiness, OperationalReadinessSnapshot):
             raise TypeError("operational_readiness must be OperationalReadinessSnapshot or None")
+        if self.runtime_contract_report is not None and not isinstance(self.runtime_contract_report, RuntimeContractReport):
+            raise TypeError("runtime_contract_report must be RuntimeContractReport or None")
         if self.vision_method_snapshot is not None and not isinstance(self.vision_method_snapshot, VisionMethodSnapshot):
             raise TypeError("vision_method_snapshot must be VisionMethodSnapshot or None")
         if self.vision_method_validation_report is not None and not isinstance(self.vision_method_validation_report, VisionMethodValidationReport):

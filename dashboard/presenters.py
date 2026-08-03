@@ -270,6 +270,7 @@ def _runtime_component_health(orchestrator) -> tuple[DashboardRuntimeComponentHe
         )
 
     return (
+        _runtime_contract_health_row(snapshots),
         ready_row("Candle", any_snapshot("latest_candle")),
         ready_row("Market Data", bool(getattr(orchestrator, "shared_market_data_ready", False))),
         ready_row("CPR", any_snapshot("cpr")),
@@ -347,10 +348,56 @@ def _broker_session_health_row(orchestrator) -> DashboardRuntimeComponentHealthV
         status,
         detail,
         owner="ApplicationOrchestrator",
-        producer="EncryptedBrokerSessionStore",
-        consumer="Dashboard",
+        producer="BrokerSessionStore",
+        consumer="Broker Runtime",
         timestamp=getattr(session, "last_refresh", None),
     )
+
+
+def _runtime_contract_health_row(snapshots) -> DashboardRuntimeComponentHealthView:
+    reports = tuple(getattr(snapshot, "runtime_contract_report", None) for snapshot in snapshots)
+    report = next((item for item in reports if item is not None), None)
+    if report is None:
+        return DashboardRuntimeComponentHealthView(
+            "Runtime Contract",
+            "WAITING_FOR_DATA",
+            "Runtime contract report unavailable.",
+            owner="SymbolRuntime",
+            producer="RuntimeContractValidator",
+            consumer="Dashboard",
+        )
+    violations = tuple(getattr(report, "violations", ()) or ())
+    if not violations:
+        return DashboardRuntimeComponentHealthView(
+            "Runtime Contract",
+            "READY",
+            "Runtime contract valid.",
+            owner=getattr(report, "owner", "SymbolRuntime"),
+            producer=getattr(report, "producer", "RuntimeContractValidator"),
+            consumer=getattr(report, "consumer", "Dashboard"),
+            timestamp=getattr(report, "checked_at", None),
+        )
+    first = violations[0]
+    detail = (
+        "Runtime Contract Failed | "
+        f"Reason={_plain_text(getattr(first, 'reason', None))} | "
+        f"Owner={_plain_text(getattr(first, 'owner', None))} | "
+        f"Producer={_plain_text(getattr(first, 'producer', None))} | "
+        f"Consumer={_plain_text(getattr(first, 'consumer', None))} | "
+        f"Object={_plain_text(getattr(first, 'object_name', None))} | "
+        f"Expected={_plain_text(getattr(first, 'expected', None))} | "
+        f"Actual={_plain_text(getattr(first, 'actual', None))}"
+    )
+    return DashboardRuntimeComponentHealthView(
+        "Runtime Contract",
+        "FAILED",
+        detail,
+        owner=_plain_text(getattr(first, "owner", None)),
+        producer=_plain_text(getattr(first, "producer", None)),
+        consumer=_plain_text(getattr(first, "consumer", None)),
+        timestamp=getattr(report, "checked_at", None),
+    )
+
 
 def _adr_health_detail(snapshots) -> str:
     diagnostics = next((getattr(snapshot, "adr_diagnostics", None) for snapshot in snapshots if getattr(snapshot, "adr_diagnostics", None) is not None), None)
