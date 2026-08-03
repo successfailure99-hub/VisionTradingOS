@@ -49,3 +49,4 @@ dist/
 
 # Runtime journal/checkpoint artifacts
 /data/trade_journal_v1/
+/runtime/

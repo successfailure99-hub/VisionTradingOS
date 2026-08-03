@@ -89,6 +89,10 @@ class DashboardRuntimeView:
     broker_orders_count: int = 0
     broker_blocking_reason: str = "-"
     broker_mutation_mode: str = "DISABLED"
+    broker_session_token_valid: bool = False
+    broker_session_expires_at: datetime | None = None
+    broker_session_last_refresh: datetime | None = None
+    broker_session_connection: str = "-"
     market_session_state: str = "-"
     analysis_readiness: str = "-"
     vision_readiness: str = "-"

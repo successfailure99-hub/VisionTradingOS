@@ -43,6 +43,7 @@ RUNTIME_COMPONENT_HEALTH_LABELS = (
     "Broker Holdings",
     "Broker Orders",
     "Broker Account Sync",
+    "Broker Session",
     "Broker Mutation Mode",
     "Replay",
 )
@@ -112,6 +113,10 @@ class RuntimePanel(QGroupBox):
                 "Broker Orders",
                 "Broker Blocking Reason",
                 "Broker Mutation Mode",
+                "Broker Session Token",
+                "Broker Session Expires",
+                "Broker Session Last Refresh",
+                "Broker Session Connection",
                 "Market Session",
                 "Analysis Readiness",
                 "Vision Readiness",
@@ -185,6 +190,10 @@ class RuntimePanel(QGroupBox):
         self._labels["Broker Orders"].setText(formatters.integer(view.broker_orders_count))
         self._labels["Broker Blocking Reason"].setText(formatters.text(view.broker_blocking_reason))
         self._labels["Broker Mutation Mode"].setText(formatters.text(view.broker_mutation_mode))
+        self._labels["Broker Session Token"].setText(formatters.ready(view.broker_session_token_valid))
+        self._labels["Broker Session Expires"].setText(formatters.timestamp(view.broker_session_expires_at))
+        self._labels["Broker Session Last Refresh"].setText(formatters.timestamp(view.broker_session_last_refresh))
+        self._labels["Broker Session Connection"].setText(formatters.text(view.broker_session_connection))
         self._labels["Market Session"].setText(formatters.text(view.market_session_state))
         self._labels["Analysis Readiness"].setText(formatters.text(view.analysis_readiness))
         self._labels["Vision Readiness"].setText(formatters.text(view.vision_readiness))

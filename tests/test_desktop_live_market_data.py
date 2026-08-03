@@ -21,11 +21,13 @@ from application.desktop_live_data import (
     create_zerodha_session_manager,
     load_desktop_live_configuration,
 )
+from application.broker_session_persistence import BrokerSessionRecord, EncryptedBrokerSessionStore
 from application.live_market_data import LiveMarketDataRuntimeFactory, LiveMarketDataRuntimeStatus
 from application.reference_data_bootstrap import resolve_reference_bootstrap_bounds
 from brokers.zerodha.auth import ZerodhaCredentials, ZerodhaSessionManager
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
+from dashboard.presenters import build_runtime_view
 
 
 NOW = datetime(2026, 7, 15, 9, 15, tzinfo=UTC)
@@ -264,6 +266,10 @@ def test_invalid_boolean_rejection(name):
 def test_enabled_configuration_lists_missing_variables_only(missing_name):
     env = live_env()
     env[missing_name] = ""
+    if missing_name == "ZERODHA_ACCESS_TOKEN":
+        settings = load_desktop_live_configuration(env)
+        assert settings.access_token is None
+        return
     with pytest.raises(DesktopLiveDataConfigurationError) as error:
         load_desktop_live_configuration(env)
     message = str(error.value)
@@ -359,6 +365,71 @@ def test_session_restore_uses_existing_manager_and_redacts_authentication_errors
     assert "desktop_api_key" not in message
     assert "desktop_api_secret" not in message
     assert "desktop_access_token" not in message
+
+
+def test_desktop_startup_restores_encrypted_session_without_access_token_environment(tmp_path):
+    store_path = tmp_path / "session.json"
+    store = EncryptedBrokerSessionStore(store_path, clock=lambda: NOW)
+    store.save(
+        BrokerSessionRecord(
+            broker="ZERODHA",
+            user_id="AB1234",
+            access_token="restored_access_token",
+            authenticated_at=NOW - timedelta(minutes=5),
+            expires_at=NOW + timedelta(hours=6),
+            created_at=NOW - timedelta(minutes=5),
+        )
+    )
+    env = live_env(
+        ZERODHA_ACCESS_TOKEN="",
+        ZERODHA_SESSION_STORE_PATH=str(store_path),
+        LIVE_MARKET_DATA_AUTO_CONNECT="false",
+        REFERENCE_DATA_BOOTSTRAP_ENABLED="false",
+    )
+
+    dashboard = create_dashboard_application(
+        environ=env,
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: NOW),
+        clock=lambda: NOW,
+    )
+    snapshot = dashboard.lifecycle.orchestrator.snapshot()
+    runtime_view = build_runtime_view(dashboard.lifecycle.snapshot())
+
+    assert dashboard.live_market_data_runtime is not None
+    assert snapshot.broker_session.token_valid is True
+    assert snapshot.broker_session.expires_at == NOW + timedelta(hours=6)
+    assert runtime_view.broker_session_token_valid is True
+    assert runtime_view.broker_session_expires_at == NOW + timedelta(hours=6)
+    assert any(row.name == "Broker Session" and row.status == "READY" for row in runtime_view.component_health)
+    assert dashboard.live_market_data_runtime.session_manager.session.access_token == "restored_access_token"
+    dashboard.shutdown()
+
+
+def test_expired_encrypted_session_requires_login_and_removes_saved_file(tmp_path):
+    store_path = tmp_path / "session.json"
+    store = EncryptedBrokerSessionStore(store_path, clock=lambda: NOW - timedelta(hours=2))
+    store.save(
+        BrokerSessionRecord(
+            broker="ZERODHA",
+            user_id="AB1234",
+            access_token="expired_access_token",
+            authenticated_at=NOW - timedelta(hours=3),
+            expires_at=NOW - timedelta(hours=1),
+            created_at=NOW - timedelta(hours=3),
+        )
+    )
+    env = live_env(
+        ZERODHA_ACCESS_TOKEN="",
+        ZERODHA_SESSION_STORE_PATH=str(store_path),
+        LIVE_MARKET_DATA_AUTO_CONNECT="false",
+        REFERENCE_DATA_BOOTSTRAP_ENABLED="false",
+    )
+
+    with pytest.raises(DesktopLiveDataConfigurationError, match="Zerodha login required"):
+        create_dashboard_application(environ=env, auth_client_factory=auth_factory, clock=lambda: NOW)
+
+    assert store_path.exists() is False
 
 
 def test_authenticated_session_required_and_expired_session_rejected():

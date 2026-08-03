@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Protocol
 
 from application.bootstrap import ApplicationBootstrap
+from application.broker_session_persistence import (
+    BrokerSessionRecord,
+    DEFAULT_BROKER_SESSION_PATH,
+    EncryptedBrokerSessionStore,
+)
 from application.enums import RuntimeInstrument
 from application.lifecycle_manager import ApplicationLifecycleManager
 from application.live_market_data import LiveMarketDataConfiguration, LiveMarketDataRuntime, LiveMarketDataRuntimeFactory
@@ -64,6 +69,7 @@ class HistoricalClientFactory(Protocol):
 ENV_ZERODHA_API_KEY = "ZERODHA_API_KEY"
 ENV_ZERODHA_API_SECRET = "ZERODHA_API_SECRET"
 ENV_ZERODHA_ACCESS_TOKEN = "ZERODHA_ACCESS_TOKEN"
+ENV_ZERODHA_SESSION_STORE_PATH = "ZERODHA_SESSION_STORE_PATH"
 ENV_LIVE_MARKET_DATA_ENABLED = "LIVE_MARKET_DATA_ENABLED"
 ENV_LIVE_MARKET_DATA_AUTO_CONNECT = "LIVE_MARKET_DATA_AUTO_CONNECT"
 ENV_LIVE_OPTION_CHAIN_ENABLED = "LIVE_OPTION_CHAIN_ENABLED"
@@ -134,6 +140,7 @@ class DesktopLiveDataSettings:
     api_key: str | None
     api_secret: str | None
     access_token: str | None
+    session_store_path: Path
     subscriptions: tuple[ZerodhaInstrumentSubscription, ...]
     option_chain: DesktopOptionChainSettings
     reference_data_bootstrap_enabled: bool
@@ -191,6 +198,7 @@ def load_desktop_live_configuration(
             api_key=None,
             api_secret=None,
             access_token=None,
+            session_store_path=DEFAULT_BROKER_SESSION_PATH,
             subscriptions=(),
             option_chain=option_chain,
             reference_data_bootstrap_enabled=False,
@@ -207,7 +215,6 @@ def load_desktop_live_configuration(
         for name in (
             ENV_ZERODHA_API_KEY,
             ENV_ZERODHA_API_SECRET,
-            ENV_ZERODHA_ACCESS_TOKEN,
             *(name for _, name, _ in INSTRUMENT_TOKEN_ENV),
         )
         if not _text(environ.get(name))
@@ -231,7 +238,8 @@ def load_desktop_live_configuration(
         auto_connect=auto_connect,
         api_key=_text(environ[ENV_ZERODHA_API_KEY]),
         api_secret=_text(environ[ENV_ZERODHA_API_SECRET]),
-        access_token=_text(environ[ENV_ZERODHA_ACCESS_TOKEN]),
+        access_token=_text(environ.get(ENV_ZERODHA_ACCESS_TOKEN)) or None,
+        session_store_path=Path(_text(environ.get(ENV_ZERODHA_SESSION_STORE_PATH)) or DEFAULT_BROKER_SESSION_PATH),
         subscriptions=subscriptions,
         option_chain=option_chain,
         reference_data_bootstrap_enabled=reference_bootstrap,
@@ -249,6 +257,7 @@ def create_zerodha_session_manager(
     *,
     auth_client_factory: AuthClientFactory | None = None,
     session_manager_factory: SessionManagerFactory | None = None,
+    session_store: EncryptedBrokerSessionStore | None = None,
     clock=None,
 ) -> ZerodhaSessionManager | None:
     if not isinstance(settings, DesktopLiveDataSettings):
@@ -261,19 +270,53 @@ def create_zerodha_session_manager(
     client = client_factory(credentials.api_key)
     manager_factory = session_manager_factory or ZerodhaSessionManager
     manager = manager_factory(credentials, client=client, clock=now)
+    store = session_store or EncryptedBrokerSessionStore(settings.session_store_path, clock=now)
+    restored = store.load()
+    if restored is not None and not settings.access_token:
+        try:
+            manager.restore_session(
+                user_id=restored.user_id,
+                access_token=restored.access_token,
+                authenticated_at=restored.authenticated_at,
+                expires_at=restored.expires_at,
+                validate_profile=True,
+            )
+            manager.validate_session()
+            return manager
+        except Exception as exc:
+            store.delete()
+            manager.create_login_request()
+            raise DesktopLiveDataConfigurationError(f"Saved Zerodha session is invalid: {_safe_message(exc, settings, restored.access_token)}") from exc
+    if not settings.access_token:
+        request = manager.create_login_request()
+        raise DesktopLiveDataConfigurationError(f"Zerodha login required: {request.login_url}")
     try:
         client.set_access_token(settings.access_token)
         profile = client.profile()
         user_id = _profile_user_id(profile)
+        authenticated_at = now()
         manager.restore_session(
             user_id=user_id,
             access_token=settings.access_token,
-            authenticated_at=now(),
-            expires_at=None,
+            authenticated_at=authenticated_at,
+            expires_at=_default_session_expiry(authenticated_at),
             validate_profile=True,
         )
         manager.validate_session()
+        session = manager.session
+        if session is not None:
+            store.save(
+                BrokerSessionRecord(
+                    broker="ZERODHA",
+                    user_id=session.user_id,
+                    access_token=session.access_token,
+                    authenticated_at=session.authenticated_at,
+                    expires_at=session.expires_at,
+                    created_at=authenticated_at,
+                )
+            )
     except Exception as exc:
+        store.delete()
         raise DesktopLiveDataConfigurationError(f"Zerodha authentication failed: {_safe_message(exc, settings)}") from exc
     return manager
 
@@ -346,10 +389,14 @@ def create_dashboard_application(
             deterministic_backtest_configuration=settings.backtest_configuration,
         )
     ).create_application()
+    lifecycle.orchestrator.configure_broker_session_store(
+        EncryptedBrokerSessionStore(settings.session_store_path, clock=clock or _default_clock)
+    )
     session_manager = create_zerodha_session_manager(
         settings,
         auth_client_factory=auth_client_factory,
         session_manager_factory=session_manager_factory,
+        session_store=lifecycle.orchestrator.broker_session_store,
         clock=clock,
     )
     if settings.enabled and session_manager is not None:
@@ -806,9 +853,9 @@ def _profile_user_id(profile) -> str:
     return user_id
 
 
-def _safe_message(exc: Exception, settings: DesktopLiveDataSettings) -> str:
+def _safe_message(exc: Exception, settings: DesktopLiveDataSettings, *extra_secrets: str | None) -> str:
     message = str(exc) or exc.__class__.__name__
-    for secret in (settings.api_key, settings.api_secret, settings.access_token):
+    for secret in (settings.api_key, settings.api_secret, settings.access_token, *extra_secrets):
         if secret:
             message = message.replace(secret, "[REDACTED]")
     return message
@@ -820,6 +867,12 @@ def _text(value) -> str:
 
 def _default_clock() -> datetime:
     return datetime.now(UTC)
+
+
+def _default_session_expiry(timestamp: datetime) -> datetime:
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise DesktopLiveDataConfigurationError("session timestamp must be timezone-aware")
+    return timestamp.replace(hour=23, minute=59, second=59, microsecond=0)
 
 
 class _DesktopTickerRouter:

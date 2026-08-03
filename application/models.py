@@ -54,6 +54,7 @@ from engines.live_market_validation.models import LiveMarketValidationConfigurat
 from application.live_shadow_session.models import LiveShadowSessionSnapshot
 from application.authorized_paper_execution.models import AuthorizedPaperHandoffSnapshot
 from application.broker_account_sync.models import BrokerAccountSnapshot, BrokerRuntimeVerificationStage
+from application.broker_session_persistence import BrokerSessionPersistenceSnapshot
 from engines.position.models import PositionState
 from engines.price_action.models import PriceActionState
 from engines.risk.models import RiskConfiguration, RiskDecisionState
@@ -709,3 +710,4 @@ class OrchestratorSnapshot:
     authorized_paper_handoff: AuthorizedPaperHandoffSnapshot | None = None
     broker_account: BrokerAccountSnapshot | None = None
     broker_account_verification_report: tuple[BrokerRuntimeVerificationStage, ...] = ()
+    broker_session: BrokerSessionPersistenceSnapshot | None = None

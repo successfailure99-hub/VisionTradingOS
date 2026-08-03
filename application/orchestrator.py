@@ -6,6 +6,7 @@ from application.enums import ExecutionSafetyMode, RuntimeInstrument, RuntimeSta
 from application.models import OrchestratorSnapshot, RuntimeConfiguration, RuntimeSnapshot
 from application.authorized_paper_execution import AuthorizedPaperExecutionCoordinator, AuthorizedPaperHandoffRequest
 from application.broker_account_sync import BrokerAccountSyncCoordinator
+from application.broker_session_persistence import EncryptedBrokerSessionStore
 from application.symbol_runtime import SymbolRuntime
 from application.live_shadow_session import LiveShadowMarketSessionCoordinator, LiveShadowSessionRequest
 from adapters.zerodha import ZerodhaCredentials, ZerodhaReadOnlyAdapter
@@ -100,6 +101,7 @@ class ApplicationOrchestrator:
         self.live_shadow_session_coordinator = LiveShadowMarketSessionCoordinator(event_bus, orchestrator=self)
         self.authorized_paper_execution_coordinator = AuthorizedPaperExecutionCoordinator(event_bus, orchestrator=self)
         self.broker_account_sync = BrokerAccountSyncCoordinator()
+        self.broker_session_store = EncryptedBrokerSessionStore()
         self.zerodha_adapter = zerodha_adapter or ZerodhaReadOnlyAdapter(event_bus, tick_consumer=self.process_live_zerodha_tick)
         self.deterministic_backtest_engine = DeterministicBacktestEngine(
             event_bus,
@@ -372,6 +374,12 @@ class ApplicationOrchestrator:
     def configure_broker_account_client(self, client):
         self.broker_account_sync.configure_client(client)
 
+    def configure_broker_session_store(self, store):
+        if not isinstance(store, EncryptedBrokerSessionStore):
+            raise TypeError("store must be EncryptedBrokerSessionStore")
+        self.broker_session_store = store
+        return self.broker_session_store.snapshot()
+
     def observe_broker_authentication(self, auth_snapshot):
         return self.broker_account_sync.observe_authentication(auth_snapshot)
 
@@ -528,6 +536,7 @@ class ApplicationOrchestrator:
             authorized_paper_handoff=self.authorized_paper_execution_coordinator.snapshot(),
             broker_account=self.broker_account_sync.snapshot(),
             broker_account_verification_report=self.broker_account_sync.verification_report(),
+            broker_session=self.broker_session_store.snapshot(),
         )
 
     def _runtime_for_core_instrument(self, instrument: Instrument) -> SymbolRuntime:

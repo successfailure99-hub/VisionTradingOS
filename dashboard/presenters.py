@@ -241,6 +241,10 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
         broker_orders_count=len(tuple(getattr(getattr(orchestrator, "broker_account", None), "orders", ()) or ())),
         broker_blocking_reason=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "blocking_reason", None)),
         broker_mutation_mode=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "mutation_mode", None)),
+        broker_session_token_valid=bool(getattr(getattr(orchestrator, "broker_session", None), "token_valid", False)),
+        broker_session_expires_at=getattr(getattr(orchestrator, "broker_session", None), "expires_at", None),
+        broker_session_last_refresh=getattr(getattr(orchestrator, "broker_session", None), "last_refresh", None),
+        broker_session_connection=_enum_text(getattr(getattr(orchestrator, "broker_session", None), "connection_state", None)),
         market_session_state=_enum_text(getattr(getattr(operational, "session", None), "status", None)),
         analysis_readiness=_enum_text(getattr(operational, "overall_state", None)),
         vision_readiness="READY" if bool(getattr(operational, "vision_evaluation_ready", False)) else "WAITING_FOR_DATA",
@@ -285,6 +289,7 @@ def _runtime_component_health(orchestrator) -> tuple[DashboardRuntimeComponentHe
         _lifecycle_health_row(snapshots),
         _journal_health_row(snapshots),
         *_broker_account_health_rows(orchestrator),
+        _broker_session_health_row(orchestrator),
         _replay_health_row(orchestrator),
         *_runtime_verification_health_rows(snapshots),
         _journal_health_row(snapshots),
@@ -321,6 +326,31 @@ def _broker_account_health_rows(orchestrator) -> tuple[DashboardRuntimeComponent
             )
         )
     return tuple(rows)
+
+
+def _broker_session_health_row(orchestrator) -> DashboardRuntimeComponentHealthView:
+    session = getattr(orchestrator, "broker_session", None)
+    token_valid = bool(getattr(session, "token_valid", False))
+    status = "READY" if token_valid else "LOGIN_REQUIRED"
+    detail = " | ".join(
+        (
+            f"Authenticated={bool(getattr(session, 'authenticated', False))}",
+            f"TokenValid={token_valid}",
+            f"Expires={_enum_text(getattr(session, 'expires_at', None))}",
+            f"Connection={_enum_text(getattr(session, 'connection_state', None))}",
+            f"LastRefresh={_enum_text(getattr(session, 'last_refresh', None))}",
+            f"Reason={_enum_text(getattr(session, 'blocking_reason', None))}",
+        )
+    )
+    return DashboardRuntimeComponentHealthView(
+        "Broker Session",
+        status,
+        detail,
+        owner="ApplicationOrchestrator",
+        producer="EncryptedBrokerSessionStore",
+        consumer="Dashboard",
+        timestamp=getattr(session, "last_refresh", None),
+    )
 
 def _adr_health_detail(snapshots) -> str:
     diagnostics = next((getattr(snapshot, "adr_diagnostics", None) for snapshot in snapshots if getattr(snapshot, "adr_diagnostics", None) is not None), None)
