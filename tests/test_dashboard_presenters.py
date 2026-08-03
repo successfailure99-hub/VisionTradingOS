@@ -45,11 +45,15 @@ from engines.price_action.enums import BreakDirection, LiquiditySweep, MarketStr
 from engines.price_action.models import PriceActionState, SwingPoint
 from engines.risk.enums import RiskDecision, RiskReductionReason, RiskRejectionReason, RiskTier
 from engines.risk.models import RiskDecisionState
+from engines.runtime_adapter import adapt_vision_method_to_trade_candidate
 from engines.strategy.enums import BlockReason, EntryReference, SetupQuality, StopReference, StrategyDecision, TargetReference, TradeDirection
 from engines.strategy.models import StrategyDecisionState
 from engines.trade_journal.enums import TradeCompliance, TradeExitType, TradeOutcome
 from engines.trade_journal.models import TradeJournalRecord
+from engines.vision_method import VisionOptionConfirmation, validate_vision_method
 from engines.vwap.levels import VWAPLevels
+from tests.test_vision_method_validation_v1 import option as vision_option
+from tests.test_vision_method_validation_v1 import snapshot as vision_method_snapshot
 
 
 TS = datetime(2026, 7, 12, 9, 15)
@@ -182,6 +186,36 @@ def test_ai_strategy_risk_order_position_and_journal_map_correctly():
     assert journal.records == 1
     assert journal.latest_trade_id == "trade-1"
     assert journal.latest_exit_type == "Target"
+
+
+def test_ai_and_strategy_views_reflect_canonical_vision_candidate_from_runtime_snapshot():
+    method_snapshot = vision_method_snapshot(
+        option_confirmation_context=vision_option(state=VisionOptionConfirmation.UNAVAILABLE)
+    )
+    validation = validate_vision_method(method_snapshot)
+    candidate = adapt_vision_method_to_trade_candidate(method_snapshot, validation)
+    runtime = replace(
+        full_runtime(),
+        vision_method_snapshot=method_snapshot,
+        vision_method_validation_report=validation,
+        vision_trade_candidate=candidate,
+        strategy_decision_v2=None,
+        ai_reasoning_v2=object(),
+    )
+
+    ai = build_ai_view(runtime)
+    strategy = build_strategy_view(runtime)
+
+    assert validation.candidate_state.value == "prepare_long"
+    assert candidate.candidate_state.value == "waiting_long"
+    assert ai.market_summary == "Vision Method: Waiting Long"
+    assert ai.trading_suitability == "Waiting Long"
+    assert ai.agreement == "Vision Method"
+    assert strategy.candidate_state == "Waiting Long"
+    assert strategy.candidate_direction == "Long"
+    assert strategy.candidate_validation == "Partial"
+    assert strategy.candidate_source == "VISION_METHOD"
+    assert strategy.strategy_source == "LEGACY_DIAGNOSTIC"
 
 
 def test_empty_position_and_journal_readiness_are_explicit():

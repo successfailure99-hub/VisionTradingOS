@@ -91,11 +91,11 @@ class VisionMethodInspector(QGroupBox):
         values = _empty_values()
         values.update(_diagnostic_values(status))
         values.update(_status_context_values(status))
+        values.update(_status_values(status))
         if snapshot is not None:
             values.update(_snapshot_values(snapshot))
         if report is not None:
             values.update(_report_values(report))
-        values.update(_status_values(status))
         for field, card in self._cards.items():
             card.set_value(values[field])
         for field, value in values.items():
@@ -514,7 +514,7 @@ def _assembly_failures(snapshot: VisionMethodSnapshot) -> str:
     if not snapshot.assembly_failures:
         return "none"
     return formatters.joined(
-        tuple(f"{failure.stage}: {failure.validation_message}" for failure in snapshot.assembly_failures)
+        tuple(f"{failure.stage} {failure.status.value}: {failure.validation_message}" for failure in snapshot.assembly_failures)
     )
 
 

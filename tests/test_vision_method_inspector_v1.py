@@ -20,6 +20,7 @@ from desktop.vision_method import (
     VisionMethodInspector,
     VisionMethodLiveInspectorBridge,
     VisionMethodLiveRuntimeState,
+    VisionMethodLiveStatus,
 )
 from engines.adr import ADRExpansionState, ADRExhaustionState
 from engines.adr.models import ADRSnapshot
@@ -90,6 +91,42 @@ def test_inspector_exposes_conflict_without_summarizing_trace():
     assert panel._labels["Blocking Stage"].text() == "-"
     assert panel._labels["Option Contradicting Factors"].text() == "Call writing contradicts setup"
     assert panel._trace_labels[9].text() == "STEP 10 | Option Chain | contradicts | pass | Call writing contradicts setup"
+
+
+def test_live_status_cannot_override_canonical_snapshot_and_report_values():
+    app()
+    item = snapshot(option_confirmation_context=option(state=VisionOptionConfirmation.UNAVAILABLE))
+    report = validate_vision_method(item)
+    status = VisionMethodLiveStatus(
+        instrument="NIFTY",
+        timeframe="5m",
+        market_timestamp=NOW.isoformat(),
+        runtime_state=VisionMethodLiveRuntimeState.COLLECTING_CONTEXT,
+        candidate_state="insufficient_data",
+        quality="invalid",
+        validation_result="insufficient_data",
+        blocking_stage="Setup",
+        blocking_reason="fallback status",
+        available_contexts=("Market Data",),
+        missing_contexts=(),
+        failed_contexts=(),
+        unexpected_error=None,
+        updated_at=NOW,
+    )
+    panel = VisionMethodInspector()
+
+    panel.render_live_status(status, item, report)
+
+    assert report.candidate_state.value == "prepare_long"
+    assert report.metrics.blocking_stage is None
+    assert panel._labels["Candidate State"].text() == "prepare_long"
+    assert panel._labels["Method Candidate State"].text() == "prepare_long"
+    assert panel._labels["Quality"].text() == "low"
+    assert panel._labels["Validation Result"].text() == "partial"
+    assert panel._labels["Blocking Stage"].text() == "-"
+    assert panel._labels["Setup Classification"].text() == "trend_continuation"
+    assert panel._labels["Option Confirmation"].text() == "unavailable"
+    assert panel._trace_labels[-1].text() == "FINAL | FINAL | prepare_long | pass | low"
 
 
 def test_inspector_missing_data_state_uses_placeholders():
