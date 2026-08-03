@@ -197,12 +197,22 @@ def _candidate_state(request: VisionMethodCalculationRequest, blocking_reasons: 
     if direction == "bullish":
         if confirmation is VisionOptionConfirmation.CONFIRMS:
             return VisionCandidateState.LONG_ELIGIBLE
-        if confirmation in (VisionOptionConfirmation.PARTIAL, VisionOptionConfirmation.NEUTRAL):
+        if confirmation in (
+            VisionOptionConfirmation.PARTIAL,
+            VisionOptionConfirmation.NEUTRAL,
+            VisionOptionConfirmation.CONTRADICTS,
+            VisionOptionConfirmation.UNAVAILABLE,
+        ):
             return VisionCandidateState.PREPARE_LONG
     if direction == "bearish":
         if confirmation is VisionOptionConfirmation.CONFIRMS:
             return VisionCandidateState.SHORT_ELIGIBLE
-        if confirmation in (VisionOptionConfirmation.PARTIAL, VisionOptionConfirmation.NEUTRAL):
+        if confirmation in (
+            VisionOptionConfirmation.PARTIAL,
+            VisionOptionConfirmation.NEUTRAL,
+            VisionOptionConfirmation.CONTRADICTS,
+            VisionOptionConfirmation.UNAVAILABLE,
+        ):
             return VisionCandidateState.PREPARE_SHORT
     if request.setup_qualification_context.eligible_for_option_confirmation:
         return VisionCandidateState.OBSERVE
@@ -230,6 +240,13 @@ def _method_quality(
     ):
         return "high"
     if (
+        request.option_confirmation_context.confirmation_state
+        in (VisionOptionConfirmation.CONTRADICTS, VisionOptionConfirmation.UNAVAILABLE)
+        or request.liquidity_context.quality in (VisionLevelQuality.PARTIAL, VisionLevelQuality.INSUFFICIENT)
+        or request.option_confirmation_context.quality is VisionLevelQuality.INSUFFICIENT
+    ):
+        return "low"
+    if (
         request.option_confirmation_context.confirmation_state in (VisionOptionConfirmation.PARTIAL, VisionOptionConfirmation.NEUTRAL)
         or request.setup_qualification_context.setup_quality is VisionSetupQuality.MEDIUM
         or request.level_context.quality is VisionLevelQuality.PARTIAL
@@ -243,13 +260,9 @@ def _blocking_reasons(request: VisionMethodCalculationRequest) -> tuple[str, ...
     reasons.extend(
         f"{failure.stage} {failure.status.value}: {failure.validation_message}"
         for failure in request.assembly_failures
+        if _assembly_failure_blocks(failure)
     )
     reasons.extend(request.setup_qualification_context.blocking_reasons)
-    confirmation = request.option_confirmation_context
-    if confirmation.confirmation_state is VisionOptionConfirmation.CONTRADICTS:
-        reasons.extend(confirmation.contradicting_factors)
-    if confirmation.confirmation_state is VisionOptionConfirmation.UNAVAILABLE:
-        reasons.append("Option chain unavailable")
     if _has_insufficient_data(request):
         reasons.append("Insufficient data")
     return _dedupe(reasons)
@@ -264,6 +277,7 @@ def _supporting_reasons(request: VisionMethodCalculationRequest) -> tuple[str, .
     reasons.extend(_structure_event_reasons(request.structure_event_context))
     reasons.extend(request.setup_qualification_context.supporting_reasons)
     reasons.extend(request.option_confirmation_context.supporting_factors)
+    reasons.extend(f"Option contradiction: {factor}" for factor in request.option_confirmation_context.contradicting_factors)
     reasons.extend(request.option_confirmation_context.neutral_factors)
     return _dedupe(reasons)
 
@@ -310,15 +324,27 @@ def _structure_event_reasons(context: VisionStructureEventContext) -> tuple[str,
 
 def _has_insufficient_data(request: VisionMethodCalculationRequest) -> bool:
     return (
-        bool(request.assembly_failures)
+        any(_assembly_failure_blocks(failure) for failure in request.assembly_failures)
         or
         request.level_context.quality is VisionLevelQuality.INSUFFICIENT
         or request.opening_range_context.quality is VisionLevelQuality.INSUFFICIENT
         or request.structure_context.quality is VisionLevelQuality.INSUFFICIENT
-        or request.liquidity_context.quality is VisionLevelQuality.INSUFFICIENT
         or request.structure_event_context.quality is VisionLevelQuality.INSUFFICIENT
-        or request.option_confirmation_context.quality is VisionLevelQuality.INSUFFICIENT
     )
+
+
+def _assembly_failure_blocks(failure: VisionContextAssemblyFailure) -> bool:
+    stage = failure.stage.strip().casefold().replace("_", " ")
+    supporting_stages = {
+        "adr",
+        "vwap",
+        "liquidity",
+        "option confirmation",
+        "option chain",
+        "momentum",
+        "volume",
+    }
+    return stage not in supporting_stages
 
 
 def _setup_direction(setup: VisionSetupQualificationContext) -> str | None:

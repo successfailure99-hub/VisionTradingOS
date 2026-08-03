@@ -86,10 +86,10 @@ def test_inspector_exposes_conflict_without_summarizing_trace():
 
     panel.render(item, report)
 
-    assert panel._labels["Validation Result"].text() == "conflict"
-    assert panel._labels["Blocking Stage"].text() == "Option Chain"
+    assert panel._labels["Validation Result"].text() == "partial"
+    assert panel._labels["Blocking Stage"].text() == "-"
     assert panel._labels["Option Contradicting Factors"].text() == "Call writing contradicts setup"
-    assert panel._trace_labels[9].text() == "STEP 10 | Option Chain | contradicts | fail | Call writing contradicts setup"
+    assert panel._trace_labels[9].text() == "STEP 10 | Option Chain | contradicts | pass | Call writing contradicts setup"
 
 
 def test_inspector_missing_data_state_uses_placeholders():
@@ -233,10 +233,10 @@ def test_live_bridge_converts_liquidity_failure_into_visible_insufficient_snapsh
     result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
 
     assert result.ready is False
-    assert result.snapshot is None
-    assert result.validation_report is None
-    assert result.status.candidate_state == "insufficient_data"
-    assert result.status.validation_result == "insufficient_data"
+    assert result.snapshot is not None
+    assert result.validation_report is not None
+    assert result.status.candidate_state == "avoid"
+    assert result.status.validation_result == "invalid"
     assert result.status.level_context is not None
     assert result.status.opening_range_context is not None
     assert result.status.structure_context is not None
@@ -244,10 +244,10 @@ def test_live_bridge_converts_liquidity_failure_into_visible_insufficient_snapsh
     assert result.failures[0].stage == "Liquidity"
     assert result.failures[0].validation_message == "overlapping gaps"
     assert result.status.runtime_state is VisionMethodLiveRuntimeState.DEGRADED
-    assert panel._labels["Candidate State"].text() == "insufficient_data"
+    assert panel._labels["Candidate State"].text() == "avoid"
     assert "Liquidity failed: overlapping gaps" in panel._labels["Assembly Failures"].text()
     assert "Structure Events not_evaluated: Liquidity context is unavailable." not in panel._labels["Assembly Failures"].text()
-    assert "DEGRADED" in panel._trace_labels[0].text()
+    assert panel._trace_labels[0].text() == "STEP 1 | CPR | above_cpr | pass"
     assert "overlapping gaps" in panel._labels["Failed Contexts"].text()
 
 
@@ -420,7 +420,7 @@ def test_live_bridge_omits_previous_session_optional_contexts_without_internal_e
     result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
 
     assert result.snapshot is not None
-    assert result.status.runtime_state is VisionMethodLiveRuntimeState.WAITING_DAILY_CONTEXT
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
     assert result.status.unexpected_error is None
     assert tuple(failure.stage for failure in result.failures[:2]) == ("ADR", "VWAP")
     assert panel._labels["ADR Used"].text() == "unavailable"
@@ -476,7 +476,8 @@ def test_live_bridge_missing_option_chain_is_safe_and_deterministic():
     assert result.validation_report is not None
     assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
     assert panel._labels["Option Confirmation"].text() == "unavailable"
-    assert panel._labels["Validation Result"].text() == "insufficient_data"
+    assert panel._labels["Validation Result"].text() == "invalid"
+    assert panel._labels["Blocking Stage"].text() == "Setup"
 
 
 def test_live_bridge_status_transitions_are_rendered(monkeypatch):

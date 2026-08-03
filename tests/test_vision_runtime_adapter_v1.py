@@ -100,8 +100,8 @@ def test_short_eligible_snapshot_creates_short_trade_candidate():
         ),
         (
             snapshot(option_confirmation_context=option(state=VisionOptionConfirmation.CONTRADICTS)),
-            TradeCandidateState.NO_CANDIDATE,
-            TradeCandidateDirection.NONE,
+            TradeCandidateState.WAITING_LONG,
+            TradeCandidateDirection.LONG,
         ),
         (
             snapshot(
@@ -120,9 +120,14 @@ def test_non_actionable_vision_states_create_no_candidate(item, expected_state, 
 
     assert candidate.candidate_state is expected_state
     assert candidate.direction is expected_direction
-    assert candidate.entry_zone == "Not applicable"
-    assert candidate.stop_loss_zone == "Not applicable"
-    assert candidate.target_zone == "Not applicable"
+    if expected_state is TradeCandidateState.NO_CANDIDATE:
+        assert candidate.entry_zone == "Not applicable"
+        assert candidate.stop_loss_zone == "Not applicable"
+        assert candidate.target_zone == "Not applicable"
+    else:
+        assert candidate.entry_zone != "Not applicable"
+        assert candidate.stop_loss_zone != "Not applicable"
+        assert candidate.target_zone != "Not applicable"
 
 
 def test_prepare_states_create_waiting_candidates_without_execution_fields():

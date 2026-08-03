@@ -343,8 +343,6 @@ class VisionMethodLiveInspectorBridge:
             failures.append(_not_evaluated_failure("Setup Qualification", "Opening range context is unavailable."))
         elif structure is None or structure.quality is VisionLevelQuality.INSUFFICIENT:
             failures.append(_not_evaluated_failure("Setup Qualification", "Structure context is unavailable."))
-        elif liquidity is None or liquidity.quality is VisionLevelQuality.INSUFFICIENT:
-            failures.append(_not_evaluated_failure("Setup Qualification", "Liquidity context is unavailable."))
         elif structure_events is None or structure_events.quality is VisionLevelQuality.INSUFFICIENT:
             failures.append(_not_evaluated_failure("Setup Qualification", "Structure events context is unavailable."))
         else:
@@ -750,7 +748,7 @@ class VisionMethodLiveInspectorBridge:
             runtime_state = VisionMethodLiveRuntimeState.WAITING_DAILY_CONTEXT
         else:
             runtime_state = VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
-        first_blocker = failures[0] if failures else None
+        first_blocker = next((failure for failure in failures if _assembly_failure_blocks(failure)), None)
         snapshot = assembly.snapshot
         report = assembly.report
         return VisionMethodLiveStatus(
@@ -794,8 +792,9 @@ class VisionMethodLiveInspectorBridge:
         else:
             runtime_state = VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
         blocking_reason = report.metrics.blocking_stage or "none"
-        if failures:
-            blocking_reason = failures[0].validation_message
+        first_blocker = next((failure for failure in failures if _assembly_failure_blocks(failure)), None)
+        if first_blocker is not None:
+            blocking_reason = first_blocker.validation_message
         return VisionMethodLiveStatus(
             instrument=snapshot.instrument.value,
             timeframe=snapshot.timeframe.value,
@@ -982,11 +981,25 @@ def _waiting_daily_context_reason(name: str, context_date, trading_date) -> str:
 
 
 def _has_daily_context_wait(failures: tuple[VisionContextAssemblyFailure, ...]) -> bool:
-    daily_stages = {"CPR", "CAMARILLA", "PREVIOUS_DAY", "ADR", "VWAP"}
+    daily_stages = {"CPR", "CAMARILLA", "PREVIOUS_DAY"}
     return any(
         _stage_label(item.stage) in daily_stages and "WAITING_DAILY_CONTEXT" in item.validation_message
         for item in failures
     )
+
+
+def _assembly_failure_blocks(failure: VisionContextAssemblyFailure) -> bool:
+    stage = failure.stage.strip().casefold().replace("_", " ")
+    supporting_stages = {
+        "adr",
+        "vwap",
+        "liquidity",
+        "option confirmation",
+        "option chain",
+        "momentum",
+        "volume",
+    }
+    return stage not in supporting_stages
 
 
 def _session_aligned_optional_contexts(

@@ -289,14 +289,16 @@ def test_valid_bearish_snapshot_records_short_eligible_methodology():
     assert "below_cpr" in report.level_context
 
 
-def test_conflict_report_exposes_option_chain_as_blocking_stage():
+def test_option_chain_contradiction_reduces_quality_without_blocking():
     report = validate_vision_method(snapshot(option_confirmation_context=option(state=VisionOptionConfirmation.CONTRADICTS)))
 
-    assert report.validation_result is VisionMethodValidationResult.CONFLICT
-    assert report.metrics.blocking_stage == "Option Chain"
-    assert report.metrics.failed_steps == 1
-    assert report.trace[9].status == "fail"
-    assert report.blocking_reasons == ("Call writing contradicts setup",)
+    assert report.validation_result is VisionMethodValidationResult.PARTIAL
+    assert report.candidate_state is VisionCandidateState.PREPARE_LONG
+    assert report.metrics.blocking_stage is None
+    assert report.metrics.failed_steps == 0
+    assert report.trace[9].status == "pass"
+    assert report.blocking_reasons == ()
+    assert "Call writing contradicts setup" in report.trace[9].detail
 
 
 def test_insufficient_data_report_exposes_missing_methodology_state():
@@ -317,9 +319,20 @@ def test_missing_optional_context_creates_partial_report_with_exact_stage():
     report = validate_vision_method(snapshot(level_context=level(quality=VisionLevelQuality.PARTIAL, include_adr=False)))
 
     assert report.validation_result is VisionMethodValidationResult.PARTIAL
-    assert report.metrics.blocking_stage == "ADR"
+    assert report.metrics.blocking_stage is None
     assert report.trace[3].stage == "ADR"
     assert report.trace[3].status == "missing"
+
+
+def test_missing_option_confirmation_continues_as_partial_methodology():
+    report = validate_vision_method(snapshot(option_confirmation_context=option(state=VisionOptionConfirmation.UNAVAILABLE)))
+
+    assert report.validation_result is VisionMethodValidationResult.PARTIAL
+    assert report.candidate_state is VisionCandidateState.PREPARE_LONG
+    assert report.metrics.blocking_stage is None
+    assert report.trace[9].stage == "Option Chain"
+    assert report.trace[9].status == "missing"
+    assert report.blocking_reasons == ()
 
 
 def test_opening_range_blocking_stage_is_visible():

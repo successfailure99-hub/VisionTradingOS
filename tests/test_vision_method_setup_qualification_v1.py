@@ -328,7 +328,25 @@ def test_no_quality_setup_generates_blocking_reasons_and_is_not_eligible():
     assert result.setup_quality is VisionSetupQuality.LOW
     assert result.eligible_for_option_confirmation is False
     assert "No BOS" in result.blocking_reasons
-    assert "Insufficient evidence" in result.blocking_reasons
+    assert "Insufficient evidence" not in result.blocking_reasons
+
+
+def test_neutral_or_missing_liquidity_does_not_block_setup_qualification():
+    partial_liquidity = assemble_vision_setup_qualification_context(
+        request(liquidity_context=liquidity(quality=VisionLevelQuality.PARTIAL))
+    )
+
+    assert partial_liquidity.setup_type is VisionSetupType.BREAKOUT
+    assert partial_liquidity.setup_quality is VisionSetupQuality.HIGH
+    assert partial_liquidity.blocking_reasons == ()
+
+    missing_liquidity = assemble_vision_setup_qualification_context(
+        request(liquidity_context=liquidity(quality=VisionLevelQuality.INSUFFICIENT))
+    )
+
+    assert missing_liquidity.setup_type is VisionSetupType.BREAKOUT
+    assert missing_liquidity.eligible_for_option_confirmation is True
+    assert missing_liquidity.blocking_reasons == ()
 
 
 def test_opening_range_incomplete_blocks_before_setup_classification():

@@ -313,13 +313,29 @@ def test_observe_wait_prepare_avoid_and_insufficient_states_are_deterministic():
     assert prepare.candidate_state is VisionCandidateState.PREPARE_LONG
     assert prepare.quality == "medium"
 
-    avoid = calculate_vision_method_snapshot(request(option_confirmation_context=option(state=VisionOptionConfirmation.CONTRADICTS)))
-    assert avoid.candidate_state is VisionCandidateState.AVOID
-    assert "Call writing contradicts setup" in avoid.blocking_reasons
+    contradicted = calculate_vision_method_snapshot(request(option_confirmation_context=option(state=VisionOptionConfirmation.CONTRADICTS)))
+    assert contradicted.candidate_state is VisionCandidateState.PREPARE_LONG
+    assert contradicted.quality == "low"
+    assert contradicted.blocking_reasons == ()
+    assert "Option contradiction: Call writing contradicts setup" in contradicted.supporting_reasons
 
     insufficient = calculate_vision_method_snapshot(request(option_confirmation_context=option(state=VisionOptionConfirmation.UNAVAILABLE)))
-    assert insufficient.candidate_state is VisionCandidateState.INSUFFICIENT_DATA
-    assert insufficient.quality == "invalid"
+    assert insufficient.candidate_state is VisionCandidateState.PREPARE_LONG
+    assert insufficient.quality == "low"
+    assert insufficient.blocking_reasons == ()
+
+
+def test_supporting_evidence_never_blocks_candidate_evaluation():
+    missing_liquidity = calculate_vision_method_snapshot(
+        request(liquidity_context=liquidity(quality=VisionLevelQuality.INSUFFICIENT))
+    )
+    assert missing_liquidity.candidate_state is VisionCandidateState.LONG_ELIGIBLE
+    assert missing_liquidity.quality == "low"
+    assert missing_liquidity.blocking_reasons == ()
+
+    missing_option = calculate_vision_method_snapshot(request(option_confirmation_context=option(state=VisionOptionConfirmation.UNAVAILABLE)))
+    assert missing_option.candidate_state is not VisionCandidateState.INSUFFICIENT_DATA
+    assert missing_option.blocking_reasons == ()
 
 
 def test_duplicate_reasons_are_suppressed_preserving_first_seen_order():

@@ -292,7 +292,14 @@ def _metrics(
     failed_steps = sum(1 for step in decision_steps if step.status == "fail")
     missing_steps = sum(1 for step in decision_steps if step.status == "missing")
     completed_steps = sum(1 for step in decision_steps if step.status == "pass")
-    blocking_stage = next((step.stage for step in decision_steps if step.status in {"fail", "missing"}), None)
+    blocking_stage = next(
+        (
+            step.stage
+            for step in decision_steps
+            if step.status in {"fail", "missing"} and _trace_step_blocks(step)
+        ),
+        None,
+    )
     return VisionMethodValidationMetrics(
         completed_steps=completed_steps,
         failed_steps=failed_steps,
@@ -308,8 +315,6 @@ def _validation_result(
 ) -> VisionMethodValidationResult:
     if snapshot.candidate_state is VisionCandidateState.INSUFFICIENT_DATA:
         return VisionMethodValidationResult.INSUFFICIENT_DATA
-    if snapshot.option_confirmation_context.confirmation_state is VisionOptionConfirmation.CONTRADICTS:
-        return VisionMethodValidationResult.CONFLICT
     if snapshot.quality == "invalid" or metrics.failed_steps:
         return VisionMethodValidationResult.INVALID
     if metrics.missing_steps or snapshot.candidate_state in {
@@ -432,11 +437,13 @@ def _quality_status(quality: VisionLevelQuality) -> str:
 
 
 def _option_status(state: VisionOptionConfirmation) -> str:
-    if state is VisionOptionConfirmation.CONTRADICTS:
-        return "fail"
     if state is VisionOptionConfirmation.UNAVAILABLE:
         return "missing"
     return "pass"
+
+
+def _trace_step_blocks(step: VisionMethodValidationTraceStep) -> bool:
+    return step.stage not in {"ADR", "VWAP", "Liquidity", "Option Chain"}
 
 
 def _normalize_trace(values: tuple[VisionMethodValidationTraceStep, ...]) -> tuple[VisionMethodValidationTraceStep, ...]:

@@ -137,8 +137,6 @@ def validate_setup_qualification_request(
         raise ValueError("insufficient opening range context.")
     if request.structure_context.quality is VisionLevelQuality.INSUFFICIENT:
         raise ValueError("insufficient structure context.")
-    if request.liquidity_context.quality is VisionLevelQuality.INSUFFICIENT:
-        raise ValueError("insufficient liquidity context.")
     if request.structure_event_context.quality is VisionLevelQuality.INSUFFICIENT:
         raise ValueError("insufficient structure event context.")
     return request
@@ -156,14 +154,6 @@ def _blocking_reasons(request: VisionSetupQualificationRequest) -> tuple[str, ..
         reasons.append("Opening range incomplete")
     if request.structure_context.trend is VisionStructureTrend.UNKNOWN:
         reasons.append("Conflicting structure")
-    if (
-        request.structure_event_context.choch is not VisionCHoCH.NONE
-        and request.structure_event_context.continuation is VisionStructureEventPhase.REVERSAL
-        and request.liquidity_context.liquidity_sweep is VisionLiquiditySweep.NONE
-    ):
-        reasons.append("CHoCH against trend")
-    if _liquidity_unresolved(request):
-        reasons.append("Liquidity unresolved")
     return _dedupe(reasons)
 
 
@@ -214,8 +204,6 @@ def _no_quality_blocking_reasons(request: VisionSetupQualificationRequest) -> tu
         reasons.append("No BOS")
     if request.structure_context.trend is VisionStructureTrend.RANGING and not _is_range_fade(request):
         reasons.append("Range unsuitable")
-    if request.level_context.quality is not VisionLevelQuality.FULL:
-        reasons.append("Insufficient evidence")
     if not reasons:
         reasons.append("No quality setup")
     return _dedupe(reasons)
@@ -252,7 +240,6 @@ def _is_trend_continuation(request: VisionSetupQualificationRequest) -> bool:
         request.structure_context.trend in (VisionStructureTrend.BULLISH, VisionStructureTrend.BEARISH)
         and request.structure_event_context.bos is not VisionBOS.NONE
         and request.structure_event_context.continuation is VisionStructureEventPhase.CONTINUATION
-        and not _has_opposing_liquidity(request)
     )
 
 
@@ -301,20 +288,6 @@ def _is_range_fade(request: VisionSetupQualificationRequest) -> bool:
         and near_range_extreme
         and request.structure_event_context.bos is VisionBOS.NONE
     )
-
-
-def _has_opposing_liquidity(request: VisionSetupQualificationRequest) -> bool:
-    event = request.structure_event_context
-    sweep = request.liquidity_context.liquidity_sweep
-    if event.bos is VisionBOS.BULLISH_BOS:
-        return sweep is VisionLiquiditySweep.BUY_SIDE_SWEEP
-    if event.bos is VisionBOS.BEARISH_BOS:
-        return sweep is VisionLiquiditySweep.SELL_SIDE_SWEEP
-    return False
-
-
-def _liquidity_unresolved(request: VisionSetupQualificationRequest) -> bool:
-    return request.liquidity_context.quality is VisionLevelQuality.PARTIAL and request.liquidity_context.liquidity_sweep is VisionLiquiditySweep.NONE
 
 
 def _vwap_supportive(request: VisionSetupQualificationRequest) -> bool:
