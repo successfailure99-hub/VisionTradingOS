@@ -1112,7 +1112,7 @@ class SymbolRuntime:
             setup_classification=self.setup_classification_engine.snapshot(),
             chart_explanation=self.chart_explanation_engine.snapshot(),
             ai_reasoning_v2=self.ai_reasoning_v2_engine.snapshot,
-            strategy_decision_v2=self._vision_strategy_decision_v2 or self.strategy_decision_v2_engine.snapshot,
+            strategy_decision_v2=self._current_strategy_decision_v2_snapshot(),
             risk_management_v2=self.risk_management_v2_engine.snapshot,
             trade_lifecycle_v1=self.trade_lifecycle_v1.snapshot(),
             trade_journal_v1=self.trade_journal_v1_engine.snapshot(),
@@ -1341,6 +1341,7 @@ class SymbolRuntime:
         self._vision_trade_candidate = candidate
         self._vision_ai_explanation = _vision_method_explanation(candidate, validation_report)
         if not _is_actionable_vision_candidate(candidate):
+            self._vision_strategy_decision_v2 = None
             self._record_decision_audit(
                 "Vision Method",
                 f"Vision Method candidate blocked: {candidate.reason}",
@@ -1361,6 +1362,11 @@ class SymbolRuntime:
             vision_trade_candidate=candidate,
         )
         return candidate
+
+    def _current_strategy_decision_v2_snapshot(self):
+        if self._vision_trade_candidate is not None:
+            return self._vision_strategy_decision_v2
+        return self._vision_strategy_decision_v2 or self.strategy_decision_v2_engine.snapshot
 
     def _process_strategy_risk_lifecycle(
         self,
@@ -2080,8 +2086,10 @@ class SymbolRuntime:
         no_candidate_reason = getattr(candidate, "reason", None) or "No Vision trade candidate."
         actionable_candidate = candidate_state in {"long", "short"}
         trade_candidate_detail = "-" if actionable_candidate else f"NO_ACTIONABLE_CANDIDATE - {no_candidate_reason}"
+        strategy_ready = actionable_candidate and self._vision_strategy_decision_v2 is not None
+        risk_ready = actionable_candidate and risk is not None
         risk_detail = "Risk waiting for actionable candidate." if actionable_candidate else "NOT_APPLICABLE - No actionable candidate."
-        lifecycle_detail = "Lifecycle waiting for approved risk." if risk is not None else "NOT_APPLICABLE - Risk was not invoked."
+        lifecycle_detail = "Lifecycle waiting for approved risk." if risk_ready else "NOT_APPLICABLE - Risk was not invoked."
         method_timestamp = getattr(method_snapshot, "timestamp", None)
         validation_timestamp = getattr(validation, "timestamp", None)
         candidate_timestamp = getattr(candidate, "timestamp", None)
@@ -2108,7 +2116,8 @@ class SymbolRuntime:
             ("Validation", "SymbolRuntime", "Vision Method Validation", "Runtime Adapter", validation is not None, validation_timestamp, "Validation report unavailable."),
             ("Runtime Adapter", "SymbolRuntime", "VisionRuntimeAdapter", "TradeCandidate", candidate is not None, candidate_timestamp, "TradeCandidate not evaluated."),
             ("TradeCandidate", "SymbolRuntime", "TradeCandidate", "RiskManagementV2", candidate is not None and actionable_candidate, candidate_timestamp, trade_candidate_detail),
-            ("Risk", "SymbolRuntime", "RiskManagementV2", "TradeLifecycleV1", risk is not None, getattr(risk, "timestamp", None), risk_detail),
+            ("Strategy", "SymbolRuntime", "Vision Runtime Adapter", "RiskManagementV2", strategy_ready, getattr(self._vision_strategy_decision_v2, "timestamp", None), "NOT_APPLICABLE - No actionable candidate." if not actionable_candidate else "Strategy waiting for Vision trade candidate."),
+            ("Risk", "SymbolRuntime", "RiskManagementV2", "TradeLifecycleV1", risk_ready, getattr(risk, "timestamp", None), risk_detail),
             ("Lifecycle", "SymbolRuntime", "TradeLifecycleV1", "PositionManagementV1", lifecycle_ready, getattr(lifecycle, "timestamp", None), lifecycle_detail),
             ("Paper Position", "SymbolRuntime", "PositionManagementV1", "TradeJournalV1", paper_ready, getattr(canonical_position, "updated_at", None), "No canonical Vision paper position."),
             ("Paper Trade", "SymbolRuntime", "PositionManagementV1", "TradeJournalV1", paper_ready, getattr(canonical_position, "updated_at", None), "No canonical Vision paper position."),

@@ -170,6 +170,24 @@ def test_non_actionable_vision_states_are_blocked_before_risk():
         assert view.decision_audit.rejected_at == "Vision Method"
 
 
+def test_non_actionable_vision_update_clears_stale_strategy_exposure():
+    item = runtime()
+    process(item, snapshot())
+    actionable = item.snapshot()
+    assert actionable.strategy_decision_v2 is not None
+
+    wait_snapshot = replace(snapshot(), candidate_state=VisionCandidateState.WAIT)
+    candidate, _ = process(item, wait_snapshot)
+    view = item.snapshot()
+    stages = {stage.stage: stage for stage in view.runtime_verification_report}
+
+    assert view.vision_trade_candidate is candidate
+    assert view.strategy_decision_v2 is None
+    assert stages["Strategy"].status == "NOT_APPLICABLE"
+    assert stages["Risk"].status == "NOT_APPLICABLE"
+    assert "No actionable candidate" in stages["Risk"].blocking_reason
+
+
 def test_risk_rejection_is_visible_for_vision_candidate():
     item = runtime()
 

@@ -194,6 +194,14 @@ class VisionMethodLiveInspectorBridge:
             for candle in runtime.get_candle_history(timeframe)
             if candle.start_time.date() == trading_date and candle.end_time <= timestamp
         )
+        if history:
+            timestamp = _align_timestamp_to_closed_candle_timezone(timestamp, history)
+            trading_date = _market_session_date(timestamp)
+            history = tuple(
+                candle
+                for candle in history
+                if candle.start_time.date() == trading_date and candle.end_time <= timestamp
+            )
         failures: list[VisionContextAssemblyFailure] = []
         if not history:
             failures.append(_missing_failure("Candle Engine", "Closed candle history is unavailable."))
@@ -905,6 +913,17 @@ def _market_session_date(timestamp) -> object:
     return timestamp.date()
 
 
+def _align_timestamp_to_closed_candle_timezone(timestamp, history) -> object:
+    latest = history[-1] if history else None
+    candle_time = getattr(latest, "end_time", None)
+    candle_zone = getattr(candle_time, "tzinfo", None)
+    if candle_zone is None or not hasattr(timestamp, "astimezone"):
+        return timestamp
+    if getattr(timestamp, "tzinfo", None) is None or timestamp.utcoffset() is None:
+        return timestamp
+    return timestamp.astimezone(candle_zone)
+
+
 def _latest_price(runtime_snapshot, history) -> float:
     if runtime_snapshot.latest_tick is not None:
         return runtime_snapshot.latest_tick.last_price
@@ -923,7 +942,7 @@ def _previous_day_from_cpr(cpr) -> DailyOHLC:
 
 
 def _failure(stage: str, exc: Exception) -> VisionContextAssemblyFailure:
-    message = _safe_error(exc)
+    message = _operational_error_message(stage, exc)
     return VisionContextAssemblyFailure(
         stage=stage,
         status=VisionContextAssemblyStatus.FAILED,
@@ -1129,3 +1148,19 @@ def _fallback_option_confirmation(timestamp, failures: list[VisionContextAssembl
 def _safe_error(exc: Exception) -> str:
     text = str(exc).strip()
     return f"{exc.__class__.__name__}: {text}" if text else exc.__class__.__name__
+
+
+def _operational_error_message(stage: str, exc: Exception) -> str:
+    text = str(exc).strip()
+    lowered = text.casefold()
+    if "timezone mismatch" in lowered or "timezone-aware" in lowered or "candle timezone mismatch" in lowered:
+        return f"{stage} waiting for timezone-aligned runtime data."
+    if "incomplete opening data" in lowered:
+        return "Opening Range not complete. Evaluation starts after the first completed opening range."
+    if "missing candles" in lowered or "insufficient closed candles" in lowered:
+        return "Waiting for required closed candle history."
+    if "trading date mismatch" in lowered:
+        return f"{stage} waiting for active-session market data."
+    if "session" in lowered and "mismatch" in lowered:
+        return f"{stage} waiting for active trading session alignment."
+    return text if text else exc.__class__.__name__

@@ -242,10 +242,10 @@ def test_live_bridge_converts_liquidity_failure_into_visible_insufficient_snapsh
     assert result.status.structure_context is not None
     assert result.status.structure_event_context is not None
     assert result.failures[0].stage == "Liquidity"
-    assert result.failures[0].validation_message == "ValueError: overlapping gaps"
+    assert result.failures[0].validation_message == "overlapping gaps"
     assert result.status.runtime_state is VisionMethodLiveRuntimeState.DEGRADED
     assert panel._labels["Candidate State"].text() == "insufficient_data"
-    assert "Liquidity failed: ValueError: overlapping gaps" in panel._labels["Assembly Failures"].text()
+    assert "Liquidity failed: overlapping gaps" in panel._labels["Assembly Failures"].text()
     assert "Structure Events not_evaluated: Liquidity context is unavailable." not in panel._labels["Assembly Failures"].text()
     assert "DEGRADED" in panel._trace_labels[0].text()
     assert "overlapping gaps" in panel._labels["Failed Contexts"].text()
@@ -446,8 +446,23 @@ def test_live_bridge_structure_failure_reports_blocking_without_blank_screen(mon
     assert result.status.level_context is not None
     assert result.status.opening_range_context is not None
     assert panel._labels["Trend"].text() == "unknown"
-    assert "Structure failed: ValueError: Insufficient closed candles." in panel._labels["Failed Contexts"].text()
+    assert "Structure failed: Waiting for required closed candle history." in panel._labels["Failed Contexts"].text()
     assert panel._labels["Candidate State"].text() == "insufficient_data"
+
+
+def test_live_bridge_aligns_runtime_timestamp_to_closed_candle_timezone():
+    app()
+    history = _candles()
+    lifecycle = ApplicationBootstrap().create_application()
+    utc_timestamp = NOW.astimezone(timezone.utc)
+    runtime = _FakeRuntime(_runtime_snapshot(history=history, timestamp=utc_timestamp), history)
+    object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, VisionMethodInspector()).refresh()
+
+    assert result.snapshot is not None
+    assert result.status.market_timestamp.endswith("+05:30")
+    assert all("timezone" not in failure.validation_message.lower() for failure in result.failures)
 
 
 def test_live_bridge_missing_option_chain_is_safe_and_deterministic():
