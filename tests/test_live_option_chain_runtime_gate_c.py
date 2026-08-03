@@ -89,12 +89,17 @@ def test_canonical_option_chain_snapshot_and_analytics_are_exposed_on_runtime_sn
     assert stages["Option Analytics"].status == "READY"
 
 
-def test_option_chain_future_and_stale_timestamps_are_rejected():
+def test_option_chain_newer_feed_timestamp_advances_runtime_and_stale_timestamps_are_rejected():
     runtime = _runtime()
-    with pytest.raises(ValueError, match="future"):
-        runtime.process_option_chain(_snapshot(NOW + timedelta(seconds=1)))
+    newer = runtime.process_option_chain_runtime(
+        _snapshot(NOW + timedelta(seconds=1)),
+        _analytics(_snapshot(NOW + timedelta(seconds=1))),
+    )
+    assert newer.snapshot_created_at == NOW + timedelta(seconds=1)
+
+    runtime.process_tick(_tick(NOW + timedelta(minutes=5)))
     with pytest.raises(ValueError, match="stale"):
-        runtime.process_option_chain(_snapshot(NOW - timedelta(seconds=181)))
+        runtime.process_option_chain(_snapshot(NOW))
 
 
 def test_option_chain_expiry_mismatch_is_rejected():

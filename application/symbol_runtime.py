@@ -144,6 +144,7 @@ class SymbolRuntime:
         self._primary_timeframe = self._timeframes[0]
         self._last_tick: Tick | None = None
         self._updated_at = None
+        self._canonical_market_timestamp = None
         self._latest_tick_at = None
         self._latest_closed_candle_at = None
         self._latest_analysis_at = None
@@ -458,7 +459,7 @@ class SymbolRuntime:
                 self._vwap_source_message = self._vwap_unavailable_reason
         closed_timeframes = self._process_closed_candles()
         self._last_tick = tick
-        self._updated_at = tick.timestamp
+        self._observe_market_timestamp(tick.timestamp)
         self._latest_tick_at = tick.timestamp
         self._ensure_daily_context_for_session(tick.timestamp)
         self._refresh_adr(tick.timestamp, tick.last_price)
@@ -519,7 +520,7 @@ class SymbolRuntime:
             "current_accumulated_volume",
         )
         self._vwap_last_error = None
-        self._updated_at = tick.timestamp
+        self._observe_market_timestamp(tick.timestamp)
         return self.snapshot()
 
     def mark_vwap_unavailable(
@@ -629,7 +630,7 @@ class SymbolRuntime:
         if accepted:
             latest = accepted[-1]
             self._refresh_adr(latest.end_time, latest.close)
-            self._updated_at = latest.end_time
+            self._observe_market_timestamp(latest.end_time)
         return accepted
 
     def get_candle_history(self, timeframe: str | TimeFrame | None = None) -> tuple[Candle, ...]:
@@ -638,7 +639,7 @@ class SymbolRuntime:
 
     def process_option_chain(self, snapshot: OptionChainSnapshot) -> OptionChainState:
         self._require_running()
-        market_timestamp = self._market_timestamp(None) or snapshot.timestamp
+        market_timestamp = self._candidate_market_timestamp(getattr(snapshot, "timestamp", None))
         self._validate_option_chain_snapshot(snapshot, market_timestamp)
         try:
             state = self.option_chain_engine.process(snapshot)
@@ -646,7 +647,7 @@ class SymbolRuntime:
             self._option_chain_last_error = _safe_error(exc)
             raise
         self._option_chain_last_error = None
-        self._updated_at = state.timestamp
+        self._observe_market_timestamp(state.timestamp)
         return state
 
     def process_option_chain_runtime(
@@ -661,11 +662,11 @@ class SymbolRuntime:
 
     def process_option_chain_analytics(self, analytics: OptionChainAnalyticsSnapshot) -> OptionChainAnalyticsSnapshot:
         self._require_running()
-        market_timestamp = self._market_timestamp(None) or analytics.timestamp
+        market_timestamp = self._candidate_market_timestamp(getattr(analytics, "timestamp", None))
         self._validate_option_chain_analytics(analytics, market_timestamp)
         self._option_chain_analytics = analytics
         self._option_chain_last_error = None
-        self._updated_at = analytics.timestamp
+        self._observe_market_timestamp(analytics.timestamp)
         return analytics
 
     def build_market_context(
@@ -700,13 +701,13 @@ class SymbolRuntime:
             camarilla=camarilla,
         )
         state = self.market_context_engines[lane].process(snapshot)
-        self._updated_at = state.timestamp
+        self._observe_market_timestamp(state.timestamp)
         return state
 
     def run_ai_reasoning(self, context: MarketContextState | None = None):
         self._require_running()
         state = self.ai_reasoning_engine.process(context or self.market_context_engine.state)
-        self._updated_at = state.timestamp
+        self._observe_market_timestamp(state.timestamp)
         return state
 
     def run_strategy(self, context: MarketContextState | None = None, reasoning=None) -> StrategyDecisionState:
@@ -745,7 +746,7 @@ class SymbolRuntime:
                 strategy=state,
                 ai_reasoning=ai_reasoning,
             )
-        self._updated_at = state.timestamp
+        self._observe_market_timestamp(state.timestamp)
         return state
 
     def calibrate_ai_confidence(self, request: ConfidenceCalibrationRequest):
@@ -755,7 +756,7 @@ class SymbolRuntime:
         if request.instrument != self._instrument:
             raise ValueError("Confidence calibration request instrument does not match SymbolRuntime.")
         result = self.confidence_calibration_engine.calibrate(request)
-        self._updated_at = result.timestamp
+        self._observe_market_timestamp(result.timestamp)
         return result
 
     def get_confidence_result(self, calibration_id: str):
@@ -788,7 +789,7 @@ class SymbolRuntime:
             trade_plan=trade_plan,
         )
         state = self.risk_engine.process(snapshot)
-        self._updated_at = state.timestamp
+        self._observe_market_timestamp(state.timestamp)
         return state
 
     def create_order(self, request: OrderRequest) -> OrderState:
@@ -804,7 +805,7 @@ class SymbolRuntime:
             request=request,
         )
         state = self.order_engine.create(snapshot)
-        self._updated_at = state.updated_at
+        self._observe_market_timestamp(state.updated_at)
         return state
 
     def evaluate_execution_policy(self, request: ExecutionRequest) -> TradeExecutionPlan:
@@ -812,7 +813,7 @@ class SymbolRuntime:
         if request.instrument != self._instrument.value:
             raise ValueError("ExecutionRequest instrument does not match SymbolRuntime.")
         plan = self.execution_policy_engine.evaluate(request)
-        self._updated_at = plan.created_at
+        self._observe_market_timestamp(plan.created_at)
         return plan
 
     def authorize_trade_decision(self, request: TradeAuthorizationRequest):
@@ -822,7 +823,7 @@ class SymbolRuntime:
         if request.instrument != self._instrument:
             raise ValueError("Trade authorization request instrument does not match SymbolRuntime.")
         result = self.trade_authorization_engine.authorize(request)
-        self._updated_at = result.timestamp
+        self._observe_market_timestamp(result.timestamp)
         return result
 
     def get_trade_authorization_result(self, authorization_id: str):
@@ -841,7 +842,7 @@ class SymbolRuntime:
             raise ValueError("TradingView evidence request instrument does not match SymbolRuntime.")
         engine = self._tradingview_evidence_engine_for(request.timeframe)
         result = engine.map_evidence(request)
-        self._updated_at = result.timestamp
+        self._observe_market_timestamp(result.timestamp)
         return result
 
     def get_tradingview_evidence(self, evidence_id: str, timeframe: str | TimeFrame | None = None):
@@ -890,13 +891,13 @@ class SymbolRuntime:
         if request.instrument != self._instrument.value:
             raise ValueError("PaperExecutionRequest instrument does not match SymbolRuntime.")
         receipt = self.paper_execution_coordinator.execute(request)
-        self._updated_at = receipt.updated_at
+        self._observe_market_timestamp(receipt.updated_at)
         return receipt
 
     def cancel_paper_execution(self, receipt_id: str, *, timestamp, reason: str = "cancelled") -> PaperExecutionReceipt:
         self._require_running()
         receipt = self.paper_execution_coordinator.cancel(receipt_id, timestamp=timestamp, reason=reason)
-        self._updated_at = receipt.updated_at
+        self._observe_market_timestamp(receipt.updated_at)
         return receipt
 
     def reconcile_paper_execution(self, request: ExecutionReconciliationRequest) -> ExecutionReconciliationReport:
@@ -906,13 +907,13 @@ class SymbolRuntime:
         if request.instrument != self._instrument.value:
             raise ValueError("ExecutionReconciliationRequest instrument does not match SymbolRuntime.")
         report = self.execution_reconciliation_engine.reconcile(request)
-        self._updated_at = report.created_at
+        self._observe_market_timestamp(report.created_at)
         return report
 
     def reconcile_paper_execution_receipt(self, receipt_id: str, *, timestamp) -> ExecutionReconciliationReport:
         self._require_running()
         report = self.execution_reconciliation_engine.reconcile_receipt(receipt_id, timestamp=timestamp)
-        self._updated_at = report.created_at
+        self._observe_market_timestamp(report.created_at)
         return report
 
     def start_shadow_session(self, request: ShadowTradingSessionRequest):
@@ -938,19 +939,19 @@ class SymbolRuntime:
     def apply_order_command(self, command: OrderCommand) -> OrderState:
         self._require_running()
         state = self.order_engine.apply(command)
-        self._updated_at = state.updated_at
+        self._observe_market_timestamp(state.updated_at)
         return state
 
     def apply_position_fill(self, fill: PositionFill) -> PositionState:
         self._require_running()
         state = self.position_engine.process_fill(fill)
-        self._updated_at = state.updated_at
+        self._observe_market_timestamp(state.updated_at)
         return state
 
     def apply_position_mark(self, mark: PositionMark) -> PositionState:
         self._require_running()
         state = self.position_engine.process_mark(mark)
-        self._updated_at = state.updated_at
+        self._observe_market_timestamp(state.updated_at)
         return state
 
     def reset(self) -> None:
@@ -998,6 +999,7 @@ class SymbolRuntime:
         self._decision_audit = None
         self._last_tick = None
         self._updated_at = None
+        self._canonical_market_timestamp = None
         self._latest_tick_at = None
         self._latest_closed_candle_at = None
         self._latest_analysis_at = None
@@ -1488,9 +1490,13 @@ class SymbolRuntime:
         market_events = tuple(
             value
             for value in (
+                self._canonical_market_timestamp,
                 self._latest_closed_candle_at,
                 self._latest_tick_at,
                 getattr(self._last_tick, "timestamp", None),
+                getattr(self.vwap_engine.get_latest(self._core_instrument), "timestamp", None),
+                getattr(self.option_chain_engine.snapshot, "timestamp", None),
+                getattr(self._option_chain_analytics, "timestamp", None),
                 self._updated_at,
             )
             if isinstance(value, datetime)
@@ -1499,6 +1505,20 @@ class SymbolRuntime:
             return max(market_events)
         candle_end = getattr(latest_candle, "end_time", None)
         return candle_end if isinstance(candle_end, datetime) else None
+
+    def _observe_market_timestamp(self, timestamp: datetime | None) -> datetime | None:
+        if not isinstance(timestamp, datetime):
+            return self._market_timestamp(None)
+        if self._canonical_market_timestamp is None or timestamp > self._canonical_market_timestamp:
+            self._canonical_market_timestamp = timestamp
+        self._updated_at = self._canonical_market_timestamp
+        return self._canonical_market_timestamp
+
+    def _candidate_market_timestamp(self, timestamp: datetime | None) -> datetime | None:
+        current = self._market_timestamp(None)
+        if isinstance(timestamp, datetime) and (current is None or timestamp > current):
+            return timestamp
+        return current
 
     def _runtime_trading_session(self, market_timestamp: datetime | None) -> RuntimeTradingSession:
         trading_date = market_timestamp.date() if market_timestamp is not None else None

@@ -55,6 +55,23 @@ def test_session_save_restore_and_security_payload_excludes_plaintext_secrets(tm
     assert "pin" not in payload_text
 
 
+def test_sensitive_looking_ciphertext_does_not_trip_plaintext_secret_guard(tmp_path):
+    path = tmp_path / "broker_session.json"
+    subject = store(path)
+
+    subject._assert_safe_payload(
+        {
+            "version": 1,
+            "broker": "ZERODHA",
+            "user_id": "AB1234",
+            "created_at": NOW.isoformat(),
+            "authenticated_at": NOW.isoformat(),
+            "expires_at": (NOW + timedelta(hours=6)).isoformat(),
+            "encrypted_access_token": "pin-api_secret-request_token",
+        }
+    )
+
+
 def test_expired_session_is_deleted_and_requires_login(tmp_path):
     path = tmp_path / "broker_session.json"
     subject = store(path, clock=lambda: NOW)

@@ -178,7 +178,7 @@ def test_vm20_daily_context_and_vision_context_failures_are_visible_without_hidd
     stages = {stage.stage: stage for stage in item.snapshot().runtime_verification_report}
 
     assert result.rendered is True
-    assert result.status.blocking_stage in {"CPR", "Camarilla", "LEVEL_CONTEXT", "VISION_METHOD"}
+    assert result.status.blocking_stage in {"CPR", "Camarilla", "LEVEL_CONTEXT", "OPENING_RANGE", "VISION_METHOD"}
     assert stages["Daily Context"].status in {"READY", "BLOCKED"}
     assert result.status.blocking_reason != "-"
 

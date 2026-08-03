@@ -264,7 +264,8 @@ class EncryptedBrokerSessionStore:
         lowered_keys = {str(key).casefold() for key in payload}
         if lowered_keys & SENSITIVE_KEYS:
             raise ValueError("broker session payload contains forbidden sensitive fields")
-        rendered = json.dumps(payload, sort_keys=True).casefold()
+        plaintext_payload = {key: value for key, value in payload.items() if key != "encrypted_access_token"}
+        rendered = json.dumps(plaintext_payload, sort_keys=True).casefold()
         for forbidden in ("api_secret", "request_token", "password", "totp", "pin"):
             if forbidden in rendered:
                 raise ValueError("broker session payload contains forbidden sensitive material")

@@ -881,7 +881,14 @@ class _VisionMethodNotReady(RuntimeError):
 
 
 def _runtime_timestamp(runtime_snapshot) -> object:
-    timestamp = runtime_snapshot.latest_closed_candle_at or runtime_snapshot.latest_tick_at or runtime_snapshot.updated_at
+    runtime_session = getattr(runtime_snapshot, "runtime_session", None)
+    timestamp = (
+        getattr(runtime_session, "market_timestamp", None)
+        or getattr(runtime_snapshot, "snapshot_created_at", None)
+        or runtime_snapshot.latest_closed_candle_at
+        or runtime_snapshot.latest_tick_at
+        or runtime_snapshot.updated_at
+    )
     if timestamp is None:
         raise _VisionMethodNotReady(
             "No market timestamp is available.",
