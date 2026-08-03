@@ -100,7 +100,15 @@ def test_vm18_runtime_verification_report_covers_every_stage_with_owner_latency_
         assert stage.status in {"READY", "WAITING", "BLOCKED", "FAILED"}
         assert stage.latency_ms is None or stage.latency_ms >= 0.0
         assert stage.recovery_state in {"NO_POSITION", "RESTORED", "CHECKPOINT_ACTIVE"}
+        assert isinstance(stage.prerequisites, tuple)
+        assert isinstance(stage.readiness_conditions, tuple)
+        assert isinstance(stage.blocking_conditions, tuple)
+        assert stage.readiness_conditions
+        assert stage.blocking_conditions
     assert stages["Vision Method"].timestamp == item._vision_method_snapshot.timestamp
+    assert "Option Confirmation" in stages["Vision Method"].prerequisites
+    assert stages["TradeCandidate"].prerequisites == ("Runtime Adapter",)
+    assert stages["Risk"].prerequisites == ("Strategy",)
     assert stages["Validation"].timestamp == report.timestamp
     assert stages["TradeCandidate"].timestamp == candidate.timestamp
     assert stages["Journal"].status == "READY"

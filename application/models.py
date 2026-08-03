@@ -411,6 +411,9 @@ class RuntimeVerificationStage:
     blocking_reason: str = "-"
     latency_ms: float | None = None
     recovery_state: str = "-"
+    prerequisites: tuple[str, ...] = ()
+    readiness_conditions: tuple[str, ...] = ()
+    blocking_conditions: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for field_name in ("stage", "owner", "producer", "consumer", "status", "blocking_reason", "recovery_state"):
@@ -427,6 +430,18 @@ class RuntimeVerificationStage:
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
                 raise ValueError("latency_ms must be a non-negative number or None")
             object.__setattr__(self, "latency_ms", float(value))
+        for field_name in ("prerequisites", "readiness_conditions", "blocking_conditions"):
+            value = getattr(self, field_name)
+            if not isinstance(value, tuple):
+                raise TypeError(f"{field_name} must be a tuple")
+            normalized = []
+            for item in value:
+                if not isinstance(item, str):
+                    raise TypeError(f"{field_name} must contain text")
+                text = item.strip()
+                if text:
+                    normalized.append(text)
+            object.__setattr__(self, field_name, tuple(normalized))
 
 
 @dataclass(frozen=True, slots=True)

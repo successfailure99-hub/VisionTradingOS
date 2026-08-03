@@ -2081,6 +2081,36 @@ class SymbolRuntime:
                 return "CHECKPOINT_ACTIVE"
             return str(state).upper()
 
+        def stage_contract(stage: str) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+            contracts = {
+                "Application Startup": ((), ("Runtime status is RUNNING.",), ("Runtime not started.",)),
+                "Market Data": (("Application Startup",), ("At least one accepted tick is available.",), ("No accepted tick.",)),
+                "Reference Data": (("Application Startup",), ("Reference daily context is aligned to the active trading session.",), ("Missing or stale daily context.",)),
+                "Candle Engine": (("Market Data",), ("At least one closed candle is available.",), ("No closed candle.",)),
+                "Daily Context": (("Reference Data",), ("CPR, Camarilla, ADR and VWAP context are active-session aligned where available.",), ("Missing or stale daily context.",)),
+                "Opening Range": (("Candle Engine",), ("Opening-range candles exist and are session/timezone aligned.",), ("Opening range unavailable or incomplete.",)),
+                "Structure": (("Candle Engine",), ("Minimum closed candle history exists for structure assembly.",), ("Structure context unavailable.",)),
+                "Liquidity": (("Candle Engine",), ("Closed candle history exists for liquidity assembly.",), ("Liquidity context unavailable.",)),
+                "Structure Events": (("Structure", "Liquidity"), ("Structure context is usable for event classification.",), ("Structure events context unavailable.",)),
+                "Setup Qualification": (("Daily Context", "Opening Range", "Structure", "Liquidity", "Structure Events"), ("All Vision Method prerequisite contexts are available.",), ("Setup qualification unavailable.",)),
+                "Option Feed": (("Market Data",), ("Live option feed is active or deterministically unavailable.",), ("Option feed waiting or unavailable.",)),
+                "Option Snapshot": (("Option Feed",), ("Canonical option-chain snapshot is fresh.",), ("Option snapshot waiting or stale.",)),
+                "Option Analytics": (("Option Snapshot",), ("Canonical option-chain analytics snapshot is fresh.",), ("Option analytics waiting or stale.",)),
+                "Option Confirmation": (("Setup Qualification", "Option Analytics"), ("Vision option confirmation context is available or deterministically unavailable.",), ("Option confirmation unavailable.",)),
+                "Vision Method": (("Daily Context", "Opening Range", "Structure", "Liquidity", "Structure Events", "Setup Qualification", "Option Confirmation"), ("VisionMethodSnapshot has been assembled.",), ("Vision Method snapshot unavailable.",)),
+                "Validation": (("Vision Method",), ("Vision Method validation report exists.",), ("Validation report unavailable.",)),
+                "Runtime Adapter": (("Validation",), ("TradeCandidate has been evaluated.",), ("TradeCandidate not evaluated.",)),
+                "TradeCandidate": (("Runtime Adapter",), ("TradeCandidate is actionable LONG or SHORT.",), ("No actionable candidate.",)),
+                "Strategy": (("TradeCandidate",), ("Actionable Vision candidate has produced StrategyDecisionV2.",), ("No actionable candidate.",)),
+                "Risk": (("Strategy",), ("RiskManagementV2 has evaluated the strategy decision.",), ("Risk waiting or not applicable.",)),
+                "Lifecycle": (("Risk",), ("Approved risk has entered TradeLifecycleV1.",), ("Lifecycle waiting or not applicable.",)),
+                "Paper Position": (("Lifecycle",), ("Canonical Vision paper position exists.",), ("No canonical Vision paper position.",)),
+                "Paper Trade": (("Paper Position",), ("Paper trade is represented by canonical position state.",), ("No canonical Vision paper position.",)),
+                "Journal": (("Lifecycle", "Paper Position"), ("TradeJournalV1 has at least one journal entry.",), ("No journal entry.",)),
+                "AI Explanation": (("Runtime Adapter",), ("Vision AI explanation text exists for current candidate.",), ("Vision explanation unavailable.",)),
+            }
+            return contracts.get(stage, ((), ("Stage reports READY only when its producer output is available.",), ("Stage output unavailable.",)))
+
         daily_reason = runtime_session.blocking_reason if not daily_ready else "-"
         candidate_state = getattr(getattr(candidate, "candidate_state", None), "value", None)
         no_candidate_reason = getattr(candidate, "reason", None) or "No Vision trade candidate."
@@ -2137,6 +2167,9 @@ class SymbolRuntime:
                 blocking_reason="-" if ready else detail,
                 latency_ms=latency_for(stage_timestamp),
                 recovery_state=state,
+                prerequisites=stage_contract(stage)[0],
+                readiness_conditions=stage_contract(stage)[1],
+                blocking_conditions=stage_contract(stage)[2],
             )
             for stage, owner, producer, consumer, ready, stage_timestamp, detail in rows
         )

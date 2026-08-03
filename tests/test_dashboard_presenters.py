@@ -337,7 +337,11 @@ def test_runtime_view_exposes_verification_report_ownership_details():
     assert rows["Vision Daily Context"].producer == "CPR/Camarilla/ADR/VWAP"
     assert rows["Vision Daily Context"].consumer == "Vision Level Context"
     assert "Owner=SymbolRuntime" in rows["Vision Daily Context"].detail
+    assert "Dependency=-" in rows["Vision Daily Context"].detail
+    assert "Expected=-" in rows["Vision Daily Context"].detail
+    assert "Actual=READY" in rows["Vision Daily Context"].detail
     assert "Session=2026-07-12" in rows["Vision Daily Context"].detail
+    assert "Suggested Action=-" in rows["Vision Daily Context"].detail
 
 
 def test_dashboard_package_has_no_market_context_v2_dependency():

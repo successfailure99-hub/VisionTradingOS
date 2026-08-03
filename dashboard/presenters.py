@@ -560,15 +560,22 @@ def _verification_detail(stage) -> str:
     reason = getattr(stage, "blocking_reason", "-")
     latency = getattr(stage, "latency_ms", None)
     latency_text = "-" if latency is None else f"{latency:.0f}ms"
+    prerequisites = tuple(getattr(stage, "prerequisites", ()) or ())
+    readiness = tuple(getattr(stage, "readiness_conditions", ()) or ())
+    blocking = tuple(getattr(stage, "blocking_conditions", ()) or ())
     parts = (
         f"Owner={_plain_text(getattr(stage, 'owner', None))}",
         f"Producer={_plain_text(getattr(stage, 'producer', None))}",
         f"Consumer={_plain_text(getattr(stage, 'consumer', None))}",
+        f"Dependency={', '.join(prerequisites) if prerequisites else '-'}",
+        f"Expected={'; '.join(readiness) if readiness else '-'}",
+        f"Actual={_enum_text(getattr(stage, 'status', None))}",
         f"Timestamp={_enum_text(getattr(stage, 'timestamp', None))}",
         f"Session={_enum_text(session_date)}",
         f"Latency={latency_text}",
         f"Recovery={_enum_text(getattr(stage, 'recovery_state', None))}",
         f"Reason={_enum_text(reason)}",
+        f"Suggested Action={'; '.join(blocking) if blocking else '-'}",
     )
     return " | ".join(parts)
 
