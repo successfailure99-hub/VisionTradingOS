@@ -1188,12 +1188,14 @@ def _fallback_setup(failures: list[VisionContextAssemblyFailure]) -> VisionSetup
 def _fallback_option_confirmation(timestamp, failures: list[VisionContextAssemblyFailure]) -> VisionOptionConfirmationContext:
     option_failure = next((failure for failure in failures if failure.stage == "Option Confirmation"), None)
     reason = option_failure.validation_message if option_failure is not None else "Option confirmation unavailable"
+    state = VisionOptionConfirmation.NEUTRAL if _is_nonblocking_option_alignment(reason) else VisionOptionConfirmation.UNAVAILABLE
+    quality = VisionLevelQuality.PARTIAL if state is VisionOptionConfirmation.NEUTRAL else VisionLevelQuality.INSUFFICIENT
     return VisionOptionConfirmationContext(
-        confirmation_state=VisionOptionConfirmation.UNAVAILABLE,
+        confirmation_state=state,
         supporting_factors=(),
         contradicting_factors=(),
         neutral_factors=(reason,),
-        quality=VisionLevelQuality.INSUFFICIENT,
+        quality=quality,
         timestamp=timestamp,
     )
 
@@ -1207,6 +1209,8 @@ def _operational_error_message(stage: str, exc: Exception) -> str:
     text = str(exc).strip()
     lowered = text.casefold()
     if "timezone mismatch" in lowered or "timezone-aware" in lowered or "candle timezone mismatch" in lowered:
+        if stage == "Option Confirmation":
+            return "Option chain timestamp is not aligned with the canonical runtime timestamp; ignored for setup evaluation."
         return f"{stage} waiting for timezone-aligned runtime data."
     if "incomplete opening data" in lowered:
         return f"Opening Range not complete. {text}"
@@ -1217,3 +1221,8 @@ def _operational_error_message(stage: str, exc: Exception) -> str:
     if "session" in lowered and "mismatch" in lowered:
         return f"{stage} waiting for active trading session alignment."
     return text if text else exc.__class__.__name__
+
+
+def _is_nonblocking_option_alignment(reason: str) -> bool:
+    lowered = reason.casefold()
+    return "option chain timestamp" in lowered and "ignored for setup evaluation" in lowered

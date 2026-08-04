@@ -27,12 +27,13 @@ from engines.adr.models import ADRSnapshot
 from engines.camarilla.levels import CamarillaLevels
 from engines.cpr.levels import CPRLevels
 from engines.vision_method import (
+    VisionCandidateState,
     VisionMethodValidationTraceStep,
     VisionOptionConfirmation,
     validate_vision_method,
 )
 from engines.vwap.levels import VWAPLevels
-from tests.test_vision_method_validation_v1 import option, snapshot
+from tests.test_vision_method_validation_v1 import option, setup, snapshot
 
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -515,6 +516,36 @@ def test_live_bridge_missing_option_chain_is_safe_and_deterministic():
     assert panel._labels["Option Confirmation"].text() == "unavailable"
     assert panel._labels["Validation Result"].text() == "invalid"
     assert panel._labels["Blocking Stage"].text() == "Setup"
+
+
+def test_live_bridge_option_timezone_failure_is_neutral_when_candidate_prepares(monkeypatch):
+    app()
+    lifecycle, _runtime = _live_lifecycle()
+    panel = VisionMethodInspector()
+
+    def qualified_bearish_setup(*_args, **_kwargs):
+        return setup(supporting=("Below CPR", "Below L3", "Bearish BOS"))
+
+    def fail_option_confirmation(*_args, **_kwargs):
+        raise ValueError("option_chain.timestamp timezone mismatch.")
+
+    monkeypatch.setattr("desktop.vision_method.live_integration.assemble_vision_setup_qualification_context", qualified_bearish_setup)
+    monkeypatch.setattr("desktop.vision_method.live_integration.assemble_vision_option_confirmation_context", fail_option_confirmation)
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
+
+    assert result.snapshot is not None
+    assert result.validation_report is not None
+    assert result.snapshot.candidate_state is VisionCandidateState.PREPARE_SHORT
+    assert result.snapshot.option_confirmation_context.confirmation_state is VisionOptionConfirmation.NEUTRAL
+    assert result.validation_report.trace[9].status == "pass"
+    assert result.validation_report.trace[-1].observed == "prepare_short"
+    assert result.validation_report.trace[-1].status == "pass"
+    assert panel._labels["Candidate State"].text() == "prepare_short"
+    assert panel._labels["Option Confirmation"].text() == "neutral"
+    assert "ignored for setup evaluation" in panel._labels["Option Neutral Factors"].text()
+    assert "timezone-aligned runtime data" not in panel._labels["Option Neutral Factors"].text()
+    assert "timezone-aligned runtime data" not in panel._labels["Assembly Failures"].text()
 
 
 def test_live_bridge_status_transitions_are_rendered(monkeypatch):
