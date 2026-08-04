@@ -141,6 +141,8 @@ class OptionChainPanel(QGroupBox):
             "Snapshot Status",
             "Analytics Status",
             "Snapshot Age",
+            "Synchronization",
+            "Latency",
             "Blocking Reason",
             "Market Feed",
             "Spot Feed",
@@ -290,6 +292,8 @@ class OptionChainPanel(QGroupBox):
         self._cards["Snapshot Status"].set_value(view.runtime_snapshot_status, kind=_status_kind(view.runtime_snapshot_status))
         self._cards["Analytics Status"].set_value(view.runtime_analytics_status, kind=_status_kind(view.runtime_analytics_status))
         self._cards["Snapshot Age"].set_value(_age_text(view.snapshot_age_seconds), kind="neutral")
+        self._cards["Synchronization"].set_value(view.runtime_synchronization_status or formatters.MISSING, kind=_status_kind(view.runtime_synchronization_status))
+        self._cards["Latency"].set_value(_latency_text(view.runtime_latency_ms), kind="neutral")
         self._cards["Blocking Reason"].set_value(view.runtime_blocking_reason or formatters.MISSING, kind="warning" if view.runtime_blocking_reason and view.runtime_blocking_reason != "-" else "neutral")
         self._cards["Message"].set_value(view.runtime_message, kind=status_kind)
         self._cards["Market Feed"].set_value(_health_text(view.health_market_feed), kind=_health_kind(view.health_market_feed))
@@ -449,6 +453,13 @@ def _age_text(value: float | None) -> str:
     if value is None:
         return formatters.MISSING
     return f"{value:.1f}s"
+
+
+def _latency_text(value: float | None) -> str:
+    if value is None:
+        return formatters.MISSING
+    return f"{value:.0f} ms"
+
 
 def _health_text(value: bool) -> str:
     return "OK" if value else "Waiting"

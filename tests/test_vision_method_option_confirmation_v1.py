@@ -270,6 +270,17 @@ def test_option_chain_unavailable_when_chain_or_analytics_missing():
     assert result.neutral_factors == ("Option chain unavailable",)
 
 
+def test_option_confirmation_accepts_subsecond_async_option_timestamp():
+    option_time = NOW + timedelta(milliseconds=175)
+    chain = option_chain(timestamp=option_time)
+
+    result = assemble_vision_option_confirmation_context(request(chain=chain, analytics_snapshot=analytics(chain)))
+
+    assert result.confirmation_state is VisionOptionConfirmation.CONFIRMS
+    assert result.timestamp == NOW
+    assert "Put writing supports setup" in result.supporting_factors
+
+
 def test_option_confirmation_validator_rejects_mismatches_and_stale_chain():
     with pytest.raises(ValueError, match="instrument mismatch"):
         assemble_vision_option_confirmation_context(request(), instrument=RuntimeInstrument.BANKNIFTY)
@@ -287,7 +298,7 @@ def test_option_confirmation_validator_rejects_mismatches_and_stale_chain():
     with pytest.raises(ValueError, match="stale option chain"):
         assemble_vision_option_confirmation_context(request(chain=stale_chain, analytics_snapshot=analytics(stale_chain)))
 
-    future_chain = option_chain(timestamp=NOW + timedelta(seconds=1))
+    future_chain = option_chain(timestamp=NOW + timedelta(seconds=2))
     with pytest.raises(ValueError, match="cannot be after request timestamp"):
         assemble_vision_option_confirmation_context(request(chain=future_chain, analytics_snapshot=analytics(future_chain)))
 

@@ -32,6 +32,7 @@ from .models import (
 
 
 DEFAULT_MAX_OPTION_CONFIRMATION_AGE = timedelta(minutes=5)
+DEFAULT_OPTION_CONFIRMATION_TIMESTAMP_TOLERANCE = timedelta(seconds=1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +64,7 @@ def assemble_vision_option_confirmation_context(
     instrument: RuntimeInstrument | None = None,
     expiry: date | None = None,
     max_snapshot_age: timedelta = DEFAULT_MAX_OPTION_CONFIRMATION_AGE,
+    timestamp_tolerance: timedelta = DEFAULT_OPTION_CONFIRMATION_TIMESTAMP_TOLERANCE,
 ) -> VisionOptionConfirmationContext:
     """
     Confirm the qualified chart setup against existing option-chain analytics.
@@ -73,6 +75,7 @@ def assemble_vision_option_confirmation_context(
         instrument=instrument,
         expiry=expiry,
         max_snapshot_age=max_snapshot_age,
+        timestamp_tolerance=timestamp_tolerance,
     )
     if request.option_chain is None or request.analytics is None:
         return validate_option_confirmation_context(
@@ -122,6 +125,7 @@ def validate_option_confirmation_request(
     instrument: RuntimeInstrument | None = None,
     expiry: date | None = None,
     max_snapshot_age: timedelta = DEFAULT_MAX_OPTION_CONFIRMATION_AGE,
+    timestamp_tolerance: timedelta = DEFAULT_OPTION_CONFIRMATION_TIMESTAMP_TOLERANCE,
 ) -> VisionOptionConfirmationRequest:
     if not isinstance(request, VisionOptionConfirmationRequest):
         raise TypeError("request must be VisionOptionConfirmationRequest.")
@@ -129,6 +133,10 @@ def validate_option_confirmation_request(
         raise TypeError("max_snapshot_age must be timedelta.")
     if max_snapshot_age.total_seconds() < 0:
         raise ValueError("max_snapshot_age cannot be negative.")
+    if not isinstance(timestamp_tolerance, timedelta):
+        raise TypeError("timestamp_tolerance must be timedelta.")
+    if timestamp_tolerance.total_seconds() < 0:
+        raise ValueError("timestamp_tolerance cannot be negative.")
     expected_instrument = instrument or request.instrument
     expected_expiry = expiry or request.expiry
     if request.instrument is not expected_instrument:
@@ -150,8 +158,8 @@ def validate_option_confirmation_request(
         raise ValueError("analytics source snapshot mismatch.")
     _validate_same_timezone(request.timestamp, request.option_chain.timestamp, "option_chain.timestamp")
     _validate_same_timezone(request.timestamp, request.analytics.timestamp, "analytics.timestamp")
-    _validate_not_future(request.option_chain.timestamp, request.timestamp, "option_chain.timestamp")
-    _validate_not_future(request.analytics.timestamp, request.timestamp, "analytics.timestamp")
+    _validate_not_future(request.option_chain.timestamp, request.timestamp, "option_chain.timestamp", tolerance=timestamp_tolerance)
+    _validate_not_future(request.analytics.timestamp, request.timestamp, "analytics.timestamp", tolerance=timestamp_tolerance)
     if request.timestamp - request.option_chain.timestamp > max_snapshot_age:
         raise ValueError("stale option chain.")
     if request.timestamp - request.analytics.timestamp > max_snapshot_age:
@@ -293,8 +301,8 @@ def _validate_same_timezone(trigger: datetime, value: datetime, field_name: str)
         raise ValueError(f"{field_name} timezone mismatch.")
 
 
-def _validate_not_future(value: datetime, trigger: datetime, field_name: str) -> None:
-    if value > trigger:
+def _validate_not_future(value: datetime, trigger: datetime, field_name: str, *, tolerance: timedelta) -> None:
+    if value - trigger > tolerance:
         raise ValueError(f"{field_name} cannot be after request timestamp.")
 
 

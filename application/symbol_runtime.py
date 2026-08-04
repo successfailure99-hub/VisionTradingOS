@@ -3,7 +3,7 @@ Per-symbol Application Orchestrator runtime.
 """
 
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from core.enums.instrument import Instrument
@@ -117,6 +117,7 @@ from application.models import (
 )
 from application.runtime_contract import RuntimeContractContext, RuntimeContractSubject, RuntimeContractValidator
 _OPTION_CHAIN_MAX_AGE_SECONDS = 180.0
+_OPTION_CHAIN_TIMESTAMP_TOLERANCE = timedelta(seconds=1)
 
 from application.tradingview_evidence_assembly import (
     TradingViewEvidenceAssemblyCoordinator,
@@ -1607,11 +1608,11 @@ class SymbolRuntime:
         market_is_aware = market_timestamp.tzinfo is not None and market_timestamp.utcoffset() is not None
         if snapshot_is_aware != market_is_aware:
             raise ValueError("OptionChainSnapshot timestamp timezone-awareness must match runtime timestamp.")
-        if snapshot.timestamp > market_timestamp:
+        if snapshot.timestamp - market_timestamp > _OPTION_CHAIN_TIMESTAMP_TOLERANCE:
             raise ValueError("OptionChainSnapshot timestamp cannot be in the future relative to runtime timestamp.")
         if snapshot.timestamp.date() != market_timestamp.date():
             raise ValueError("OptionChainSnapshot trading session does not match runtime session.")
-        age = (market_timestamp - snapshot.timestamp).total_seconds()
+        age = max(0.0, (market_timestamp - snapshot.timestamp).total_seconds())
         if age > _OPTION_CHAIN_MAX_AGE_SECONDS:
             raise ValueError("OptionChainSnapshot is stale for the runtime timestamp.")
 
@@ -1632,11 +1633,11 @@ class SymbolRuntime:
             raise ValueError("OptionChainAnalyticsSnapshot must reference the canonical runtime option-chain snapshot.")
         if analytics.source_analysis != self.option_chain_engine.state:
             raise ValueError("OptionChainAnalyticsSnapshot must reference the canonical runtime option-chain analysis.")
-        if analytics.timestamp > market_timestamp:
+        if analytics.timestamp - market_timestamp > _OPTION_CHAIN_TIMESTAMP_TOLERANCE:
             raise ValueError("OptionChainAnalyticsSnapshot timestamp cannot be in the future relative to runtime timestamp.")
         if analytics.timestamp.date() != market_timestamp.date():
             raise ValueError("OptionChainAnalyticsSnapshot trading session does not match runtime session.")
-        age = (market_timestamp - analytics.timestamp).total_seconds()
+        age = max(0.0, (market_timestamp - analytics.timestamp).total_seconds())
         if age > _OPTION_CHAIN_MAX_AGE_SECONDS:
             raise ValueError("OptionChainAnalyticsSnapshot is stale for the runtime timestamp.")
 
@@ -1685,9 +1686,18 @@ class SymbolRuntime:
         analytics = self._option_chain_analytics
         last_update = getattr(snapshot, "timestamp", None)
         age = None
+        latency_ms = None
+        synchronization_status = "-"
         reason = self._option_chain_last_error or "-"
         if market_timestamp is not None and last_update is not None:
             age = max(0.0, (market_timestamp - last_update).total_seconds())
+            latency_reference = self._latest_tick_at if isinstance(self._latest_tick_at, datetime) else market_timestamp
+            latency_seconds = abs((latency_reference - last_update).total_seconds())
+            latency_ms = latency_seconds * 1000.0
+            if latency_seconds <= _OPTION_CHAIN_TIMESTAMP_TOLERANCE.total_seconds():
+                synchronization_status = f"Option Chain synchronized; Latency = {latency_ms:.0f} ms; Accepted"
+            else:
+                synchronization_status = f"Option Chain timestamp drift exceeds tolerance; Latency = {latency_ms:.0f} ms"
         recovery = "-"
         if snapshot is None:
             feed_status = "WAITING_FOR_OPTION_TICKS"
@@ -1737,6 +1747,8 @@ class SymbolRuntime:
             blocking_reason=reason,
             state=operational_state,
             recovery_condition=recovery,
+            latency_ms=latency_ms,
+            synchronization_status=synchronization_status,
         )
 
     def _canonical_lifecycle_position(self):

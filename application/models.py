@@ -460,6 +460,8 @@ class RuntimeOptionChainStatus:
     blocking_reason: str = "-"
     state: str = "WAITING_FOR_DATA"
     recovery_condition: str = "-"
+    latency_ms: float | None = None
+    synchronization_status: str = "-"
 
     def __post_init__(self) -> None:
         if not isinstance(self.instrument, RuntimeInstrument):
@@ -468,7 +470,7 @@ class RuntimeOptionChainStatus:
             raise TypeError("market_timestamp must be datetime or None")
         if self.trading_date is not None and (isinstance(self.trading_date, datetime) or not isinstance(self.trading_date, date)):
             raise TypeError("trading_date must be date or None")
-        for field_name in ("feed_status", "snapshot_status", "analytics_status", "blocking_reason", "state", "recovery_condition"):
+        for field_name in ("feed_status", "snapshot_status", "analytics_status", "blocking_reason", "state", "recovery_condition", "synchronization_status"):
             value = getattr(self, field_name)
             if not isinstance(value, str):
                 raise TypeError(f"{field_name} must be text")
@@ -479,6 +481,10 @@ class RuntimeOptionChainStatus:
             if isinstance(self.age_seconds, bool) or not isinstance(self.age_seconds, (int, float)) or self.age_seconds < 0:
                 raise ValueError("age_seconds must be a non-negative number or None")
             object.__setattr__(self, "age_seconds", float(self.age_seconds))
+        if self.latency_ms is not None:
+            if isinstance(self.latency_ms, bool) or not isinstance(self.latency_ms, (int, float)) or self.latency_ms < 0:
+                raise ValueError("latency_ms must be a non-negative number or None")
+            object.__setattr__(self, "latency_ms", float(self.latency_ms))
         if self.expiry is not None and (isinstance(self.expiry, datetime) or not isinstance(self.expiry, date)):
             raise TypeError("expiry must be date or None")
         if self.atm_strike is not None:

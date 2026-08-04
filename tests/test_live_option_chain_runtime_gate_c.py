@@ -102,6 +102,27 @@ def test_option_chain_newer_feed_timestamp_advances_runtime_and_stale_timestamps
         runtime.process_option_chain(_snapshot(NOW))
 
 
+def test_option_chain_subsecond_async_arrival_is_synchronized_not_blocked():
+    runtime = _runtime()
+    option_time = NOW + timedelta(milliseconds=175)
+    snapshot = _snapshot(option_time)
+    analytics = _analytics(snapshot)
+
+    runtime_snapshot = runtime.process_option_chain_runtime(snapshot, analytics)
+    view = build_option_chain_view(runtime_snapshot)
+
+    assert runtime_snapshot.latest_tick_at == NOW
+    assert runtime_snapshot.snapshot_created_at == option_time
+    assert runtime_snapshot.option_chain_snapshot.timestamp == option_time
+    assert runtime_snapshot.option_chain_analytics.timestamp == option_time
+    assert runtime_snapshot.option_chain_runtime.latency_ms == pytest.approx(175.0)
+    assert runtime_snapshot.option_chain_runtime.synchronization_status == "Option Chain synchronized; Latency = 175 ms; Accepted"
+    assert runtime_snapshot.option_chain_runtime.blocking_reason == "-"
+    assert view.runtime_latency_ms == pytest.approx(175.0)
+    assert view.runtime_synchronization_status == "Option Chain synchronized; Latency = 175 ms; Accepted"
+    assert view.runtime_blocking_reason == "-"
+
+
 def test_option_chain_expiry_mismatch_is_rejected():
     runtime = _runtime()
     with pytest.raises(ValueError, match="expiry"):

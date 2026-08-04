@@ -366,6 +366,8 @@ class DashboardOptionChainView:
     runtime_snapshot_status: str = "Waiting"
     runtime_analytics_status: str = "Waiting"
     snapshot_age_seconds: float | None = None
+    runtime_latency_ms: float | None = None
+    runtime_synchronization_status: str = "-"
     runtime_blocking_reason: str = "-"
     health_market_feed: bool = False
     health_spot_feed: bool = False
@@ -399,6 +401,10 @@ class DashboardOptionChainView:
         _require_non_negative(self.runtime_subscribed_contracts, "runtime_subscribed_contracts")
         _require_non_negative(self.contracts_resolved, "contracts_resolved")
         _require_non_negative(self.option_ticks_received, "option_ticks_received")
+        if self.runtime_latency_ms is not None:
+            if isinstance(self.runtime_latency_ms, bool) or not isinstance(self.runtime_latency_ms, (int, float)) or self.runtime_latency_ms < 0:
+                raise ValueError("runtime_latency_ms must be a non-negative number or None")
+            object.__setattr__(self, "runtime_latency_ms", float(self.runtime_latency_ms))
         object.__setattr__(self, "runtime_events", tuple(self.runtime_events))
         rows = tuple(self.runtime_rows)
         events = tuple(self.event_rows)

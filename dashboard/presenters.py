@@ -1442,6 +1442,8 @@ def _canonical_option_runtime_values(status) -> dict[str, object]:
         "runtime_snapshot_status": _enum_text(getattr(status, "snapshot_status", None)),
         "runtime_analytics_status": _enum_text(getattr(status, "analytics_status", None)),
         "snapshot_age_seconds": getattr(status, "age_seconds", None),
+        "runtime_latency_ms": getattr(status, "latency_ms", None),
+        "runtime_synchronization_status": str(getattr(status, "synchronization_status", None) or "-"),
         "runtime_blocking_reason": _enum_text(getattr(status, "blocking_reason", None)),
     }
 
