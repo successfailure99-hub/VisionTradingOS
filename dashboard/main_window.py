@@ -120,9 +120,9 @@ class VisionMainWindow(QMainWindow):
             self._historical_replay_driver.poll()
         if self._deterministic_backtest_driver is not None:
             self._deterministic_backtest_driver.poll()
+        self._vision_method_bridge.refresh()
         view = self._build_view()
         self._current_view = view
-        self._vision_method_bridge.refresh()
         if view != self._last_rendered_view:
             self.render(view)
         return view

@@ -684,11 +684,17 @@ def test_main_window_refresh_updates_live_vision_method_inspector():
     window = VisionMainWindow(lifecycle)
     object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
 
-    window.refresh()
+    view = window.refresh()
 
     assert window._vision_method_inspector._labels["Instrument"].text() == "NIFTY"
     assert window._vision_method_inspector._labels["Candidate State"].text() != "-"
     assert window._vision_method_bridge.last_report is not None
+    runtime_snapshot = lifecycle.orchestrator.snapshot().runtime_snapshots[0]
+    assert runtime_snapshot.vision_method_snapshot is window._vision_method_bridge.last_snapshot
+    assert runtime_snapshot.vision_method_validation_report is window._vision_method_bridge.last_report
+    assert runtime_snapshot.vision_trade_candidate is not None
+    assert view.strategies[0].candidate_state != "-"
+    assert view.strategies[0].candidate_reference == runtime_snapshot.vision_trade_candidate.snapshot_reference
 
 
 def test_live_bridge_invokes_existing_calculator_once_per_refresh(monkeypatch):
@@ -727,6 +733,17 @@ class _FakeRuntime:
     def get_candle_history(self, _timeframe=None):
         self.history_calls += 1
         return self.history
+
+    def process_vision_method_paper_trade(self, snapshot, validation_report):
+        from engines.runtime_adapter import adapt_vision_method_to_trade_candidate
+
+        candidate = adapt_vision_method_to_trade_candidate(snapshot, validation_report)
+        self.current_snapshot = replace(
+            self.current_snapshot,
+            vision_method_snapshot=snapshot,
+            vision_method_validation_report=validation_report,
+            vision_trade_candidate=candidate,
+        )
 
 
 def _live_lifecycle(*, history=None):
