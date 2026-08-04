@@ -271,7 +271,7 @@ class VisionMethodLiveInspectorBridge:
             self._logger.debug("[VisionMethodLive] OPENING_RANGE available")
         except Exception as exc:
             failures.append(_failure("Opening Range", exc))
-            opening_range = _fallback_opening_range(timestamp, history)
+            opening_range = _fallback_opening_range(timestamp, history, timeframe)
             self._logger.debug("[VisionMethodLive] OPENING_RANGE failed reason=%r", _safe_error(exc))
 
         structure = None
@@ -564,7 +564,7 @@ class VisionMethodLiveInspectorBridge:
             )
         except Exception as exc:
             failures.append(_failure("Opening Range", exc))
-            opening_range = _fallback_opening_range(timestamp, history)
+            opening_range = _fallback_opening_range(timestamp, history, timeframe)
         try:
             structure = assemble_vision_structure_context(
                 VisionStructureRequest(
@@ -724,7 +724,7 @@ class VisionMethodLiveInspectorBridge:
             market_timestamp=exc.timestamp,
             runtime_state=exc.runtime_state,
             candidate_state=VisionCandidateState.INSUFFICIENT_DATA.value,
-            quality="invalid",
+            quality="insufficient",
             validation_result="insufficient_data",
             blocking_stage=exc.blocking_stage,
             blocking_reason=str(exc),
@@ -757,7 +757,7 @@ class VisionMethodLiveInspectorBridge:
             market_timestamp=assembly.timestamp.isoformat(),
             runtime_state=runtime_state,
             candidate_state=snapshot.candidate_state.value if snapshot is not None else VisionCandidateState.INSUFFICIENT_DATA.value,
-            quality=snapshot.quality if snapshot is not None else "invalid",
+            quality=snapshot.quality if snapshot is not None else "insufficient",
             validation_result=report.validation_result.value if report is not None else "insufficient_data",
             blocking_stage=(report.metrics.blocking_stage if report is not None and report.metrics.blocking_stage else None)
             or (_stage_label(first_blocker.stage) if first_blocker is not None else "none"),
@@ -1071,11 +1071,14 @@ def _available_contexts_from_assembly(assembly: _LiveAssembly) -> tuple[str, ...
     return tuple(contexts)
 
 
-def _fallback_opening_range(timestamp, history) -> object:
+def _fallback_opening_range(timestamp, history, timeframe: TimeFrame) -> object:
     session_start = timestamp.replace(hour=9, minute=15, second=0, microsecond=0)
     session_end = session_start + timedelta(minutes=15)
-    high = max((candle.high for candle in history), default=1.0)
-    low = min((candle.low for candle in history), default=high)
+    opening_candles = _opening_window_candles(timestamp, history, timeframe, session_start, session_end)
+    expected_starts = _expected_opening_starts(session_start, session_end, timeframe)
+    missing_starts = _missing_opening_starts(opening_candles, expected_starts)
+    high = max((candle.high for candle in opening_candles), default=1.0)
+    low = min((candle.low for candle in opening_candles), default=high)
     if low <= 0:
         low = high
     return VisionOpeningRangeContext(
@@ -1091,7 +1094,44 @@ def _fallback_opening_range(timestamp, history) -> object:
         false_break=False,
         elapsed_minutes=0,
         quality=VisionLevelQuality.INSUFFICIENT,
+        expected_candle_count=len(expected_starts),
+        actual_candle_count=len(opening_candles),
+        missing_candle_timestamps=missing_starts,
     )
+
+
+def _opening_window_candles(
+    timestamp,
+    history,
+    timeframe: TimeFrame,
+    session_start,
+    session_end,
+):
+    return tuple(
+        candle
+        for candle in history
+        if getattr(candle, "timeframe", None) == timeframe.value
+        and getattr(candle, "start_time", timestamp).date() == timestamp.date()
+        and getattr(candle, "end_time", timestamp).date() == timestamp.date()
+        and candle.start_time >= session_start
+        and candle.end_time <= session_end
+        and candle.end_time <= timestamp
+    )
+
+
+def _expected_opening_starts(session_start, session_end, timeframe: TimeFrame) -> tuple[datetime, ...]:
+    duration = timeframe.duration
+    starts = []
+    cursor = session_start
+    while cursor < session_end:
+        starts.append(cursor)
+        cursor = cursor + duration
+    return tuple(starts)
+
+
+def _missing_opening_starts(opening_candles, expected_starts) -> tuple[datetime, ...]:
+    observed = {candle.start_time for candle in opening_candles}
+    return tuple(timestamp for timestamp in expected_starts if timestamp not in observed)
 
 
 def _fallback_structure() -> VisionStructureContext:
@@ -1169,7 +1209,7 @@ def _operational_error_message(stage: str, exc: Exception) -> str:
     if "timezone mismatch" in lowered or "timezone-aware" in lowered or "candle timezone mismatch" in lowered:
         return f"{stage} waiting for timezone-aligned runtime data."
     if "incomplete opening data" in lowered:
-        return "Opening Range not complete. Evaluation starts after the first completed opening range."
+        return f"Opening Range not complete. {text}"
     if "missing candles" in lowered or "insufficient closed candles" in lowered:
         return "Waiting for required closed candle history."
     if "trading date mismatch" in lowered:

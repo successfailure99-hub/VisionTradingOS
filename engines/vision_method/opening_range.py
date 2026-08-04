@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+import math
 
 from application.enums import RuntimeInstrument
 from core.enums.timeframe import TimeFrame
@@ -78,18 +79,22 @@ def assemble_vision_opening_range_context(
         microsecond=0,
     )
     session_end = session_start + timedelta(minutes=request.opening_minutes)
-    ordered = tuple(sorted(request.candles, key=lambda candle: (candle.start_time, candle.end_time)))
+    expected_starts = _expected_opening_starts(request, session_start, session_end)
+    expected_count = len(expected_starts)
+    ordered = _session_candles(request)
     opening_candles = tuple(
         candle
         for candle in ordered
         if candle.start_time >= session_start and candle.end_time <= session_end
     )
+    actual_count = len(opening_candles)
+    missing_starts = _missing_opening_starts(opening_candles, expected_starts)
     if not opening_candles:
-        raise ValueError("incomplete opening data.")
+        raise ValueError(_incomplete_message(expected_starts, actual_count, missing_starts))
 
     range_complete = request.timestamp >= session_end
     if range_complete:
-        _validate_opening_window_complete(opening_candles, session_start, session_end)
+        _validate_opening_window_complete(opening_candles, expected_starts, session_end)
 
     opening_high = max(candle.high for candle in opening_candles)
     opening_low = min(candle.low for candle in opening_candles)
@@ -114,6 +119,9 @@ def assemble_vision_opening_range_context(
             false_break=False,
             elapsed_minutes=elapsed_minutes,
             quality=VisionLevelQuality.PARTIAL,
+            expected_candle_count=expected_count,
+            actual_candle_count=actual_count,
+            missing_candle_timestamps=missing_starts,
         )
 
     post_opening = tuple(candle for candle in ordered if candle.start_time >= session_end)
@@ -136,6 +144,9 @@ def assemble_vision_opening_range_context(
         false_break=false_break,
         elapsed_minutes=elapsed_minutes,
         quality=VisionLevelQuality.FULL,
+        expected_candle_count=expected_count,
+        actual_candle_count=actual_count,
+        missing_candle_timestamps=(),
     )
 
 
@@ -155,7 +166,13 @@ def validate_opening_range_request(
         raise ValueError("timeframe mismatch.")
 
     previous: Candle | None = None
-    for candle in sorted(request.candles, key=lambda item: (item.start_time, item.end_time)):
+    session_start = request.timestamp.replace(
+        hour=request.session_open.hour,
+        minute=request.session_open.minute,
+        second=0,
+        microsecond=0,
+    )
+    for candle in _validation_candles(request, session_start):
         _validate_candle(candle, request)
         if previous is not None and candle.start_time < previous.end_time:
             raise ValueError("overlapping opening range candles.")
@@ -186,18 +203,97 @@ def _validate_candle(candle: Candle, request: VisionOpeningRangeRequest) -> None
         raise ValueError("candle close must be inside high/low range.")
 
 
-def _validate_opening_window_complete(
-    candles: tuple[Candle, ...],
+def _session_candles(request: VisionOpeningRangeRequest) -> tuple[Candle, ...]:
+    return tuple(
+        sorted(
+            (
+                candle
+                for candle in request.candles
+                if isinstance(candle, Candle)
+                and candle.symbol == request.instrument.value
+                and candle.timeframe == request.timeframe.value
+                and candle.start_time.tzinfo is not None
+                and candle.end_time.tzinfo is not None
+                and candle.start_time.utcoffset() == request.timestamp.utcoffset()
+                and candle.end_time.utcoffset() == request.timestamp.utcoffset()
+                and candle.start_time.date() == request.trading_date
+                and candle.end_time.date() == request.trading_date
+                and candle.end_time <= request.timestamp
+            ),
+            key=lambda candle: (candle.start_time, candle.end_time),
+        )
+    )
+
+
+def _validation_candles(
+    request: VisionOpeningRangeRequest,
+    session_start: datetime,
+) -> tuple[Candle, ...]:
+    return tuple(
+        sorted(
+            (
+                candle
+                for candle in request.candles
+                if isinstance(candle, Candle)
+                and candle.start_time.tzinfo is not None
+                and candle.end_time.tzinfo is not None
+                and candle.start_time.date() == request.trading_date
+                and candle.end_time.date() == request.trading_date
+                and candle.end_time.time() > session_start.time()
+            ),
+            key=lambda candle: (candle.start_time, candle.end_time),
+        )
+    )
+
+
+def _expected_opening_starts(
+    request: VisionOpeningRangeRequest,
     session_start: datetime,
     session_end: datetime,
+) -> tuple[datetime, ...]:
+    duration = request.timeframe.duration
+    if duration.total_seconds() <= 0:
+        raise ValueError("invalid opening range timeframe.")
+    count = math.ceil((session_end - session_start).total_seconds() / duration.total_seconds())
+    return tuple(session_start + index * duration for index in range(count))
+
+
+def _missing_opening_starts(
+    candles: tuple[Candle, ...],
+    expected_starts: tuple[datetime, ...],
+) -> tuple[datetime, ...]:
+    observed = {candle.start_time for candle in candles}
+    return tuple(start for start in expected_starts if start not in observed)
+
+
+def _validate_opening_window_complete(
+    candles: tuple[Candle, ...],
+    expected_starts: tuple[datetime, ...],
+    session_end: datetime,
 ) -> None:
-    cursor = session_start
-    for candle in candles:
-        if candle.start_time != cursor:
-            raise ValueError("incomplete opening data.")
-        cursor = candle.end_time
-    if cursor != session_end:
-        raise ValueError("incomplete opening data.")
+    missing = _missing_opening_starts(candles, expected_starts)
+    if missing or len(candles) != len(expected_starts):
+        raise ValueError(_incomplete_message(expected_starts, len(candles), missing))
+    for index, candle in enumerate(candles):
+        if candle.start_time != expected_starts[index]:
+            raise ValueError(_incomplete_message(expected_starts, len(candles), missing))
+        expected_end = expected_starts[index + 1] if index + 1 < len(expected_starts) else session_end
+        if candle.end_time != expected_end:
+            raise ValueError(_incomplete_message(expected_starts, len(candles), missing))
+
+
+def _incomplete_message(
+    expected_starts: tuple[datetime, ...],
+    actual_count: int,
+    missing_starts: tuple[datetime, ...],
+) -> str:
+    missing = ", ".join(timestamp.isoformat() for timestamp in missing_starts) or "none"
+    return (
+        "incomplete opening data: "
+        f"expected_count={len(expected_starts)}; "
+        f"actual_count={actual_count}; "
+        f"missing_timestamps={missing}"
+    )
 
 
 def _latest_relevant_close(candles: tuple[Candle, ...], timestamp: datetime) -> float:

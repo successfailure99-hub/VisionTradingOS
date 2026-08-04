@@ -197,6 +197,9 @@ class VisionOpeningRangeContext:
     false_break: bool
     elapsed_minutes: int
     quality: VisionLevelQuality
+    expected_candle_count: int = 0
+    actual_candle_count: int = 0
+    missing_candle_timestamps: tuple[datetime, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_aware(self.opening_start_time, "opening_start_time")
@@ -226,6 +229,18 @@ class VisionOpeningRangeContext:
             raise ValueError("elapsed_minutes cannot be negative.")
         if not isinstance(self.quality, VisionLevelQuality):
             raise TypeError("quality must be VisionLevelQuality.")
+        if isinstance(self.expected_candle_count, bool) or not isinstance(self.expected_candle_count, int):
+            raise TypeError("expected_candle_count must be int.")
+        if self.expected_candle_count < 0:
+            raise ValueError("expected_candle_count cannot be negative.")
+        if isinstance(self.actual_candle_count, bool) or not isinstance(self.actual_candle_count, int):
+            raise TypeError("actual_candle_count must be int.")
+        if self.actual_candle_count < 0:
+            raise ValueError("actual_candle_count cannot be negative.")
+        missing = tuple(self.missing_candle_timestamps)
+        for timestamp in missing:
+            _validate_aware(timestamp, "missing_candle_timestamps")
+        object.__setattr__(self, "missing_candle_timestamps", missing)
         object.__setattr__(self, "opening_high", high)
         object.__setattr__(self, "opening_low", low)
 

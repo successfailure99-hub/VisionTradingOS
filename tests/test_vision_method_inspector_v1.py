@@ -302,7 +302,7 @@ def test_live_bridge_startup_without_market_timestamp_renders_waiting_status():
     assert result.status.runtime_state is VisionMethodLiveRuntimeState.WAITING_FOR_MARKET_DATA
     assert panel._labels["Runtime State"].text() == "WAITING_FOR_MARKET_DATA"
     assert panel._labels["Candidate State"].text() == "insufficient_data"
-    assert panel._labels["Quality"].text() == "invalid"
+    assert panel._labels["Quality"].text() == "insufficient"
     assert panel._labels["Validation Result"].text() == "insufficient_data"
     assert panel._labels["Live Blocking Stage"].text() == "MARKET_DATA"
     assert panel._labels["Blocking Reason"].text() == "No market timestamp is available."
@@ -547,6 +547,95 @@ def test_live_bridge_status_transitions_are_rendered(monkeypatch):
         VisionMethodLiveRuntimeState.COLLECTING_CONTEXT,
     }
     assert panel._labels["Runtime State"].text() == readyish.status.runtime_state.value
+
+
+def test_live_bridge_opening_range_fallback_is_session_and_window_scoped():
+    app()
+    timestamp = datetime(2026, 8, 4, 9, 31, tzinfo=IST)
+    session = datetime(2026, 8, 4, 9, 15, tzinfo=IST)
+    previous_session = session - timedelta(days=1)
+    previous = tuple(
+        Candle(
+            symbol="NIFTY",
+            timeframe="1m",
+            start_time=previous_session + timedelta(minutes=index),
+            end_time=previous_session + timedelta(minutes=index + 1),
+            open=25000.0,
+            high=25053.05,
+            low=24900.0,
+            close=25000.0,
+            volume=1000,
+        )
+        for index in range(15)
+    )
+    current = tuple(
+        Candle(
+            symbol="NIFTY",
+            timeframe="1m",
+            start_time=session + timedelta(minutes=index),
+            end_time=session + timedelta(minutes=index + 1),
+            open=24610.0,
+            high=24620.0 + index,
+            low=24600.75,
+            close=24610.0,
+            volume=1000,
+        )
+        for index in range(15)
+        if index != 7
+    )
+    post_window = (
+        Candle(
+            symbol="NIFTY",
+            timeframe="1m",
+            start_time=session + timedelta(minutes=15),
+            end_time=session + timedelta(minutes=16),
+            open=24700.0,
+            high=25053.05,
+            low=24700.0,
+            close=24750.0,
+            volume=1000,
+        ),
+    )
+    history = previous + current + post_window
+    cpr = CPRLevels(timestamp.date(), 25000.0, 24500.0, 24700.0, 24700.0, 24650.0, 24750.0, 100.0, 0.4)
+    camarilla = CamarillaLevels(
+        timestamp.date(),
+        25000.0,
+        24500.0,
+        24700.0,
+        24700.0,
+        24800.0,
+        24900.0,
+        25000.0,
+        25100.0,
+        24600.0,
+        24500.0,
+        24400.0,
+        24300.0,
+    )
+    lifecycle = ApplicationBootstrap().create_application()
+    runtime = _FakeRuntime(
+        replace(
+            _runtime_snapshot(history=history, timestamp=timestamp, cpr=cpr, camarilla=camarilla),
+            timeframe="1m",
+        ),
+        history,
+    )
+    object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
+    panel = VisionMethodInspector()
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
+
+    assert result.status.opening_range_context is not None
+    assert result.status.opening_range_context.range_complete is False
+    assert panel._labels["Opening High"].text() == "24634.00"
+    assert panel._labels["Opening Low"].text() == "24600.75"
+    assert panel._labels["Opening Width"].text() == "33.25"
+    assert panel._labels["Opening Expected Candles"].text() == "15"
+    assert panel._labels["Opening Actual Candles"].text() == "14"
+    assert "04-Aug-2026 09:22:00 IST" in panel._labels["Opening Missing Candles"].text()
+    assert panel._labels["Candidate State"].text() == "insufficient_data"
+    assert panel._labels["Quality"].text() == "insufficient"
 
 
 def test_live_bridge_status_model_is_immutable():

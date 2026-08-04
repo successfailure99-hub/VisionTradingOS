@@ -49,6 +49,30 @@ def candle(
     )
 
 
+def candle_at(
+    start: datetime,
+    minutes: int = 1,
+    *,
+    high: float,
+    low: float,
+    close: float,
+    open_price: float | None = None,
+    symbol: str = "NIFTY",
+    timeframe: str = "1m",
+) -> Candle:
+    return Candle(
+        symbol=symbol,
+        timeframe=timeframe,
+        start_time=start,
+        end_time=start + timedelta(minutes=minutes),
+        open=close if open_price is None else open_price,
+        high=high,
+        low=low,
+        close=close,
+        volume=100,
+    )
+
+
 def opening_candles() -> tuple[Candle, ...]:
     return (
         candle(15, 20, high=101.0, low=99.0, close=100.0),
@@ -80,6 +104,9 @@ def test_opening_range_builds_high_low_width_and_freezes_after_0930():
     assert result.range_complete is True
     assert result.elapsed_minutes == 15
     assert result.quality is VisionLevelQuality.FULL
+    assert result.expected_candle_count == 3
+    assert result.actual_candle_count == 3
+    assert result.missing_candle_timestamps == ()
 
 
 def test_waiting_state_before_opening_range_completes():
@@ -221,3 +248,186 @@ def test_vm03_boundary_creates_only_opening_range_module():
 
     assert (package / "opening_range.py").exists()
     assert not (package / "engine.py").exists()
+
+
+def test_live_session_opening_range_ignores_previous_session_and_post_window_candles():
+    session = datetime(2026, 8, 4, 9, 15, tzinfo=IST)
+    previous_session = session - timedelta(days=1)
+    previous_warmup = tuple(
+        candle_at(previous_session + timedelta(minutes=index), high=25053.05, low=24900.0, close=25000.0)
+        for index in range(15)
+    )
+    current_opening = tuple(
+        candle_at(session + timedelta(minutes=index), high=24620.0 + index, low=24600.75, close=24610.0)
+        for index in range(15)
+    )
+    post_window = (candle_at(session + timedelta(minutes=15), high=25053.05, low=24700.0, close=24750.0),)
+
+    result = assemble_vision_opening_range_context(
+        VisionOpeningRangeRequest(
+            instrument=RuntimeInstrument.NIFTY,
+            timeframe=TimeFrame.ONE_MINUTE,
+            trading_date=date(2026, 8, 4),
+            timestamp=datetime(2026, 8, 4, 9, 31, tzinfo=IST),
+            candles=previous_warmup + current_opening + post_window,
+        )
+    )
+
+    assert result.range_complete is True
+    assert result.opening_high == 24634.0
+    assert result.opening_low == 24600.75
+    assert result.opening_width == 33.25
+    assert result.expected_candle_count == 15
+    assert result.actual_candle_count == 15
+
+
+def test_opening_range_waiting_at_0920_reports_counts_and_missing_timestamps():
+    session = datetime(2026, 8, 4, 9, 15, tzinfo=IST)
+    current = tuple(
+        candle_at(session + timedelta(minutes=index), high=101.0 + index, low=99.0, close=100.0)
+        for index in range(5)
+    )
+
+    result = assemble_vision_opening_range_context(
+        VisionOpeningRangeRequest(
+            instrument=RuntimeInstrument.NIFTY,
+            timeframe=TimeFrame.ONE_MINUTE,
+            trading_date=date(2026, 8, 4),
+            timestamp=datetime(2026, 8, 4, 9, 20, tzinfo=IST),
+            candles=current,
+        )
+    )
+
+    assert result.range_complete is False
+    assert result.retest_state is VisionOpeningRangeState.WAITING
+    assert result.expected_candle_count == 15
+    assert result.actual_candle_count == 5
+    assert result.missing_candle_timestamps[0] == datetime(2026, 8, 4, 9, 20, tzinfo=IST)
+    assert result.missing_candle_timestamps[-1] == datetime(2026, 8, 4, 9, 29, tzinfo=IST)
+
+
+def test_opening_range_waits_at_0929_until_final_candle_closes():
+    session = datetime(2026, 8, 4, 9, 15, tzinfo=IST)
+    current = tuple(
+        candle_at(session + timedelta(minutes=index), high=101.0 + index, low=99.0, close=100.0)
+        for index in range(14)
+    )
+
+    result = assemble_vision_opening_range_context(
+        VisionOpeningRangeRequest(
+            instrument=RuntimeInstrument.NIFTY,
+            timeframe=TimeFrame.ONE_MINUTE,
+            trading_date=date(2026, 8, 4),
+            timestamp=datetime(2026, 8, 4, 9, 29, tzinfo=IST),
+            candles=current,
+        )
+    )
+
+    assert result.range_complete is False
+    assert result.expected_candle_count == 15
+    assert result.actual_candle_count == 14
+    assert result.missing_candle_timestamps == (datetime(2026, 8, 4, 9, 29, tzinfo=IST),)
+
+
+def test_opening_range_ready_immediately_after_0930_boundary():
+    session = datetime(2026, 8, 4, 9, 15, tzinfo=IST)
+    current = tuple(
+        candle_at(session + timedelta(minutes=index), high=101.0 + index, low=99.0, close=100.0)
+        for index in range(15)
+    )
+
+    result = assemble_vision_opening_range_context(
+        VisionOpeningRangeRequest(
+            instrument=RuntimeInstrument.NIFTY,
+            timeframe=TimeFrame.ONE_MINUTE,
+            trading_date=date(2026, 8, 4),
+            timestamp=datetime(2026, 8, 4, 9, 30, tzinfo=IST),
+            candles=current,
+        )
+    )
+
+    assert result.range_complete is True
+    assert result.quality is VisionLevelQuality.FULL
+    assert result.actual_candle_count == 15
+    assert result.missing_candle_timestamps == ()
+
+
+def test_opening_range_missing_one_candle_reports_exact_timestamp_without_wide_range():
+    session = datetime(2026, 8, 4, 9, 15, tzinfo=IST)
+    current = tuple(
+        candle_at(session + timedelta(minutes=index), high=24620.0 + index, low=24600.75, close=24610.0)
+        for index in range(15)
+        if index != 7
+    )
+    post_window = (candle_at(session + timedelta(minutes=15), high=25053.05, low=24700.0, close=24750.0),)
+
+    with pytest.raises(ValueError) as exc:
+        assemble_vision_opening_range_context(
+            VisionOpeningRangeRequest(
+                instrument=RuntimeInstrument.NIFTY,
+                timeframe=TimeFrame.ONE_MINUTE,
+                trading_date=date(2026, 8, 4),
+                timestamp=datetime(2026, 8, 4, 9, 31, tzinfo=IST),
+                candles=current + post_window,
+            )
+        )
+
+    message = str(exc.value)
+    assert "expected_count=15" in message
+    assert "actual_count=14" in message
+    assert "2026-08-04T09:22:00+05:30" in message
+
+
+def test_restart_at_0935_reconstructs_opening_range_without_previous_session_leakage():
+    session = datetime(2026, 8, 4, 9, 15, tzinfo=IST)
+    previous_session = session - timedelta(days=1)
+    previous = tuple(
+        candle_at(previous_session + timedelta(minutes=index), high=25053.05, low=24900.0, close=25000.0)
+        for index in range(20)
+    )
+    current = tuple(
+        candle_at(session + timedelta(minutes=index), high=24620.0 + index, low=24600.75, close=24610.0)
+        for index in range(20)
+    )
+
+    result = assemble_vision_opening_range_context(
+        VisionOpeningRangeRequest(
+            instrument=RuntimeInstrument.NIFTY,
+            timeframe=TimeFrame.ONE_MINUTE,
+            trading_date=date(2026, 8, 4),
+            timestamp=datetime(2026, 8, 4, 9, 35, tzinfo=IST),
+            candles=previous + current,
+        )
+    )
+
+    assert result.range_complete is True
+    assert result.opening_high == 24634.0
+    assert result.opening_low == 24600.75
+    assert result.actual_candle_count == 15
+
+
+def test_next_day_rollover_does_not_reuse_previous_day_opening_range():
+    previous_session = datetime(2026, 8, 4, 9, 15, tzinfo=IST)
+    next_session = datetime(2026, 8, 5, 9, 15, tzinfo=IST)
+    previous = tuple(
+        candle_at(previous_session + timedelta(minutes=index), high=25053.05, low=24900.0, close=25000.0)
+        for index in range(15)
+    )
+    current = tuple(
+        candle_at(next_session + timedelta(minutes=index), high=101.0 + index, low=99.0, close=100.0)
+        for index in range(15)
+    )
+
+    result = assemble_vision_opening_range_context(
+        VisionOpeningRangeRequest(
+            instrument=RuntimeInstrument.NIFTY,
+            timeframe=TimeFrame.ONE_MINUTE,
+            trading_date=date(2026, 8, 5),
+            timestamp=datetime(2026, 8, 5, 9, 30, tzinfo=IST),
+            candles=previous + current,
+        )
+    )
+
+    assert result.range_complete is True
+    assert result.opening_high == 115.0
+    assert result.opening_low == 99.0

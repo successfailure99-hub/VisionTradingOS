@@ -219,6 +219,9 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
         "Opening High": formatters.price(opening.opening_high),
         "Opening Low": formatters.price(opening.opening_low),
         "Opening Width": formatters.price(opening.opening_width),
+        "Opening Expected Candles": formatters.integer(opening.expected_candle_count),
+        "Opening Actual Candles": formatters.integer(opening.actual_candle_count),
+        "Opening Missing Candles": _missing_opening_candles(opening),
         "Opening Break": opening.break_direction.value,
         "Opening Retest": opening.retest_state.value,
         "Opening False Break": formatters.yes_no(opening.false_break),
@@ -317,6 +320,9 @@ def _status_context_values(status: VisionMethodLiveStatus) -> dict[str, str]:
                 "Opening High": formatters.price(opening.opening_high),
                 "Opening Low": formatters.price(opening.opening_low),
                 "Opening Width": formatters.price(opening.opening_width),
+                "Opening Expected Candles": formatters.integer(opening.expected_candle_count),
+                "Opening Actual Candles": formatters.integer(opening.actual_candle_count),
+                "Opening Missing Candles": _missing_opening_candles(opening),
                 "Opening Break": opening.break_direction.value,
                 "Opening Retest": opening.retest_state.value,
                 "Opening False Break": formatters.yes_no(opening.false_break),
@@ -445,13 +451,25 @@ def _diagnostic_values(status: VisionMethodLiveStatus) -> dict[str, str]:
         elif "vwap" in stage:
             values.update({"VWAP Position": marker, "VWAP Distance": marker})
         elif "candle" in stage:
-            values.update({"Opening High": marker, "Opening Low": marker, "Opening Width": marker})
+            values.update(
+                {
+                    "Opening High": marker,
+                    "Opening Low": marker,
+                    "Opening Width": marker,
+                    "Opening Expected Candles": marker,
+                    "Opening Actual Candles": marker,
+                    "Opening Missing Candles": marker,
+                }
+            )
         elif "opening range" in stage:
             values.update(
                 {
                     "Opening High": marker,
                     "Opening Low": marker,
                     "Opening Width": marker,
+                    "Opening Expected Candles": marker,
+                    "Opening Actual Candles": marker,
+                    "Opening Missing Candles": failure.validation_message,
                     "Opening Break": marker,
                     "Opening Retest": marker,
                     "Opening False Break": marker,
@@ -566,6 +584,13 @@ def _swing_price(swing) -> str:
     return formatters.price(swing.price)
 
 
+def _missing_opening_candles(opening) -> str:
+    missing = tuple(getattr(opening, "missing_candle_timestamps", ()) or ())
+    if not missing:
+        return "none"
+    return formatters.joined(tuple(formatters.timestamp(timestamp) for timestamp in missing))
+
+
 _SECTION_FIELDS = (
     (
         "VISION METHOD LIVE STATUS",
@@ -616,6 +641,9 @@ _SECTION_FIELDS = (
             "Opening High",
             "Opening Low",
             "Opening Width",
+            "Opening Expected Candles",
+            "Opening Actual Candles",
+            "Opening Missing Candles",
             "Opening Break",
             "Opening Retest",
             "Opening False Break",
