@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from core.base_engine import BaseEngine
 from core.enums.instrument import Instrument
@@ -96,7 +96,12 @@ class CandleEngine(BaseEngine):
 
             return current
 
-        self._close_candle(tick.symbol)
+        next_candle_start = BuildingCandle.from_tick(
+            tick,
+            timeframe=self.timeframe,
+        ).start_time
+        closed = self._close_candle(tick.symbol)
+        self._close_empty_elapsed_candles(tick.symbol, closed, next_candle_start)
 
         return self._open_candle(tick)
 
@@ -272,3 +277,37 @@ class CandleEngine(BaseEngine):
                 del self._current[symbol]
 
         return candle
+
+    def _close_empty_elapsed_candles(
+        self,
+        symbol: Instrument,
+        previous: Candle,
+        next_candle_start: datetime,
+    ) -> tuple[Candle, ...]:
+        if next_candle_start <= previous.end_time:
+            return ()
+        if next_candle_start.date() != previous.end_time.date():
+            return ()
+
+        emitted = []
+        start = previous.end_time
+        while start < next_candle_start:
+            end = start + self.timeframe.duration
+            candle = Candle(
+                symbol=symbol.value,
+                timeframe=self.timeframe.value,
+                start_time=start,
+                end_time=end,
+                open=previous.close,
+                high=previous.close,
+                low=previous.close,
+                close=previous.close,
+                volume=0,
+            )
+            self._history[symbol].append(candle)
+            self._data = candle
+            self._event_bus.publish(CANDLE_CLOSED, candle)
+            emitted.append(candle)
+            previous = candle
+            start = end
+        return tuple(emitted)
