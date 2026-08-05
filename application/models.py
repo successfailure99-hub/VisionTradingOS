@@ -629,6 +629,7 @@ class RuntimeSnapshot:
     adr_runtime: RuntimeADRStatus | None = None
     operational_readiness: OperationalReadinessSnapshot | None = None
     runtime_contract_report: RuntimeContractReport | None = None
+    candle_history_count: int = 0
 
     def __post_init__(self) -> None:
         if self.runtime_session is not None and not isinstance(self.runtime_session, RuntimeTradingSession):
@@ -650,6 +651,8 @@ class RuntimeSnapshot:
             raise TypeError("operational_readiness must be OperationalReadinessSnapshot or None")
         if self.runtime_contract_report is not None and not isinstance(self.runtime_contract_report, RuntimeContractReport):
             raise TypeError("runtime_contract_report must be RuntimeContractReport or None")
+        if isinstance(self.candle_history_count, bool) or not isinstance(self.candle_history_count, int) or self.candle_history_count < 0:
+            raise ValueError("candle_history_count must be a non-negative integer")
         if self.vision_method_snapshot is not None and not isinstance(self.vision_method_snapshot, VisionMethodSnapshot):
             raise TypeError("vision_method_snapshot must be VisionMethodSnapshot or None")
         if self.vision_method_validation_report is not None and not isinstance(self.vision_method_validation_report, VisionMethodValidationReport):

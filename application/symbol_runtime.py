@@ -115,7 +115,7 @@ from application.models import (
     RuntimeVerificationStage,
     RuntimeVWAPSource,
 )
-from application.runtime_contract import RuntimeContractContext, RuntimeContractSubject, RuntimeContractValidator
+from application.runtime_contract import RuntimeContractContext, RuntimeContractSubject, RuntimeContractValidator, RuntimeIntegrityViolation
 _OPTION_CHAIN_MAX_AGE_SECONDS = 180.0
 _OPTION_CHAIN_TIMESTAMP_TOLERANCE = timedelta(seconds=1)
 
@@ -1041,9 +1041,9 @@ class SymbolRuntime:
 
     def snapshot(self, latest_journal_record=None, *, performance_analytics=None) -> RuntimeSnapshot:
         latest_candle = self.candle_engine.get_current(self._core_instrument)
+        primary_candle_history = tuple(self.candle_engine.get_history(self._core_instrument))
         if latest_candle is None:
-            history = self.candle_engine.get_history(self._core_instrument)
-            latest_candle = history[-1] if history else None
+            latest_candle = primary_candle_history[-1] if primary_candle_history else None
         market_timestamp = self._market_timestamp(latest_candle)
         runtime_session = self._runtime_trading_session(market_timestamp)
         vwap = self.vwap_engine.get_latest(self._core_instrument)
@@ -1056,6 +1056,8 @@ class SymbolRuntime:
             market_timestamp=market_timestamp,
             runtime_session=runtime_session,
             latest_candle=latest_candle,
+            candle_history=primary_candle_history,
+            snapshot_candle_history_count=len(primary_candle_history),
             vwap=vwap,
             adr=adr,
             price_action=price_action,
@@ -1129,6 +1131,7 @@ class SymbolRuntime:
             runtime_verification_report=self._runtime_verification_report(market_timestamp, runtime_session),
             operational_readiness=self._operational_readiness_snapshot(market_timestamp, runtime_session),
             runtime_contract_report=runtime_contract_report,
+            candle_history_count=len(primary_candle_history),
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
@@ -1928,6 +1931,8 @@ class SymbolRuntime:
         market_timestamp: datetime | None,
         runtime_session: RuntimeTradingSession,
         latest_candle,
+        candle_history: tuple[Candle, ...],
+        snapshot_candle_history_count: int,
         vwap,
         adr,
         price_action,
@@ -1949,7 +1954,7 @@ class SymbolRuntime:
             trading_date=runtime_session.trading_date,
             session=runtime_session,
         )
-        return self._runtime_contract_validator.validate_many(
+        report = self._runtime_contract_validator.validate_many(
             (
                 ("RuntimeSnapshot", runtime_subject, "SymbolRuntime", "RuntimeSnapshot", "Dashboard"),
                 ("Candle", latest_candle, "SymbolRuntime", "CandleEngine", "Vision Method"),
@@ -1970,6 +1975,293 @@ class SymbolRuntime:
             ),
             context,
         )
+        integrity_violations = self._runtime_integrity_violations(
+            market_timestamp=market_timestamp,
+            runtime_session=runtime_session,
+            candle_history=candle_history,
+            snapshot_candle_history_count=snapshot_candle_history_count,
+        )
+        if integrity_violations:
+            return replace(report, status="FAILED", integrity_violations=integrity_violations)
+        return report
+
+    def _runtime_integrity_violations(
+        self,
+        *,
+        market_timestamp: datetime | None,
+        runtime_session: RuntimeTradingSession,
+        candle_history: tuple[Candle, ...],
+        snapshot_candle_history_count: int,
+    ) -> tuple[RuntimeIntegrityViolation, ...]:
+        violations: list[RuntimeIntegrityViolation] = []
+        violations.extend(
+            self._candle_history_integrity_violations(
+                market_timestamp=market_timestamp,
+                runtime_session=runtime_session,
+                candle_history=candle_history,
+                snapshot_candle_history_count=snapshot_candle_history_count,
+            )
+        )
+        violations.extend(
+            self._downstream_timestamp_integrity_violations(
+                market_timestamp=market_timestamp,
+            )
+        )
+        return tuple(violations)
+
+    def _candle_history_integrity_violations(
+        self,
+        *,
+        market_timestamp: datetime | None,
+        runtime_session: RuntimeTradingSession,
+        candle_history: tuple[Candle, ...],
+        snapshot_candle_history_count: int,
+    ) -> tuple[RuntimeIntegrityViolation, ...]:
+        violations: list[RuntimeIntegrityViolation] = []
+        if snapshot_candle_history_count != len(candle_history):
+            violations.append(
+                self._runtime_integrity_violation(
+                    "RuntimeSnapshot",
+                    "Snapshot history count equals runtime history count",
+                    f"{len(candle_history)} candles",
+                    f"{snapshot_candle_history_count} candles",
+                    market_timestamp,
+                    producer="RuntimeSnapshot",
+                    consumer="Dashboard",
+                    recovery_action="Regenerate RuntimeSnapshot from SymbolRuntime candle history.",
+                )
+            )
+
+        starts: set[datetime] = set()
+        duplicates: list[datetime] = []
+        for candle in candle_history:
+            if candle.start_time in starts:
+                duplicates.append(candle.start_time)
+            starts.add(candle.start_time)
+            if market_timestamp is not None and candle.end_time > market_timestamp:
+                violations.append(
+                    self._runtime_integrity_violation(
+                        "Candle",
+                        "Closed candle timestamp is not in the future",
+                        f"end_time <= {market_timestamp.isoformat()}",
+                        candle.end_time.isoformat(),
+                        candle.end_time,
+                        producer="CandleEngine",
+                        consumer="Runtime History",
+                        recovery_action="Reject future closed candle and wait for canonical market timestamp.",
+                    )
+                )
+        if duplicates:
+            violations.append(
+                self._runtime_integrity_violation(
+                    "Candle",
+                    "Runtime candle history has no duplicate candle timestamps",
+                    "unique candle start_time values",
+                    ", ".join(item.isoformat() for item in duplicates),
+                    market_timestamp,
+                    producer="CandleEngine",
+                    consumer="Runtime History",
+                    recovery_action="Reject duplicate candle publication and keep canonical candle history.",
+                )
+            )
+
+        active_history = self._active_session_candle_history(candle_history, runtime_session)
+        expected_delta = self._primary_timeframe.duration
+        for previous, current in zip(active_history, active_history[1:]):
+            if previous.start_time >= current.start_time:
+                violations.append(
+                    self._runtime_integrity_violation(
+                        "Candle",
+                        "Runtime candle history is chronological",
+                        "strictly increasing candle start_time values",
+                        f"{previous.start_time.isoformat()} before {current.start_time.isoformat()}",
+                        current.start_time,
+                        producer="CandleEngine",
+                        consumer="Runtime History",
+                        recovery_action="Reject non-chronological candle history and rebuild from canonical producer.",
+                    )
+                )
+            if previous.end_time > current.start_time:
+                violations.append(
+                    self._runtime_integrity_violation(
+                        "Candle",
+                        "Runtime candle history has no overlapping candles",
+                        "previous end_time <= current start_time",
+                        f"{previous.end_time.isoformat()} > {current.start_time.isoformat()}",
+                        current.start_time,
+                        producer="CandleEngine",
+                        consumer="Runtime History",
+                        recovery_action="Reject overlapping candle history and rebuild from canonical producer.",
+                    )
+                )
+            if current.start_time - previous.start_time != expected_delta:
+                violations.append(
+                    self._runtime_integrity_violation(
+                        "Candle",
+                        "Runtime candle history is continuous",
+                        f"next candle every {expected_delta}",
+                        f"gap from {previous.start_time.isoformat()} to {current.start_time.isoformat()}",
+                        current.start_time,
+                        producer="CandleEngine",
+                        consumer="Opening Range",
+                        recovery_action="Wait for CandleEngine recovery before Vision Method evaluation.",
+                    )
+                )
+        return tuple(violations)
+
+    def _downstream_timestamp_integrity_violations(self, *, market_timestamp: datetime | None) -> tuple[RuntimeIntegrityViolation, ...]:
+        violations: list[RuntimeIntegrityViolation] = []
+        timestamped_children = (
+            ("VisionMethodSnapshot", self._vision_method_snapshot, "Vision Method Calculator", "Vision Validation"),
+            ("ValidationReport", self._vision_method_validation_report, "Vision Method Validation", "Runtime Adapter"),
+            ("TradeCandidate", self._vision_trade_candidate, "Runtime Adapter", "Risk Management V2"),
+            ("StrategyDecision", self._current_strategy_decision_v2_snapshot(), "StrategyDecisionV2", "Risk Management V2"),
+            ("PaperPosition", self._canonical_paper_position(), "TradeLifecycleV1", "Dashboard Position"),
+            ("Journal", self._journal_persistence_snapshot(), "TradeJournalV1", "Dashboard Journal"),
+        )
+        for object_name, snapshot, producer, consumer in timestamped_children:
+            timestamp = self._snapshot_timestamp(snapshot)
+            if (
+                market_timestamp is not None
+                and timestamp is not None
+                and self._timestamps_are_comparable(timestamp, market_timestamp)
+                and timestamp > market_timestamp
+            ):
+                violations.append(
+                    self._runtime_integrity_violation(
+                        object_name,
+                        "Snapshot timestamp is not newer than RuntimeSnapshot timestamp",
+                        f"<= {market_timestamp.isoformat()}",
+                        timestamp.isoformat(),
+                        timestamp,
+                        producer=producer,
+                        consumer=consumer,
+                        recovery_action="Hold downstream publication until canonical runtime timestamp advances.",
+                    )
+                )
+
+        candidate_timestamp = self._snapshot_timestamp(self._vision_trade_candidate)
+        strategy_timestamp = self._snapshot_timestamp(self._current_strategy_decision_v2_snapshot())
+        if (
+            candidate_timestamp is not None
+            and strategy_timestamp is not None
+            and self._timestamps_are_comparable(strategy_timestamp, candidate_timestamp)
+            and strategy_timestamp != candidate_timestamp
+        ):
+            violations.append(
+                self._runtime_integrity_violation(
+                    "StrategyDecision",
+                    "Strategy timestamp matches TradeCandidate timestamp",
+                    candidate_timestamp.isoformat(),
+                    strategy_timestamp.isoformat(),
+                    strategy_timestamp,
+                    producer="StrategyDecisionV2",
+                    consumer="Risk Management V2",
+                    recovery_action="Reject stale strategy decision and rerun from canonical TradeCandidate.",
+                )
+            )
+
+        position_timestamp = self._snapshot_timestamp(self._canonical_paper_position())
+        if (
+            strategy_timestamp is not None
+            and position_timestamp is not None
+            and self._timestamps_are_comparable(position_timestamp, strategy_timestamp)
+            and position_timestamp < strategy_timestamp
+        ):
+            violations.append(
+                self._runtime_integrity_violation(
+                    "PaperPosition",
+                    "Paper position timestamp is not before Strategy timestamp",
+                    f">= {strategy_timestamp.isoformat()}",
+                    position_timestamp.isoformat(),
+                    position_timestamp,
+                    producer="TradeLifecycleV1",
+                    consumer="Dashboard Position",
+                    recovery_action="Reject stale paper position snapshot.",
+                )
+            )
+
+        journal_timestamp = self._snapshot_timestamp(self._journal_persistence_snapshot())
+        if (
+            position_timestamp is not None
+            and journal_timestamp is not None
+            and self._timestamps_are_comparable(journal_timestamp, position_timestamp)
+            and journal_timestamp < position_timestamp
+        ):
+            violations.append(
+                self._runtime_integrity_violation(
+                    "Journal",
+                    "Journal timestamp is not before PaperPosition timestamp",
+                    f">= {position_timestamp.isoformat()}",
+                    journal_timestamp.isoformat(),
+                    journal_timestamp,
+                    producer="TradeJournalV1",
+                    consumer="Dashboard Journal",
+                    recovery_action="Flush journal from canonical lifecycle position before publication.",
+                )
+            )
+        return tuple(violations)
+
+    def _active_session_candle_history(
+        self,
+        candle_history: tuple[Candle, ...],
+        runtime_session: RuntimeTradingSession,
+    ) -> tuple[Candle, ...]:
+        trading_date = runtime_session.trading_date
+        if trading_date is None:
+            return tuple(sorted(candle_history, key=lambda item: item.start_time))
+        return tuple(
+            sorted(
+                (
+                    candle
+                    for candle in candle_history
+                    if candle.start_time.date() == trading_date and candle.timeframe == self._primary_timeframe.value
+                ),
+                key=lambda item: item.start_time,
+            )
+        )
+
+    def _runtime_integrity_violation(
+        self,
+        object_name: str,
+        invariant: str,
+        expected: str,
+        actual: str,
+        timestamp: datetime | None,
+        *,
+        producer: str,
+        consumer: str,
+        recovery_action: str,
+    ) -> RuntimeIntegrityViolation:
+        return RuntimeIntegrityViolation(
+            object_name=object_name,
+            invariant=invariant,
+            owner="SymbolRuntime",
+            producer=producer,
+            consumer=consumer,
+            expected=expected,
+            actual=actual,
+            timestamp=timestamp,
+            instrument=self._instrument.value,
+            timeframe=self._primary_timeframe.value,
+            recovery_action=recovery_action,
+        )
+
+    @staticmethod
+    def _snapshot_timestamp(snapshot) -> datetime | None:
+        if snapshot is None:
+            return None
+        for field_name in ("timestamp", "updated_at", "market_timestamp", "journal_write_timestamp", "entry_timestamp"):
+            value = getattr(snapshot, field_name, None)
+            if isinstance(value, datetime):
+                return value
+        return None
+
+    @staticmethod
+    def _timestamps_are_comparable(left: datetime, right: datetime) -> bool:
+        left_aware = left.tzinfo is not None and left.utcoffset() is not None
+        right_aware = right.tzinfo is not None and right.utcoffset() is not None
+        return left_aware == right_aware
 
     def _operational_readiness_snapshot(
         self,

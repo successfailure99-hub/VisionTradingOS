@@ -34,6 +34,41 @@ class RuntimeContractViolation:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeIntegrityViolation:
+    object_name: str
+    invariant: str
+    owner: str
+    producer: str
+    consumer: str
+    expected: str
+    actual: str
+    timestamp: datetime | None
+    instrument: str
+    timeframe: str
+    recovery_action: str
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "object_name",
+            "invariant",
+            "owner",
+            "producer",
+            "consumer",
+            "expected",
+            "actual",
+            "instrument",
+            "timeframe",
+            "recovery_action",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise TypeError(f"{field_name} must be text")
+            object.__setattr__(self, field_name, value.strip() or "-")
+        if self.timestamp is not None and not isinstance(self.timestamp, datetime):
+            raise TypeError("timestamp must be datetime or None")
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeContractReport:
     status: str
     owner: str
@@ -42,6 +77,7 @@ class RuntimeContractReport:
     object_name: str
     checked_at: datetime | None
     violations: tuple[RuntimeContractViolation, ...] = ()
+    integrity_violations: tuple[RuntimeIntegrityViolation, ...] = ()
 
     def __post_init__(self) -> None:
         for field_name in ("status", "owner", "producer", "consumer", "object_name"):
@@ -56,17 +92,25 @@ class RuntimeContractReport:
             if not isinstance(violation, RuntimeContractViolation):
                 raise TypeError("violations must contain RuntimeContractViolation values")
         object.__setattr__(self, "violations", violations)
+        integrity_violations = tuple(self.integrity_violations)
+        for violation in integrity_violations:
+            if not isinstance(violation, RuntimeIntegrityViolation):
+                raise TypeError("integrity_violations must contain RuntimeIntegrityViolation values")
+        object.__setattr__(self, "integrity_violations", integrity_violations)
 
     @property
     def valid(self) -> bool:
-        return self.status == "VALID"
+        return self.status == "VALID" and not self.violations and not self.integrity_violations
 
     @property
     def blocking_reason(self) -> str:
         if self.valid:
             return "-"
-        first = self.violations[0]
-        return f"{first.object_name}: {first.reason}"
+        if self.violations:
+            first = self.violations[0]
+            return f"{first.object_name}: {first.reason}"
+        first_integrity = self.integrity_violations[0]
+        return f"{first_integrity.object_name}: {first_integrity.invariant}"
 
 
 @dataclass(frozen=True, slots=True)
