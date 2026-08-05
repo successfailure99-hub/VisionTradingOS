@@ -1698,9 +1698,9 @@ class SymbolRuntime:
             latency_seconds = abs((latency_reference - last_update).total_seconds())
             latency_ms = latency_seconds * 1000.0
             if latency_seconds <= _OPTION_CHAIN_TIMESTAMP_TOLERANCE.total_seconds():
-                synchronization_status = f"Option Chain synchronized; Latency = {latency_ms:.0f} ms; Accepted"
+                synchronization_status = "SYNCHRONIZED"
             else:
-                synchronization_status = f"Option Chain timestamp drift exceeds tolerance; Latency = {latency_ms:.0f} ms"
+                synchronization_status = "TIMESTAMP_DRIFT_EXCEEDS_TOLERANCE"
         recovery = "-"
         if snapshot is None:
             feed_status = "WAITING_FOR_OPTION_TICKS"

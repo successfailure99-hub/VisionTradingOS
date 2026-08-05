@@ -440,9 +440,9 @@ def _runtime_kind(value: str) -> str:
 
 def _status_kind(value: str) -> str:
     normalized = str(value).strip().lower()
-    if normalized == "ready":
+    if normalized in {"ready", "synchronized"}:
         return "positive"
-    if normalized in {"waiting", "stale", "session_mismatch"}:
+    if normalized in {"waiting", "stale", "session_mismatch", "timestamp_drift_exceeds_tolerance"}:
         return "warning"
     if normalized in {"blocked", "failed", "error"}:
         return "negative"

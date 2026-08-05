@@ -212,6 +212,16 @@ def test_summary_missing_values_render_placeholders_in_grouped_layout():
         assert panel._labels[field].text() == "-"
 
 
+def test_runtime_synchronization_and_latency_render_as_accepted_operational_state():
+    app()
+    panel = OptionChainPanel()
+    panel.render(view(runtime_synchronization_status="SYNCHRONIZED", runtime_latency_ms=175.0))
+
+    assert panel._labels["Synchronization"].text() == "SYNCHRONIZED"
+    assert panel._labels["Synchronization"].property("status") == "positive"
+    assert panel._labels["Latency"].text() == "175 ms"
+
+
 @pytest.mark.parametrize("size", ((1320, 580), (1554, 712), (1874, 892)))
 def test_summary_layout_is_responsive_without_overlapping_widgets(size):
     app()

@@ -281,6 +281,17 @@ def test_option_confirmation_accepts_subsecond_async_option_timestamp():
     assert "Put writing supports setup" in result.supporting_factors
 
 
+def test_option_confirmation_accepts_same_instant_in_different_timezone_within_tolerance():
+    option_time = (NOW + timedelta(milliseconds=175)).astimezone(timezone.utc)
+    chain = option_chain(timestamp=option_time)
+
+    result = assemble_vision_option_confirmation_context(request(chain=chain, analytics_snapshot=analytics(chain)))
+
+    assert result.confirmation_state is VisionOptionConfirmation.CONFIRMS
+    assert result.timestamp == NOW
+    assert "Put writing supports setup" in result.supporting_factors
+
+
 def test_option_confirmation_validator_rejects_mismatches_and_stale_chain():
     with pytest.raises(ValueError, match="instrument mismatch"):
         assemble_vision_option_confirmation_context(request(), instrument=RuntimeInstrument.BANKNIFTY)
@@ -301,6 +312,10 @@ def test_option_confirmation_validator_rejects_mismatches_and_stale_chain():
     future_chain = option_chain(timestamp=NOW + timedelta(seconds=2))
     with pytest.raises(ValueError, match="cannot be after request timestamp"):
         assemble_vision_option_confirmation_context(request(chain=future_chain, analytics_snapshot=analytics(future_chain)))
+
+    wrong_session_chain = option_chain(timestamp=(NOW + timedelta(days=1)).astimezone(timezone.utc))
+    with pytest.raises(ValueError, match="trading session mismatch"):
+        assemble_vision_option_confirmation_context(request(chain=wrong_session_chain, analytics_snapshot=analytics(wrong_session_chain)))
 
 
 def test_option_confirmation_context_rejects_duplicate_factors_and_is_immutable():

@@ -156,8 +156,8 @@ def validate_option_confirmation_request(
         raise ValueError("analytics expiry mismatch.")
     if request.analytics.source_snapshot != request.option_chain:
         raise ValueError("analytics source snapshot mismatch.")
-    _validate_same_timezone(request.timestamp, request.option_chain.timestamp, "option_chain.timestamp")
-    _validate_same_timezone(request.timestamp, request.analytics.timestamp, "analytics.timestamp")
+    _validate_same_runtime_session(request.timestamp, request.option_chain.timestamp, "option_chain.timestamp")
+    _validate_same_runtime_session(request.timestamp, request.analytics.timestamp, "analytics.timestamp")
     _validate_not_future(request.option_chain.timestamp, request.timestamp, "option_chain.timestamp", tolerance=timestamp_tolerance)
     _validate_not_future(request.analytics.timestamp, request.timestamp, "analytics.timestamp", tolerance=timestamp_tolerance)
     if request.timestamp - request.option_chain.timestamp > max_snapshot_age:
@@ -295,10 +295,10 @@ def _validate_aware(value: datetime, field_name: str) -> None:
         raise ValueError(f"{field_name} must be timezone-aware.")
 
 
-def _validate_same_timezone(trigger: datetime, value: datetime, field_name: str) -> None:
+def _validate_same_runtime_session(trigger: datetime, value: datetime, field_name: str) -> None:
     _validate_aware(value, field_name)
-    if value.utcoffset() != trigger.utcoffset():
-        raise ValueError(f"{field_name} timezone mismatch.")
+    if value.astimezone(trigger.tzinfo).date() != trigger.date():
+        raise ValueError(f"{field_name} trading session mismatch.")
 
 
 def _validate_not_future(value: datetime, trigger: datetime, field_name: str, *, tolerance: timedelta) -> None:

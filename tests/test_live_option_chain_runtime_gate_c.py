@@ -116,10 +116,10 @@ def test_option_chain_subsecond_async_arrival_is_synchronized_not_blocked():
     assert runtime_snapshot.option_chain_snapshot.timestamp == option_time
     assert runtime_snapshot.option_chain_analytics.timestamp == option_time
     assert runtime_snapshot.option_chain_runtime.latency_ms == pytest.approx(175.0)
-    assert runtime_snapshot.option_chain_runtime.synchronization_status == "Option Chain synchronized; Latency = 175 ms; Accepted"
+    assert runtime_snapshot.option_chain_runtime.synchronization_status == "SYNCHRONIZED"
     assert runtime_snapshot.option_chain_runtime.blocking_reason == "-"
     assert view.runtime_latency_ms == pytest.approx(175.0)
-    assert view.runtime_synchronization_status == "Option Chain synchronized; Latency = 175 ms; Accepted"
+    assert view.runtime_synchronization_status == "SYNCHRONIZED"
     assert view.runtime_blocking_reason == "-"
 
 
