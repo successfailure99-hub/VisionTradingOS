@@ -23,6 +23,17 @@ from dashboard.models import (
 from dashboard.widgets import FieldGrid, MetricCard, StatusBadge
 
 
+class MemorySettings:
+    def __init__(self):
+        self.values = {}
+
+    def value(self, key, default=None):
+        return self.values.get(key, default)
+
+    def setValue(self, key, value):
+        self.values[key] = value
+
+
 def app():
     return QApplication.instance() or QApplication([])
 
@@ -33,7 +44,7 @@ def three_instrument_window():
             instruments=(RuntimeInstrument.SENSEX, RuntimeInstrument.BANKNIFTY, RuntimeInstrument.NIFTY)
         )
     ).create_application()
-    window = VisionMainWindow(lifecycle)
+    window = VisionMainWindow(lifecycle, settings=MemorySettings())
     window.refresh()
     return window
 
@@ -299,3 +310,44 @@ def test_scroll_areas_are_resizable_and_no_extra_timer_is_introduced():
     assert all(area.widgetResizable() for area in scroll_areas)
     assert len(window.findChildren(type(window._timer))) == 1
     assert window.minimumSize().expandedTo(QSize(1100, 680)) == window.minimumSize()
+
+
+def test_dashboard_exposes_runtime_supervisor_and_header_health_without_extra_runtime_owner():
+    app()
+    window = three_instrument_window()
+    view = window.refresh()
+
+    assert window._runtime_supervisor.interval_ms == window._timer.interval()
+    assert window._runtime_supervisor.last_snapshot.checks
+    assert set(window._health_badges) == {"Runtime", "Market", "Broker", "Option Chain", "Vision", "Paper", "AI"}
+    assert window._health_badges["Runtime"].text() == window._runtime_supervisor.last_snapshot.status
+    assert view.runtime.component_health
+
+
+def test_keyboard_navigation_helpers_and_quick_search_jump_to_canonical_tabs():
+    app()
+    window = three_instrument_window()
+
+    window._select_section("Option Chain")
+    sections = window._instrument_panels[window._tabs.tabText(window._tabs.currentIndex())]["sections"]
+    assert sections.tabText(sections.currentIndex()) == "Option Chain"
+
+    window._quick_search.setText("journal")
+    window._activate_quick_search()
+    assert sections.tabText(sections.currentIndex()) == "Journal"
+
+    window._quick_search.setText("runtime")
+    window._activate_quick_search()
+    assert window._main_tabs.currentWidget() is window._system_area
+    assert window._system_tabs.tabText(window._system_tabs.currentIndex()) == "Runtime"
+
+
+def test_dashboard_pinned_panels_are_persisted_and_ordered_first():
+    app()
+    lifecycle = ApplicationBootstrap(RuntimeConfiguration(instruments=(RuntimeInstrument.NIFTY,))).create_application()
+    window = VisionMainWindow(lifecycle, settings=MemorySettings())
+    window.pin_panel("Journal")
+    window.refresh()
+
+    sections = window._instrument_panels["NIFTY"]["sections"]
+    assert sections.tabText(0) == "Journal"

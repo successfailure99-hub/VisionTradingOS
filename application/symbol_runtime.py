@@ -1851,7 +1851,23 @@ class SymbolRuntime:
         recovery = self._paper_recovery
         if recovery is None or getattr(getattr(recovery, "status", None), "value", None) != "RESTORED":
             return None
-        return getattr(recovery, "checkpoint", None)
+        checkpoint = getattr(recovery, "checkpoint", None)
+        if checkpoint is None:
+            return None
+        active_date = self._active_runtime_trading_date()
+        if active_date is not None and getattr(checkpoint, "trading_date", None) != active_date:
+            return None
+        return checkpoint
+
+    def _active_runtime_trading_date(self) -> date | None:
+        for timestamp in (
+            getattr(self._last_tick, "timestamp", None),
+            getattr(self._vision_method_snapshot, "timestamp", None),
+            self._latest_closed_candle_at,
+        ):
+            if isinstance(timestamp, datetime):
+                return timestamp.date()
+        return None
 
     def _paper_position_from_checkpoint(self) -> RuntimePaperPositionSnapshot | None:
         legacy_paper = self.paper_trading_engine.snapshot()

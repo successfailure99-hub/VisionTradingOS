@@ -24,6 +24,9 @@ __all__ = [
     "VERSION",
     "StartupValidationResult",
     "validate_startup",
+    "RuntimeSupervisor",
+    "RuntimeSupervisorCheck",
+    "RuntimeSupervisorSnapshot",
 ]
 
 
@@ -62,5 +65,13 @@ def __getattr__(name: str):
         return {
             "StartupValidationResult": StartupValidationResult,
             "validate_startup": validate_startup,
+        }[name]
+    if name in {"RuntimeSupervisor", "RuntimeSupervisorCheck", "RuntimeSupervisorSnapshot"}:
+        from application.runtime_supervisor import RuntimeSupervisor, RuntimeSupervisorCheck, RuntimeSupervisorSnapshot
+
+        return {
+            "RuntimeSupervisor": RuntimeSupervisor,
+            "RuntimeSupervisorCheck": RuntimeSupervisorCheck,
+            "RuntimeSupervisorSnapshot": RuntimeSupervisorSnapshot,
         }[name]
     raise AttributeError(f"module 'application' has no attribute {name!r}")

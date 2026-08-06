@@ -196,6 +196,21 @@ def test_runtime_checkpoint_dashboard_and_journal_state_align(tmp_path):
     assert opened.canonical_paper_position.recovery_status == "RESTORED"
 
 
+def test_runtime_recovered_checkpoint_is_not_canonical_after_session_rollover(tmp_path):
+    item = runtime_with_durable_journal(tmp_path)
+    item.trade_journal_v1_engine.save_checkpoint(runtime_position(), trading_date=NOW.date())
+    item._paper_recovery = item.trade_journal_v1_engine.load_checkpoint(expected_instrument=Instrument.NIFTY)
+    item._last_tick = tick(timestamp=NOW + timedelta(days=1))
+
+    runtime = item.snapshot()
+
+    assert runtime.canonical_paper_position is None
+    assert all(
+        violation.object_name != "PaperPosition"
+        for violation in runtime.runtime_contract_report.integrity_violations
+    )
+
+
 def test_runtime_close_clears_checkpoint_and_writes_once(tmp_path):
     item = runtime_with_durable_journal(tmp_path)
     process(item, snapshot())
