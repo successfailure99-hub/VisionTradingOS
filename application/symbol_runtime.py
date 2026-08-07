@@ -2019,6 +2019,12 @@ class SymbolRuntime:
             )
         )
         violations.extend(
+            self._daily_ohlc_history_integrity_violations(
+                market_timestamp=market_timestamp,
+                runtime_session=runtime_session,
+            )
+        )
+        violations.extend(
             self._downstream_timestamp_integrity_violations(
                 market_timestamp=market_timestamp,
             )
@@ -2123,6 +2129,62 @@ class SymbolRuntime:
                         recovery_action="Wait for CandleEngine recovery before Vision Method evaluation.",
                     )
                 )
+        return tuple(violations)
+
+    def _daily_ohlc_history_integrity_violations(
+        self,
+        *,
+        market_timestamp: datetime | None,
+        runtime_session: RuntimeTradingSession,
+    ) -> tuple[RuntimeIntegrityViolation, ...]:
+        violations: list[RuntimeIntegrityViolation] = []
+        seen_dates: set[date] = set()
+        duplicates: list[date] = []
+        for daily_ohlc in self._daily_ohlc_history:
+            trading_date = getattr(daily_ohlc, "trading_date", None)
+            if not isinstance(trading_date, date) or isinstance(trading_date, datetime):
+                violations.append(
+                    self._runtime_integrity_violation(
+                        "DailyOHLC",
+                        "Daily OHLC history contains only dated records",
+                        "date trading_date",
+                        repr(trading_date),
+                        market_timestamp,
+                        producer="Daily OHLC Warmup",
+                        consumer="Daily Context",
+                        recovery_action="Reload canonical DailyOHLC history.",
+                    )
+                )
+                continue
+            if trading_date in seen_dates:
+                duplicates.append(trading_date)
+            seen_dates.add(trading_date)
+            if runtime_session.trading_date is not None and trading_date > runtime_session.trading_date:
+                violations.append(
+                    self._runtime_integrity_violation(
+                        "DailyOHLC",
+                        "Historical DailyOHLC is not in the future",
+                        f"trading_date <= {runtime_session.trading_date}",
+                        str(trading_date),
+                        market_timestamp,
+                        producer="Daily OHLC Warmup",
+                        consumer="Daily Context",
+                        recovery_action="Reject future DailyOHLC and reload canonical history.",
+                    )
+                )
+        if duplicates:
+            violations.append(
+                self._runtime_integrity_violation(
+                    "DailyOHLC",
+                    "Daily OHLC history has no duplicate trading dates",
+                    "unique DailyOHLC trading_date values",
+                    ", ".join(str(item) for item in duplicates),
+                    market_timestamp,
+                    producer="Daily OHLC Warmup",
+                    consumer="Daily Context",
+                    recovery_action="Deduplicate canonical DailyOHLC history before runtime publication.",
+                )
+            )
         return tuple(violations)
 
     def _downstream_timestamp_integrity_violations(self, *, market_timestamp: datetime | None) -> tuple[RuntimeIntegrityViolation, ...]:

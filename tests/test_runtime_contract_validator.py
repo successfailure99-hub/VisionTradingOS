@@ -10,6 +10,7 @@ from core.enums.instrument import Instrument
 from core.enums.timeframe import TimeFrame
 from core.models.building_candle import BuildingCandle
 from core.models.candle import Candle
+from core.models.daily_ohlc import DailyOHLC
 from core.event_bus import EventBus
 from core.models.tick import Tick
 from dashboard.presenters import build_runtime_view
@@ -83,6 +84,36 @@ def test_runtime_contract_reports_trading_date_mismatch():
 
     assert report.valid is False
     assert report.violations[0].reason == "Trading date mismatch"
+
+
+def test_runtime_contract_accepts_previous_session_daily_ohlc_reference_for_active_runtime_date():
+    runtime_timestamp = datetime(2026, 8, 7, 9, 31, tzinfo=UTC)
+    previous_daily = DailyOHLC(date(2026, 8, 6), 100.0, 110.0, 90.0, 105.0)
+
+    report = _report_for(previous_daily, object_name="DailyOHLC", context=_context(runtime_timestamp))
+
+    assert report.valid is True
+    assert report.violations == ()
+
+
+def test_runtime_contract_rejects_future_daily_ohlc_reference():
+    runtime_timestamp = datetime(2026, 8, 7, 9, 31, tzinfo=UTC)
+    future_daily = DailyOHLC(date(2026, 8, 8), 100.0, 110.0, 90.0, 105.0)
+
+    report = _report_for(future_daily, object_name="DailyOHLC", context=_context(runtime_timestamp))
+
+    assert report.valid is False
+    assert report.violations[0].reason == "Future historical date"
+
+
+def test_runtime_contract_accepts_weekend_previous_session_reference():
+    monday_runtime = datetime(2026, 8, 10, 9, 31, tzinfo=UTC)
+    friday_daily = DailyOHLC(date(2026, 8, 7), 100.0, 110.0, 90.0, 105.0)
+
+    report = _report_for(friday_daily, object_name="DailyOHLC", context=_context(monday_runtime))
+
+    assert report.valid is True
+    assert report.violations == ()
 
 
 def test_runtime_contract_reports_session_mismatch():
@@ -215,3 +246,117 @@ def test_dashboard_displays_structured_runtime_contract_failure():
     assert "Runtime Contract Failed" in rows["Runtime Contract"].detail
     assert "Reason=Timezone mismatch" in rows["Runtime Contract"].detail
     assert "Object=ADR" in rows["Runtime Contract"].detail
+
+
+def test_symbol_runtime_accepts_previous_daily_ohlc_for_current_cpr_camarilla_and_runtime_contract():
+    runtime_timestamp = datetime(2026, 8, 7, 9, 31, tzinfo=UTC)
+    previous_day = date(2026, 8, 6)
+    runtime = SymbolRuntime(EventBus(), RuntimeConfiguration(adr_period=5), RuntimeInstrument.NIFTY)
+    runtime.start()
+    runtime.process_daily_ohlc(
+        DailyOHLC(previous_day, 100.0, 110.0, 90.0, 105.0),
+        levels_trading_date=runtime_timestamp.date(),
+    )
+    runtime.process_tick(
+        Tick(
+            symbol=Instrument.NIFTY,
+            exchange=Exchange.NSE,
+            timestamp=runtime_timestamp,
+            last_price=106.0,
+            volume=100,
+            bid_price=105.5,
+            ask_price=106.5,
+            open_interest=0,
+        )
+    )
+
+    snapshot = runtime.snapshot()
+    rows = {row.name: row for row in build_runtime_view(lifecycle(snapshot)).component_health}
+
+    assert snapshot.cpr.trading_date == runtime_timestamp.date()
+    assert snapshot.camarilla.trading_date == runtime_timestamp.date()
+    assert runtime._daily_ohlc_history[-1].trading_date == previous_day
+    assert snapshot.runtime_contract_report.valid is True
+    assert rows["Runtime Contract"].status == "READY"
+
+
+def test_symbol_runtime_accepts_multi_day_adr_history_before_runtime_date():
+    runtime_timestamp = datetime(2026, 8, 7, 9, 31, tzinfo=UTC)
+    runtime = SymbolRuntime(EventBus(), RuntimeConfiguration(adr_period=5), RuntimeInstrument.NIFTY)
+    runtime.start()
+    for offset in reversed(range(5)):
+        day = runtime_timestamp.date() - timedelta(days=offset + 1)
+        runtime.process_daily_ohlc(DailyOHLC(day, 100.0 + offset, 110.0 + offset, 90.0 + offset, 105.0 + offset))
+    runtime.process_tick(
+        Tick(
+            symbol=Instrument.NIFTY,
+            exchange=Exchange.NSE,
+            timestamp=runtime_timestamp,
+            last_price=106.0,
+            volume=100,
+            bid_price=105.5,
+            ask_price=106.5,
+            open_interest=0,
+        )
+    )
+
+    snapshot = runtime.snapshot()
+
+    assert snapshot.adr is not None
+    assert snapshot.adr_runtime.state == "READY"
+    assert snapshot.runtime_contract_report.valid is True
+
+
+def test_symbol_runtime_daily_ohlc_duplicate_history_is_reported_as_runtime_failure():
+    runtime_timestamp = datetime(2026, 8, 7, 9, 31, tzinfo=UTC)
+    previous_daily = DailyOHLC(date(2026, 8, 6), 100.0, 110.0, 90.0, 105.0)
+    runtime = SymbolRuntime(EventBus(), RuntimeConfiguration(), RuntimeInstrument.NIFTY)
+    runtime.start()
+    runtime.process_daily_ohlc(previous_daily, levels_trading_date=runtime_timestamp.date())
+    runtime.process_tick(
+        Tick(
+            symbol=Instrument.NIFTY,
+            exchange=Exchange.NSE,
+            timestamp=runtime_timestamp,
+            last_price=106.0,
+            volume=100,
+            bid_price=105.5,
+            ask_price=106.5,
+            open_interest=0,
+        )
+    )
+    runtime._daily_ohlc_history = (previous_daily, previous_daily)
+
+    report = runtime.snapshot().runtime_contract_report
+
+    assert report.valid is False
+    assert report.integrity_violations[0].object_name == "DailyOHLC"
+    assert report.integrity_violations[0].invariant == "Daily OHLC history has no duplicate trading dates"
+
+
+def test_symbol_runtime_future_daily_ohlc_still_surfaces_dashboard_runtime_failure():
+    runtime_timestamp = datetime(2026, 8, 7, 9, 31, tzinfo=UTC)
+    future_daily = DailyOHLC(date(2026, 8, 8), 100.0, 110.0, 90.0, 105.0)
+    runtime = SymbolRuntime(EventBus(), RuntimeConfiguration(), RuntimeInstrument.NIFTY)
+    runtime.start()
+    runtime.process_tick(
+        Tick(
+            symbol=Instrument.NIFTY,
+            exchange=Exchange.NSE,
+            timestamp=runtime_timestamp,
+            last_price=106.0,
+            volume=100,
+            bid_price=105.5,
+            ask_price=106.5,
+            open_interest=0,
+        )
+    )
+    runtime._daily_ohlc_history = (future_daily,)
+
+    snapshot = runtime.snapshot()
+    rows = {row.name: row for row in build_runtime_view(lifecycle(snapshot)).component_health}
+
+    assert snapshot.runtime_contract_report.valid is False
+    assert snapshot.runtime_contract_report.violations[0].reason == "Future historical date"
+    assert rows["Runtime Contract"].status == "FAILED"
+    assert "Object=DailyOHLC" in rows["Runtime Contract"].detail

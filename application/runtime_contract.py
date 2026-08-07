@@ -199,8 +199,11 @@ class RuntimeContractValidator:
         if actual_timeframe is not None and actual_timeframe != context.timeframe:
             violations.append(_violation(object_name, "Timeframe mismatch", owner, producer, consumer, context.timeframe, actual_timeframe))
         actual_date = _trading_date(snapshot, timestamp)
-        if context.trading_date is not None and actual_date is not None and actual_date != context.trading_date:
-            violations.append(_violation(object_name, "Trading date mismatch", owner, producer, consumer, str(context.trading_date), str(actual_date)))
+        if context.trading_date is not None and actual_date is not None:
+            if object_name == "DailyOHLC":
+                violations.extend(_daily_ohlc_date_violations(actual_date, context, object_name, owner, producer, consumer))
+            elif actual_date != context.trading_date:
+                violations.append(_violation(object_name, "Trading date mismatch", owner, producer, consumer, str(context.trading_date), str(actual_date)))
         actual_session = _session(snapshot)
         if context.session is not None and actual_session is not None:
             expected_session = _session_signature(context.session)
@@ -258,6 +261,29 @@ def _candle_interval_violations(
     if end_time > runtime_timestamp and not start_time <= runtime_timestamp < end_time:
         violations.append(_violation(object_name, "Future timestamp", owner, producer, consumer, f"active candle interval contains {runtime_timestamp.isoformat()}", f"{start_time.isoformat()} -> {end_time.isoformat()}"))
     return tuple(violations)
+
+
+def _daily_ohlc_date_violations(
+    actual_date: object,
+    context: RuntimeContractContext,
+    object_name: str,
+    owner: str,
+    producer: str,
+    consumer: str,
+) -> tuple[RuntimeContractViolation, ...]:
+    if context.trading_date is None or actual_date <= context.trading_date:
+        return ()
+    return (
+        _violation(
+            object_name,
+            "Future historical date",
+            owner,
+            producer,
+            consumer,
+            f"<= {context.trading_date}",
+            str(actual_date),
+        ),
+    )
 
 
 def _trading_date(snapshot: object, timestamp: datetime | None):
