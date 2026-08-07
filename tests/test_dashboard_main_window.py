@@ -18,8 +18,10 @@ from application import ApplicationBootstrap
 from application.enums import RuntimeInstrument
 from application.lifecycle_manager import ApplicationLifecycleManager
 from application.models import RuntimeConfiguration
+from application.runtime_supervisor import RuntimeSupervisorCheck, RuntimeSupervisorSnapshot
 from core.event_bus import EventBus
 from dashboard.main_window import VisionMainWindow
+from dashboard.models import DashboardRuntimeComponentHealthView
 from dashboard.panels.option_chain_panel import OptionChainPanel
 from dashboard.panels.price_action_panel import PriceActionPanel
 
@@ -56,6 +58,76 @@ def test_window_title_timer_default_and_tabs_match_runtime_snapshots():
     assert window._tabs.count() == len(view.markets)
     assert window.findChild(QLabel, "HeaderTitle").text() == "Vision Trading OS"
     assert window.styleSheet()
+
+
+def test_header_runtime_health_uses_canonical_runtime_view_not_stale_supervisor_aggregate():
+    lifecycle = ApplicationBootstrap().bootstrap()
+    window = VisionMainWindow(lifecycle)
+    view = window.refresh()
+    window._runtime_supervisor._last_snapshot = RuntimeSupervisorSnapshot(
+        "FAILED",
+        window._runtime_supervisor.interval_ms,
+        (
+            RuntimeSupervisorCheck(
+                "RuntimeSnapshot",
+                "SymbolRuntime",
+                "SymbolRuntime.snapshot",
+                "Dashboard",
+                "FAILED",
+                "stale supervisor aggregate",
+            ),
+        ),
+    )
+    canonical = replace(
+        view,
+        runtime=replace(
+            view.runtime,
+            application_status="Running",
+            primary_blocker="-",
+            component_health=(
+                DashboardRuntimeComponentHealthView(
+                    "Runtime Contract",
+                    "READY",
+                    "Runtime contract valid.",
+                    owner="SymbolRuntime",
+                    producer="RuntimeContractValidator",
+                    consumer="Dashboard",
+                ),
+            ),
+        ),
+    )
+
+    window.render(canonical)
+
+    assert window._health_badges["Runtime"].text() == "READY"
+
+
+def test_header_runtime_health_reports_failed_only_when_canonical_runtime_row_fails():
+    lifecycle = ApplicationBootstrap().bootstrap()
+    window = VisionMainWindow(lifecycle)
+    view = window.refresh()
+    canonical_failure = replace(
+        view,
+        runtime=replace(
+            view.runtime,
+            application_status="Running",
+            primary_blocker="-",
+            component_health=(
+                DashboardRuntimeComponentHealthView(
+                    "Runtime Contract",
+                    "FAILED",
+                    "Runtime contract failed.",
+                    owner="SymbolRuntime",
+                    producer="RuntimeContractValidator",
+                    consumer="Dashboard",
+                ),
+            ),
+        ),
+    )
+
+    window.render(canonical_failure)
+
+    assert window._health_badges["Runtime"].text() == "FAILED"
 
 
 def test_refresh_calls_lifecycle_snapshot_once_and_stores_view():

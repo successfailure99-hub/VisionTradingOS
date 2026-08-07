@@ -75,6 +75,30 @@ class FakeAuthClient:
         return {"user_id": self.user_id}
 
 
+class FakeReadOnlyAuthClient(FakeAuthClient):
+    account_id = "ABCD123456"
+
+    def __init__(self, api_key, *, user_id="AB1234", fail_profile=False):
+        super().__init__(api_key, user_id=user_id, fail_profile=fail_profile)
+        self.account_calls = []
+
+    def margins(self):
+        self.account_calls.append("margins")
+        return {"equity": {"available": 100000.0, "used": 0.0}, "commodity": {"available": 0.0, "used": 0.0}}
+
+    def positions(self):
+        self.account_calls.append("positions")
+        return []
+
+    def holdings(self):
+        self.account_calls.append("holdings")
+        return []
+
+    def orders(self):
+        self.account_calls.append("orders")
+        return []
+
+
 class FakeTickerClient:
     def __init__(self):
         self.callbacks = {}
@@ -135,6 +159,15 @@ class FakeInstrumentClient:
 
 def auth_factory(api_key):
     return FakeAuthClient(api_key)
+
+
+def read_only_auth_factory(store):
+    def factory(api_key):
+        client = FakeReadOnlyAuthClient(api_key)
+        store.append(client)
+        return client
+
+    return factory
 
 
 def historical_factory_factory(store):
@@ -403,6 +436,49 @@ def test_desktop_startup_restores_encrypted_session_without_access_token_environ
     assert runtime_view.broker_session_expires_at == NOW + timedelta(hours=6)
     assert any(row.name == "Broker Session" and row.status == "READY" for row in runtime_view.component_health)
     assert dashboard.live_market_data_runtime.session_manager.session.access_token == "restored_access_token"
+    dashboard.shutdown()
+
+
+def test_restored_session_updates_canonical_broker_account_state_and_header(tmp_path):
+    store_path = tmp_path / "session.json"
+    store = EncryptedBrokerSessionStore(store_path, clock=lambda: NOW)
+    store.save(
+        BrokerSessionRecord(
+            broker="ZERODHA",
+            user_id="AB1234",
+            access_token="restored_access_token",
+            authenticated_at=NOW - timedelta(minutes=5),
+            expires_at=datetime(2030, 1, 1, tzinfo=UTC),
+            created_at=NOW - timedelta(minutes=5),
+        )
+    )
+    clients = []
+    env = live_env(
+        ZERODHA_ACCESS_TOKEN="",
+        ZERODHA_SESSION_STORE_PATH=str(store_path),
+        LIVE_MARKET_DATA_AUTO_CONNECT="false",
+        REFERENCE_DATA_BOOTSTRAP_ENABLED="false",
+    )
+
+    dashboard = create_dashboard_application(
+        environ=env,
+        auth_client_factory=read_only_auth_factory(clients),
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: NOW),
+        clock=lambda: NOW,
+    )
+    dashboard.lifecycle.start()
+    view = dashboard.main_window.refresh()
+    runtime_view = view.runtime
+
+    assert runtime_view.broker_session_token_valid is True
+    assert runtime_view.broker_session_connection == "AUTHENTICATED"
+    assert runtime_view.broker_authentication == "Authenticated"
+    assert runtime_view.broker_connection == "Ready"
+    assert runtime_view.broker_read_only_sync == "READY"
+    assert runtime_view.broker_mutation_mode == "DISABLED"
+    assert dashboard.main_window._health_badges["Broker"].text() == "Authenticated"
+    assert dashboard.main_window._health_badges["Runtime"].text() != "FAILED"
+    assert clients[0].account_calls == ["margins", "positions", "holdings", "orders"]
     dashboard.shutdown()
 
 

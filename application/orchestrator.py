@@ -131,6 +131,7 @@ class ApplicationOrchestrator:
             runtime.start()
         self.authorized_paper_execution_coordinator.start()
         self._status = RuntimeStatus.RUNNING
+        self.broker_account_sync.refresh(force=True)
         return self.snapshot()
 
     def stop(self) -> OrchestratorSnapshot:

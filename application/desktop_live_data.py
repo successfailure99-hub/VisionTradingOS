@@ -399,6 +399,7 @@ def create_dashboard_application(
         session_store=lifecycle.orchestrator.broker_session_store,
         clock=clock,
     )
+    _configure_broker_account_sync_from_session(lifecycle, session_manager)
     if settings.enabled and session_manager is not None:
         session = session_manager.session
         if session is None:
@@ -479,6 +480,29 @@ def create_dashboard_application(
         deterministic_backtest_driver=backtest_driver,
         clock=clock,
     )
+
+
+def _configure_broker_account_sync_from_session(
+    lifecycle: ApplicationLifecycleManager,
+    session_manager: ZerodhaSessionManager | None,
+) -> None:
+    if session_manager is None or not session_manager.is_authenticated():
+        return
+    lifecycle.orchestrator.observe_broker_authentication(session_manager.snapshot())
+    client = _read_only_broker_client(session_manager)
+    if client is not None:
+        lifecycle.orchestrator.configure_broker_account_client(client)
+
+
+def _read_only_broker_client(session_manager: ZerodhaSessionManager):
+    auth_client = getattr(session_manager, "_client", None)
+    candidates = (auth_client, getattr(auth_client, "_client", None))
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if all(callable(getattr(candidate, method, None)) for method in ("margins", "positions", "holdings", "orders")):
+            return candidate
+    return None
 
 
 def _try_reference_data_bootstrap(

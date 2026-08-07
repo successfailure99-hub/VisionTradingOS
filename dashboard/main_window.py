@@ -611,7 +611,7 @@ class VisionMainWindow(QMainWindow):
     def _update_header_health(self, view: DashboardView) -> None:
         health = {row.name: row.status for row in view.runtime.component_health}
         values = {
-            "Runtime": self._runtime_supervisor.last_snapshot.status,
+            "Runtime": _runtime_header_status(view),
             "Market": "READY" if view.runtime.market_data_ready else "WAITING",
             "Broker": view.runtime.broker_authentication or view.runtime.broker_connection,
             "Option Chain": health.get("Option Chain", "WAITING"),
@@ -621,6 +621,25 @@ class VisionMainWindow(QMainWindow):
         }
         for name, status in values.items():
             self._health_badges[name].set_status_text(status)
+
+
+def _runtime_header_status(view: DashboardView) -> str:
+    failed = next(
+        (
+            row
+            for row in view.runtime.component_health
+            if str(row.status).strip().upper() in {"FAILED", "ERROR"}
+        ),
+        None,
+    )
+    if failed is not None:
+        return "FAILED"
+    if str(view.runtime.application_status).strip().upper() != "RUNNING":
+        return view.runtime.application_status
+    blocker = str(view.runtime.primary_blocker or "-").strip()
+    if blocker and blocker not in {"-", "none", "None", "NONE"}:
+        return "BLOCKED"
+    return "READY"
 
 
 def _percentile(samples: tuple[float, ...], percentile: int) -> float:

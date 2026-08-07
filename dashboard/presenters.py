@@ -193,6 +193,7 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
     operational = next((getattr(snapshot, "operational_readiness", None) for snapshot in runtime_snapshots if getattr(snapshot, "operational_readiness", None) is not None), None)
     journal_persistence = next((getattr(snapshot, "journal_persistence", None) for snapshot in runtime_snapshots if getattr(snapshot, "journal_persistence", None) is not None), None)
     canonical_journal_ready = bool(journal_persistence is not None and getattr(journal_persistence, "operational_state", "") in {"READY_EMPTY", "READY_WITH_RECORDS"})
+    broker_account = getattr(orchestrator, "broker_account", None)
     return DashboardRuntimeView(
         application_status=_enum_text(lifecycle_snapshot.status),
         broker_mode=_enum_text(orchestrator.broker_mode),
@@ -228,19 +229,19 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
         replay_outcome=_enum_text(getattr(replay, "final_outcome", None)),
         replay_findings=len(tuple(getattr(replay, "active_findings", ()) or ())),
         replay_failure_summary=getattr(replay, "failure_reason", None),
-        broker_account_broker=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "broker", None)),
-        broker_account_id=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "account_id_masked", None)),
-        broker_authentication=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "authentication_state", None)),
-        broker_connection=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "connection_state", None)),
-        broker_last_refresh=getattr(getattr(orchestrator, "broker_account", None), "latest_refresh_timestamp", None),
-        broker_data_age_seconds=getattr(getattr(orchestrator, "broker_account", None), "data_age", None),
-        broker_available_margin=getattr(getattr(orchestrator, "broker_account", None), "total_available_margin", None),
-        broker_used_margin=(getattr(getattr(orchestrator, "broker_account", None), "equity_used", 0.0) or 0.0) + (getattr(getattr(orchestrator, "broker_account", None), "commodity_used", 0.0) or 0.0),
-        broker_open_positions=len(tuple(getattr(getattr(orchestrator, "broker_account", None), "positions", ()) or ())),
-        broker_holdings_count=len(tuple(getattr(getattr(orchestrator, "broker_account", None), "holdings", ()) or ())),
-        broker_orders_count=len(tuple(getattr(getattr(orchestrator, "broker_account", None), "orders", ()) or ())),
-        broker_blocking_reason=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "blocking_reason", None)),
-        broker_mutation_mode=_enum_text(getattr(getattr(orchestrator, "broker_account", None), "mutation_mode", None)),
+        broker_account_broker=_enum_text(getattr(broker_account, "broker", None)),
+        broker_account_id=_enum_text(getattr(broker_account, "account_id_masked", None)),
+        broker_authentication=_enum_text(getattr(broker_account, "authentication_state", None)),
+        broker_connection=_enum_text(getattr(broker_account, "connection_state", None)),
+        broker_last_refresh=getattr(broker_account, "latest_refresh_timestamp", None),
+        broker_data_age_seconds=getattr(broker_account, "data_age", None),
+        broker_available_margin=getattr(broker_account, "total_available_margin", None),
+        broker_used_margin=(getattr(broker_account, "equity_used", 0.0) or 0.0) + (getattr(broker_account, "commodity_used", 0.0) or 0.0),
+        broker_open_positions=len(tuple(getattr(broker_account, "positions", ()) or ())),
+        broker_holdings_count=len(tuple(getattr(broker_account, "holdings", ()) or ())),
+        broker_orders_count=len(tuple(getattr(broker_account, "orders", ()) or ())),
+        broker_blocking_reason=_enum_text(getattr(broker_account, "blocking_reason", None)),
+        broker_mutation_mode=_enum_text(getattr(broker_account, "mutation_mode", None)),
         broker_session_token_valid=bool(getattr(getattr(orchestrator, "broker_session", None), "token_valid", False)),
         broker_session_expires_at=getattr(getattr(orchestrator, "broker_session", None), "expires_at", None),
         broker_session_last_refresh=getattr(getattr(orchestrator, "broker_session", None), "last_refresh", None),
@@ -250,10 +251,18 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
         vision_readiness="READY" if bool(getattr(operational, "vision_evaluation_ready", False)) else "WAITING_FOR_DATA",
         paper_readiness="READY" if bool(getattr(operational, "paper_trading_ready", False)) else "NOT_APPLICABLE",
         journal_persistence_status=_enum_text(getattr(journal_persistence, "operational_state", None)),
-        broker_read_only_sync="READY" if bool(getattr(operational, "broker_read_only_ready", False)) else "AUTH_REQUIRED",
+        broker_read_only_sync="READY" if _broker_account_ready(broker_account) else "AUTH_REQUIRED",
         primary_blocker=_enum_text(getattr(operational, "primary_blocker", None)),
         component_health=_runtime_component_health(orchestrator),
     )
+
+
+def _broker_account_ready(account) -> bool:
+    if account is None or bool(getattr(account, "is_stale", False)):
+        return False
+    authenticated = _plain_text(getattr(account, "authentication_state", None)).casefold() == "authenticated"
+    connected = _plain_text(getattr(account, "connection_state", None)).casefold() == "ready"
+    return authenticated and connected and getattr(account, "latest_refresh_timestamp", None) is not None
 
 
 def _runtime_component_health(orchestrator) -> tuple[DashboardRuntimeComponentHealthView, ...]:
