@@ -7,6 +7,9 @@ from application.models import RuntimeTradingSession
 from application.runtime_contract import RuntimeContractContext, RuntimeContractSubject, RuntimeContractValidator
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
+from core.enums.timeframe import TimeFrame
+from core.models.building_candle import BuildingCandle
+from core.models.candle import Candle
 from core.event_bus import EventBus
 from core.models.tick import Tick
 from dashboard.presenters import build_runtime_view
@@ -105,6 +108,47 @@ def test_runtime_contract_reports_timestamp_ordering_and_future_timestamp():
 
     assert future_report.violations[0].reason == "Future timestamp"
     assert backwards_report.violations[0].reason == "Runtime ordering mismatch"
+
+
+def test_runtime_contract_accepts_live_building_candle_interval_boundary():
+    runtime_timestamp = datetime(2026, 8, 7, 14, 21, 59, 509494, tzinfo=UTC)
+    active_candle = BuildingCandle(
+        symbol=Instrument.NIFTY,
+        timeframe=TimeFrame.ONE_MINUTE,
+        start_time=datetime(2026, 8, 7, 14, 21, tzinfo=UTC),
+        end_time=datetime(2026, 8, 7, 14, 22, tzinfo=UTC),
+        open=25000.0,
+        high=25010.0,
+        low=24995.0,
+        close=25005.0,
+        volume=100,
+    )
+
+    report = _report_for(active_candle, object_name="Candle", context=_context(runtime_timestamp))
+
+    assert report.valid is True
+    assert report.violations == ()
+
+
+def test_runtime_contract_rejects_candle_interval_starting_after_runtime_timestamp():
+    runtime_timestamp = datetime(2026, 8, 7, 14, 21, 59, 509494, tzinfo=UTC)
+    future_candle = Candle(
+        symbol="NIFTY",
+        timeframe="1m",
+        start_time=datetime(2026, 8, 7, 14, 22, tzinfo=UTC),
+        end_time=datetime(2026, 8, 7, 14, 23, tzinfo=UTC),
+        open=25000.0,
+        high=25010.0,
+        low=24995.0,
+        close=25005.0,
+        volume=100,
+    )
+
+    report = _report_for(future_candle, object_name="Candle", context=_context(runtime_timestamp))
+
+    assert report.valid is False
+    assert report.violations[0].reason == "Future timestamp"
+    assert "start_time <=" in report.violations[0].expected
 
 
 def test_runtime_contract_reports_ownership_instrument_and_timeframe_failures():

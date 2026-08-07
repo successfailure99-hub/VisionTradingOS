@@ -180,11 +180,14 @@ class RuntimeContractValidator:
         consumer: str,
     ) -> tuple[RuntimeContractViolation, ...]:
         violations: list[RuntimeContractViolation] = []
-        timestamp = _timestamp(snapshot)
+        candle_interval = _candle_interval(snapshot) if object_name == "Candle" else None
+        timestamp = candle_interval[0] if candle_interval is not None else _timestamp(snapshot)
         if timestamp is not None:
             if not _aware(timestamp):
                 violations.append(_violation(object_name, "Timezone mismatch", owner, producer, consumer, "timezone-aware Asia/Kolkata-compatible timestamp", repr(timestamp)))
-            if context.runtime_timestamp is not None and _same_awareness(timestamp, context.runtime_timestamp) and timestamp > context.runtime_timestamp:
+            if candle_interval is not None:
+                violations.extend(_candle_interval_violations(candle_interval, context, object_name, owner, producer, consumer))
+            elif context.runtime_timestamp is not None and _same_awareness(timestamp, context.runtime_timestamp) and timestamp > context.runtime_timestamp:
                 violations.append(_violation(object_name, "Future timestamp", owner, producer, consumer, f"<= {context.runtime_timestamp.isoformat()}", timestamp.isoformat()))
         if object_name == "RuntimeSnapshot" and timestamp is not None and context.previous_runtime_timestamp is not None:
             if _same_awareness(timestamp, context.previous_runtime_timestamp) and timestamp < context.previous_runtime_timestamp:
@@ -219,6 +222,42 @@ def _timestamp(snapshot: object) -> datetime | None:
     latest = getattr(snapshot, "latest_candle", None)
     value = getattr(latest, "end_time", None)
     return value if isinstance(value, datetime) else None
+
+
+def _candle_interval(snapshot: object) -> tuple[datetime, datetime] | None:
+    start_time = getattr(snapshot, "start_time", None)
+    end_time = getattr(snapshot, "end_time", None)
+    if isinstance(start_time, datetime) and isinstance(end_time, datetime):
+        return (start_time, end_time)
+    return None
+
+
+def _candle_interval_violations(
+    interval: tuple[datetime, datetime],
+    context: RuntimeContractContext,
+    object_name: str,
+    owner: str,
+    producer: str,
+    consumer: str,
+) -> tuple[RuntimeContractViolation, ...]:
+    start_time, end_time = interval
+    violations: list[RuntimeContractViolation] = []
+    if not _aware(end_time):
+        violations.append(_violation(object_name, "Timezone mismatch", owner, producer, consumer, "timezone-aware Asia/Kolkata-compatible end_time", repr(end_time)))
+        return tuple(violations)
+    if not _same_awareness(start_time, end_time):
+        violations.append(_violation(object_name, "Timezone mismatch", owner, producer, consumer, "matching candle start_time/end_time timezone awareness", f"{start_time!r} / {end_time!r}"))
+    if end_time <= start_time:
+        violations.append(_violation(object_name, "Invalid candle interval", owner, producer, consumer, "end_time after start_time", f"{start_time.isoformat()} -> {end_time.isoformat()}"))
+    runtime_timestamp = context.runtime_timestamp
+    if runtime_timestamp is None or not _same_awareness(start_time, runtime_timestamp):
+        return tuple(violations)
+    if start_time > runtime_timestamp:
+        violations.append(_violation(object_name, "Future timestamp", owner, producer, consumer, f"start_time <= {runtime_timestamp.isoformat()}", start_time.isoformat()))
+        return tuple(violations)
+    if end_time > runtime_timestamp and not start_time <= runtime_timestamp < end_time:
+        violations.append(_violation(object_name, "Future timestamp", owner, producer, consumer, f"active candle interval contains {runtime_timestamp.isoformat()}", f"{start_time.isoformat()} -> {end_time.isoformat()}"))
+    return tuple(violations)
 
 
 def _trading_date(snapshot: object, timestamp: datetime | None):
