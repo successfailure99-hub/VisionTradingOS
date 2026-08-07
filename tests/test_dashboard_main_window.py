@@ -21,7 +21,7 @@ from application.models import RuntimeConfiguration
 from application.runtime_supervisor import RuntimeSupervisorCheck, RuntimeSupervisorSnapshot
 from core.event_bus import EventBus
 from dashboard.main_window import VisionMainWindow
-from dashboard.models import DashboardRuntimeComponentHealthView
+from dashboard.models import DashboardRuntimeComponentHealthView, DashboardRuntimeHealthSummary
 from dashboard.panels.option_chain_panel import OptionChainPanel
 from dashboard.panels.price_action_panel import PriceActionPanel
 
@@ -94,12 +94,17 @@ def test_header_runtime_health_uses_canonical_runtime_view_not_stale_supervisor_
                     consumer="Dashboard",
                 ),
             ),
+            runtime_health_summary=DashboardRuntimeHealthSummary(
+                "READY",
+                tooltip="Component: Runtime\nStatus: READY\nReason: None\nUpdated: -\nBlocking: No",
+            ),
         ),
     )
 
     window.render(canonical)
 
-    assert window._health_badges["Runtime"].text() == "READY"
+    assert window._health_badges["Runtime"].text() == "Runtime: READY"
+    assert "Component: Runtime" in window._health_badges["Runtime"].toolTip()
 
 
 def test_header_runtime_health_reports_failed_only_when_canonical_runtime_row_fails():
@@ -122,12 +127,77 @@ def test_header_runtime_health_reports_failed_only_when_canonical_runtime_row_fa
                     consumer="Dashboard",
                 ),
             ),
+            runtime_health_summary=DashboardRuntimeHealthSummary(
+                "FAILED",
+                primary_failure="Runtime Contract",
+                failure_reason="Runtime contract failed.",
+                blocking=True,
+                failed_component_count=1,
+                tooltip="Component: Runtime Contract\nStatus: FAILED\nReason: Runtime contract failed.\nUpdated: -\nBlocking: Yes",
+            ),
         ),
     )
 
     window.render(canonical_failure)
 
-    assert window._health_badges["Runtime"].text() == "FAILED"
+    assert window._health_badges["Runtime"].text() == "Runtime: FAILED"
+    assert "Component: Runtime Contract" in window._health_badges["Runtime"].toolTip()
+    assert "Reason: Runtime contract failed." in window._health_badges["Runtime"].toolTip()
+
+
+def test_header_runtime_health_recovers_with_current_dashboard_view_generation():
+    lifecycle = ApplicationBootstrap().bootstrap()
+    window = VisionMainWindow(lifecycle)
+    view = window.refresh()
+    failed = replace(
+        view,
+        runtime=replace(
+            view.runtime,
+            component_health=(DashboardRuntimeComponentHealthView("Option Chain", "FAILED", "Snapshot stale."),),
+            runtime_health_summary=DashboardRuntimeHealthSummary(
+                "FAILED",
+                primary_failure="Option Chain",
+                failure_reason="Snapshot stale.",
+                blocking=True,
+                failed_component_count=1,
+                tooltip="Component: Option Chain\nStatus: FAILED\nReason: Snapshot stale.\nUpdated: -\nBlocking: Yes",
+            ),
+        ),
+    )
+    recovered = replace(
+        view,
+        runtime=replace(
+            view.runtime,
+            component_health=(DashboardRuntimeComponentHealthView("Option Chain", "READY", "Synchronized."),),
+            runtime_health_summary=DashboardRuntimeHealthSummary(
+                "READY",
+                tooltip="Component: Runtime\nStatus: READY\nReason: None\nUpdated: -\nBlocking: No",
+            ),
+        ),
+    )
+
+    window.render(failed)
+    assert window._health_badges["Runtime"].text() == "Runtime: FAILED"
+
+    window.render(recovered)
+
+    assert window._health_badges["Runtime"].text() == "Runtime: READY"
+    assert "Snapshot stale" not in window._health_badges["Runtime"].toolTip()
+    assert window.current_view() is recovered
+
+
+def test_header_operational_badges_have_named_component_tooltips():
+    lifecycle = ApplicationBootstrap().bootstrap()
+    window = VisionMainWindow(lifecycle)
+    view = window.refresh()
+
+    window.render(view)
+
+    for name, badge in window._health_badges.items():
+        tooltip = badge.toolTip()
+        assert "Component:" in tooltip, name
+        assert "Status:" in tooltip, name
+        assert "Reason:" in tooltip, name
 
 
 def test_refresh_calls_lifecycle_snapshot_once_and_stores_view():

@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from dashboard.models import DashboardRuntimeComponentHealthView, DashboardRuntimeView
+from dashboard.models import DashboardRuntimeComponentHealthView, DashboardRuntimeHealthSummary, DashboardRuntimeView
 from dashboard.panels.runtime_panel import RuntimePanel
 
 
@@ -81,3 +81,26 @@ def test_runtime_component_health_renders_as_status_badges():
     assert panel._labels["Health: Fusion"].text() == "Waiting"
     assert panel._labels["Health: Vision Daily Context"].text() == "READY"
     assert panel._labels["Health: Vision Daily Context"].toolTip() == "Owner=SymbolRuntime | Producer=CPR"
+
+
+def test_runtime_health_summary_renders_near_top():
+    panel = RuntimePanel()
+    panel.render(
+        runtime_view(
+            runtime_health_summary=DashboardRuntimeHealthSummary(
+                "FAILED",
+                primary_failure="Runtime Contract",
+                failure_reason="Runtime Contract Failed | Reason=Timezone mismatch",
+                blocking=True,
+                failed_component_count=1,
+                tooltip="Component: Runtime Contract\nStatus: FAILED\nReason: Runtime Contract Failed | Reason=Timezone mismatch\nUpdated: -\nBlocking: Yes",
+            ),
+        )
+    )
+
+    assert panel._labels["Runtime Health"].text() == "FAILED"
+    assert panel._labels["Runtime Health"].toolTip().startswith("Component: Runtime Contract")
+    assert panel._labels["Primary Failure"].text() == "Runtime Contract"
+    assert "Timezone mismatch" in panel._labels["Failure Reason"].text()
+    assert panel._labels["Failure Blocking"].text() == "Yes"
+    assert panel._labels["Failed Components"].text() == "1"

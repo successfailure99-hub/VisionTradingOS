@@ -27,6 +27,7 @@ from dashboard.models import (
     DashboardPriceActionView,
     DashboardPositionView,
     DashboardRuntimeComponentHealthView,
+    DashboardRuntimeHealthSummary,
     DashboardRuntimeView,
     DashboardStrategyView,
     DashboardView,
@@ -194,6 +195,8 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
     journal_persistence = next((getattr(snapshot, "journal_persistence", None) for snapshot in runtime_snapshots if getattr(snapshot, "journal_persistence", None) is not None), None)
     canonical_journal_ready = bool(journal_persistence is not None and getattr(journal_persistence, "operational_state", "") in {"READY_EMPTY", "READY_WITH_RECORDS"})
     broker_account = getattr(orchestrator, "broker_account", None)
+    component_health = _runtime_component_health(orchestrator)
+    primary_blocker = _enum_text(getattr(operational, "primary_blocker", None))
     return DashboardRuntimeView(
         application_status=_enum_text(lifecycle_snapshot.status),
         broker_mode=_enum_text(orchestrator.broker_mode),
@@ -252,8 +255,14 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
         paper_readiness="READY" if bool(getattr(operational, "paper_trading_ready", False)) else "NOT_APPLICABLE",
         journal_persistence_status=_enum_text(getattr(journal_persistence, "operational_state", None)),
         broker_read_only_sync="READY" if _broker_account_ready(broker_account) else "AUTH_REQUIRED",
-        primary_blocker=_enum_text(getattr(operational, "primary_blocker", None)),
-        component_health=_runtime_component_health(orchestrator),
+        primary_blocker=primary_blocker,
+        component_health=component_health,
+        runtime_health_summary=_runtime_health_summary(
+            component_health,
+            application_status=_enum_text(lifecycle_snapshot.status),
+            primary_blocker=primary_blocker,
+            runtime_snapshots=runtime_snapshots,
+        ),
     )
 
 
@@ -360,6 +369,192 @@ def _broker_session_health_row(orchestrator) -> DashboardRuntimeComponentHealthV
         producer="BrokerSessionStore",
         consumer="Broker Runtime",
         timestamp=getattr(session, "last_refresh", None),
+    )
+
+
+_RUNTIME_FAILURE_STATUSES = {"FAILED", "ERROR"}
+_RUNTIME_DEGRADED_STATUSES = {"DEGRADED", "PARTIAL", "STALE", "RECOVERY_PENDING"}
+_RUNTIME_EXPECTED_OPERATIONAL_STATUSES = {
+    "AUTH_REQUIRED",
+    "DISABLED",
+    "LOGIN_REQUIRED",
+    "MARKET_CLOSED",
+    "NO_ACTIONABLE_CANDIDATE",
+    "NOT_APPLICABLE",
+    "READY_EMPTY",
+    "WAITING",
+    "WAITING_FOR_DATA",
+    "WAITING_FOR_OPTION_TICKS",
+    "WAITING_FOR_TICK",
+}
+_RUNTIME_FAILURE_PRIORITY = (
+    "Runtime Contract",
+    "Runtime Integrity",
+    "Market Data",
+    "Candle",
+    "Runtime Session",
+    "CPR",
+    "Camarilla",
+    "ADR",
+    "VWAP",
+    "Vision Daily Context",
+    "Vision Opening Range",
+    "Vision Structure",
+    "Vision Liquidity",
+    "Vision Structure Events",
+    "Vision Setup Qualification",
+    "Vision Option Confirmation",
+    "Vision Method Calculator",
+    "Vision Validation",
+    "Vision Runtime Adapter",
+    "TradeCandidate",
+    "Risk",
+    "Lifecycle",
+    "Paper Position",
+    "Vision Paper Handoff",
+    "Journal",
+)
+
+
+def _runtime_health_summary(
+    rows: tuple[DashboardRuntimeComponentHealthView, ...],
+    *,
+    application_status: str,
+    primary_blocker: str,
+    runtime_snapshots: tuple[RuntimeSnapshot, ...],
+) -> DashboardRuntimeHealthSummary:
+    failures = tuple(row for row in rows if _status_key(row.status) in _RUNTIME_FAILURE_STATUSES)
+    failures = tuple(sorted(failures, key=_runtime_failure_rank))
+    degraded = tuple(row for row in rows if _is_runtime_degraded(row))
+    updated_at = _runtime_health_updated_at(failures, rows, runtime_snapshots)
+    blocker = _runtime_blocker_text(primary_blocker)
+    app_status = _status_key(application_status)
+    if failures:
+        primary = failures[0]
+        reason = _runtime_failure_reason(failures)
+        return DashboardRuntimeHealthSummary(
+            "FAILED",
+            primary_failure=primary.name if len(failures) == 1 else "Multiple",
+            failure_reason=reason,
+            blocking=True,
+            failed_component_count=len(failures),
+            degraded_component_count=len(degraded),
+            updated_at=updated_at,
+            tooltip=_runtime_summary_tooltip(
+                "Multiple" if len(failures) > 1 else primary.name,
+                "FAILED",
+                reason,
+                updated_at,
+                True,
+            ),
+            failed_components=failures,
+        )
+    if app_status not in {"RUNNING", "READY", "CREATED"}:
+        reason = f"Application status is {application_status}."
+        return DashboardRuntimeHealthSummary(
+            "DEGRADED",
+            primary_failure="Application",
+            failure_reason=reason,
+            blocking=True,
+            degraded_component_count=len(degraded) + 1,
+            updated_at=updated_at,
+            tooltip=_runtime_summary_tooltip("Application", "DEGRADED", reason, updated_at, True),
+        )
+    if blocker != "none":
+        return DashboardRuntimeHealthSummary(
+            "DEGRADED",
+            primary_failure="Primary Blocker",
+            failure_reason=blocker,
+            blocking=True,
+            degraded_component_count=len(degraded) + 1,
+            updated_at=updated_at,
+            tooltip=_runtime_summary_tooltip("Primary Blocker", "DEGRADED", blocker, updated_at, True),
+        )
+    if degraded:
+        primary = degraded[0]
+        reason = _runtime_failure_reason(degraded)
+        return DashboardRuntimeHealthSummary(
+            "DEGRADED",
+            primary_failure=primary.name if len(degraded) == 1 else "Multiple",
+            failure_reason=reason,
+            blocking=False,
+            degraded_component_count=len(degraded),
+            updated_at=updated_at,
+            tooltip=_runtime_summary_tooltip(
+                "Multiple" if len(degraded) > 1 else primary.name,
+                "DEGRADED",
+                reason,
+                updated_at,
+                False,
+            ),
+        )
+    return DashboardRuntimeHealthSummary(
+        "READY",
+        updated_at=updated_at,
+        tooltip=_runtime_summary_tooltip("Runtime", "READY", "None", updated_at, False),
+    )
+
+
+def _status_key(value) -> str:
+    return "_".join(part for part in str(value or "-").strip().upper().replace("-", "_").split() if part)
+
+
+def _is_runtime_degraded(row: DashboardRuntimeComponentHealthView) -> bool:
+    status = _status_key(row.status)
+    if status in _RUNTIME_DEGRADED_STATUSES:
+        return True
+    if status in _RUNTIME_EXPECTED_OPERATIONAL_STATUSES:
+        return False
+    if status == "BLOCKED":
+        detail = str(row.detail).strip().casefold()
+        return not (
+            detail.startswith("no actionable")
+            or detail.startswith("no strategy")
+            or detail.startswith("no candidate")
+            or "no actionable vision candidate" in detail
+        )
+    return False
+
+
+def _runtime_failure_rank(row: DashboardRuntimeComponentHealthView) -> tuple[int, str]:
+    name = str(row.name)
+    for index, prefix in enumerate(_RUNTIME_FAILURE_PRIORITY):
+        if name == prefix or name.endswith(f" {prefix}") or name.startswith(prefix):
+            return (index, name)
+    return (len(_RUNTIME_FAILURE_PRIORITY), name)
+
+
+def _runtime_failure_reason(rows: tuple[DashboardRuntimeComponentHealthView, ...]) -> str:
+    if len(rows) == 1:
+        return rows[0].detail if rows[0].detail != "-" else rows[0].status
+    return "\n".join(f"{index}. {row.name}: {row.detail}" for index, row in enumerate(rows, start=1))
+
+
+def _runtime_health_updated_at(
+    prioritized_rows: tuple[DashboardRuntimeComponentHealthView, ...],
+    all_rows: tuple[DashboardRuntimeComponentHealthView, ...],
+    runtime_snapshots: tuple[RuntimeSnapshot, ...],
+):
+    for row in prioritized_rows + all_rows:
+        if row.timestamp is not None:
+            return row.timestamp
+    return next((getattr(snapshot, "timestamp", None) for snapshot in runtime_snapshots if getattr(snapshot, "timestamp", None) is not None), None)
+
+
+def _runtime_blocker_text(primary_blocker: str) -> str:
+    value = str(primary_blocker or "-").strip()
+    return "none" if value in {"", "-", "none", "None", "NONE"} else value
+
+
+def _runtime_summary_tooltip(component: str, status: str, reason: str, updated_at, blocking: bool) -> str:
+    return "\n".join(
+        (
+            f"Component: {component}",
+            f"Status: {status}",
+            f"Reason: {reason if reason and reason != '-' else 'None'}",
+            f"Updated: {_enum_text(updated_at)}",
+            f"Blocking: {'Yes' if blocking else 'No'}",
+        )
     )
 
 

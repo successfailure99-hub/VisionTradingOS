@@ -41,6 +41,37 @@ class DashboardRuntimeComponentHealthView:
 
 
 @dataclass(frozen=True, slots=True)
+class DashboardRuntimeHealthSummary:
+    overall_status: str
+    primary_failure: str = "none"
+    failure_reason: str = "none"
+    blocking: bool = False
+    failed_component_count: int = 0
+    degraded_component_count: int = 0
+    updated_at: datetime | None = None
+    tooltip: str = "-"
+    failed_components: tuple[DashboardRuntimeComponentHealthView, ...] = ()
+
+    def __post_init__(self) -> None:
+        for field_name in ("overall_status", "primary_failure", "failure_reason", "tooltip"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{field_name} must be non-empty text")
+            object.__setattr__(self, field_name, value.strip())
+        _require_non_negative(self.failed_component_count, "failed_component_count")
+        _require_non_negative(self.degraded_component_count, "degraded_component_count")
+        if not isinstance(self.blocking, bool):
+            raise TypeError("blocking must be bool")
+        if self.updated_at is not None and not isinstance(self.updated_at, datetime):
+            raise TypeError("updated_at must be datetime or None")
+        rows = tuple(self.failed_components)
+        for row in rows:
+            if not isinstance(row, DashboardRuntimeComponentHealthView):
+                raise TypeError("failed_components must contain DashboardRuntimeComponentHealthView values")
+        object.__setattr__(self, "failed_components", rows)
+
+
+@dataclass(frozen=True, slots=True)
 class DashboardRuntimeView:
     application_status: str
     broker_mode: str
@@ -101,12 +132,17 @@ class DashboardRuntimeView:
     broker_read_only_sync: str = "-"
     primary_blocker: str = "-"
     component_health: tuple[DashboardRuntimeComponentHealthView, ...] = ()
+    runtime_health_summary: DashboardRuntimeHealthSummary = field(
+        default_factory=lambda: DashboardRuntimeHealthSummary("READY")
+    )
     def __post_init__(self) -> None:
         rows = tuple(self.component_health)
         for row in rows:
             if not isinstance(row, DashboardRuntimeComponentHealthView):
                 raise TypeError("component_health must contain DashboardRuntimeComponentHealthView values")
         object.__setattr__(self, "component_health", rows)
+        if not isinstance(self.runtime_health_summary, DashboardRuntimeHealthSummary):
+            raise TypeError("runtime_health_summary must be DashboardRuntimeHealthSummary")
 
 
 @dataclass(frozen=True, slots=True)

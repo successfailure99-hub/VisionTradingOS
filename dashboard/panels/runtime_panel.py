@@ -125,6 +125,11 @@ class RuntimePanel(QGroupBox):
                 "Journal Persistence",
                 "Broker Read-only Sync",
                 "Primary Blocker",
+                "Runtime Health",
+                "Primary Failure",
+                "Failure Reason",
+                "Failure Blocking",
+                "Failed Components",
                 *RUNTIME_COMPONENT_HEALTH_FIELDS,
             )
         )
@@ -134,11 +139,14 @@ class RuntimePanel(QGroupBox):
             self._labels[field] = self._cards[field].value_label
         self._labels["Market Data"] = StatusBadge()
         self._labels["Journal"] = StatusBadge()
+        self._labels["Runtime Health"] = StatusBadge()
         detail_grid = grid.layout()
         detail_grid.replaceWidget(grid.labels["Market Data"], self._labels["Market Data"])
         grid.labels["Market Data"].deleteLater()
         detail_grid.replaceWidget(grid.labels["Journal"], self._labels["Journal"])
         grid.labels["Journal"].deleteLater()
+        detail_grid.replaceWidget(grid.labels["Runtime Health"], self._labels["Runtime Health"])
+        grid.labels["Runtime Health"].deleteLater()
         for field in RUNTIME_COMPONENT_HEALTH_FIELDS:
             self._labels[field] = StatusBadge()
             detail_grid.replaceWidget(grid.labels[field], self._labels[field])
@@ -204,6 +212,13 @@ class RuntimePanel(QGroupBox):
         self._labels["Journal Persistence"].setText(formatters.text(view.journal_persistence_status))
         self._labels["Broker Read-only Sync"].setText(formatters.text(view.broker_read_only_sync))
         self._labels["Primary Blocker"].setText(formatters.text(view.primary_blocker))
+        summary = view.runtime_health_summary
+        self._labels["Runtime Health"].set_status_text(summary.overall_status)
+        self._labels["Runtime Health"].setToolTip(summary.tooltip)
+        self._labels["Primary Failure"].setText(formatters.text(summary.primary_failure))
+        self._labels["Failure Reason"].setText(formatters.text(summary.failure_reason))
+        self._labels["Failure Blocking"].setText(formatters.yes_no(summary.blocking))
+        self._labels["Failed Components"].setText(formatters.integer(summary.failed_component_count))
         health = {item.name: item for item in view.component_health}
         for name, field in zip(RUNTIME_COMPONENT_HEALTH_LABELS, RUNTIME_COMPONENT_HEALTH_FIELDS):
             item = health.get(name)

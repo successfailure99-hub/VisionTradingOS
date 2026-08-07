@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from application.lifecycle_manager import ApplicationLifecycleManager
 from application.live_market_data import LiveMarketDataRuntime
 from application.runtime_supervisor import RuntimeSupervisor
+from dashboard import formatters
 from dashboard.models import DashboardView
 from dashboard.panels.ai_panel import AIPanel
 from dashboard.panels.backtest_panel import BacktestPanel
@@ -609,37 +610,69 @@ class VisionMainWindow(QMainWindow):
                 return
 
     def _update_header_health(self, view: DashboardView) -> None:
-        health = {row.name: row.status for row in view.runtime.component_health}
+        health = {row.name: row for row in view.runtime.component_health}
+        summary = view.runtime.runtime_health_summary
         values = {
-            "Runtime": _runtime_header_status(view),
+            "Runtime": (
+                f"Runtime: {summary.overall_status}",
+                formatters.semantic_kind(summary.overall_status),
+                summary.tooltip,
+            ),
             "Market": "READY" if view.runtime.market_data_ready else "WAITING",
             "Broker": view.runtime.broker_authentication or view.runtime.broker_connection,
-            "Option Chain": health.get("Option Chain", "WAITING"),
+            "Option Chain": health.get("Option Chain").status if health.get("Option Chain") is not None else "WAITING",
             "Vision": view.runtime.vision_readiness,
             "Paper": view.runtime.paper_readiness,
             "AI": "READY" if any(item.explanation != "-" for item in view.ai) else "WAITING",
         }
-        for name, status in values.items():
-            self._health_badges[name].set_status_text(status)
+        tooltips = {
+            "Runtime": summary.tooltip,
+            "Market": _header_tooltip(
+                "Market Data",
+                values["Market"],
+                "Runtime market data is ready." if view.runtime.market_data_ready else "Market data is waiting.",
+            ),
+            "Broker": _header_tooltip(
+                "Broker API Account Auth",
+                values["Broker"],
+                view.runtime.broker_blocking_reason,
+            ),
+            "Option Chain": _component_header_tooltip("Option Chain", health.get("Option Chain")),
+            "Vision": _header_tooltip("Vision Method", values["Vision"], view.runtime.primary_blocker),
+            "Paper": _header_tooltip("Paper Trading", values["Paper"], view.runtime.journal_persistence_status),
+            "AI": _header_tooltip("AI Explanation", values["AI"], "Explanation available." if values["AI"] == "READY" else "AI explanation is waiting."),
+        }
+        for name, payload in values.items():
+            if isinstance(payload, tuple):
+                status_text, kind, tooltip = payload
+                self._health_badges[name].set_status_text(status_text, kind=kind)
+                self._health_badges[name].setToolTip(tooltip)
+            else:
+                self._health_badges[name].set_status_text(payload)
+                self._health_badges[name].setToolTip(tooltips[name])
 
 
 def _runtime_header_status(view: DashboardView) -> str:
-    failed = next(
+    return view.runtime.runtime_health_summary.overall_status
+
+
+def _component_header_tooltip(component: str, row) -> str:
+    if row is None:
+        return _header_tooltip(component, "WAITING", "Component health row is not available.")
+    return _header_tooltip(component, row.status, row.detail)
+
+
+def _header_tooltip(component: str, status, reason) -> str:
+    reason_text = str(reason or "None").strip()
+    if reason_text in {"", "-", "none", "None", "NONE"}:
+        reason_text = "None"
+    return "\n".join(
         (
-            row
-            for row in view.runtime.component_health
-            if str(row.status).strip().upper() in {"FAILED", "ERROR"}
-        ),
-        None,
+            f"Component: {component}",
+            f"Status: {status}",
+            f"Reason: {reason_text}",
+        )
     )
-    if failed is not None:
-        return "FAILED"
-    if str(view.runtime.application_status).strip().upper() != "RUNNING":
-        return view.runtime.application_status
-    blocker = str(view.runtime.primary_blocker or "-").strip()
-    if blocker and blocker not in {"-", "none", "None", "NONE"}:
-        return "BLOCKED"
-    return "READY"
 
 
 def _percentile(samples: tuple[float, ...], percentile: int) -> float:

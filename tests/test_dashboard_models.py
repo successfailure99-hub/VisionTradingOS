@@ -118,3 +118,24 @@ def test_runtime_component_health_rows_are_frozen_and_tupled():
     assert runtime.component_health == (health,)
     with pytest.raises(FrozenInstanceError):
         health.status = "Waiting"
+
+
+def test_runtime_health_summary_defaults_and_validates():
+    runtime = DashboardRuntimeView(
+        "Created",
+        "Dry Run",
+        "Analysis Only",
+        ("NIFTY",),
+        False,
+        False,
+        0,
+        0,
+        0,
+        None,
+        None,
+        None,
+    )
+
+    assert runtime.runtime_health_summary.overall_status == "READY"
+    assert runtime.runtime_health_summary.primary_failure == "none"
+    assert runtime.runtime_health_summary.failed_component_count == 0

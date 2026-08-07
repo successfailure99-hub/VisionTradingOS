@@ -22,6 +22,7 @@ from core.enums.timeframe import TimeFrame
 from core.models.building_candle import BuildingCandle
 from core.models.tick import Tick
 from dashboard.presenters import (
+    _runtime_health_summary,
     build_ai_view,
     build_dashboard_view,
     build_journal_view,
@@ -31,6 +32,7 @@ from dashboard.presenters import (
     build_runtime_view,
     build_strategy_view,
 )
+from dashboard.models import DashboardRuntimeComponentHealthView
 from engines.ai_reasoning.enums import AIMarketSummary, AgreementSummary, ConflictSummary, ReasoningConfidence, TradingSuitability
 from engines.ai_reasoning.models import AIReasoningState
 from engines.camarilla.levels import CamarillaLevels
@@ -305,6 +307,80 @@ def test_runtime_view_exposes_deterministic_pipeline_health_from_snapshots():
     assert health["Chart Explanation"] == "Ready"
     assert health["AI Reasoning"] == "Ready"
     assert health["Lifecycle"] == "Ready"
+
+
+def test_runtime_health_summary_is_ready_when_all_rows_are_operational():
+    rows = (
+        DashboardRuntimeComponentHealthView("Runtime Contract", "READY", "Runtime contract valid."),
+        DashboardRuntimeComponentHealthView("Journal", "READY_EMPTY", "No completed trades."),
+        DashboardRuntimeComponentHealthView("Replay", "DISABLED", "Historical replay is disabled."),
+        DashboardRuntimeComponentHealthView("Strategy", "NOT_APPLICABLE", "no actionable Vision candidate"),
+        DashboardRuntimeComponentHealthView("Risk", "WAITING", "no strategy decision"),
+    )
+
+    summary = _runtime_health_summary(rows, application_status="Running", primary_blocker="-", runtime_snapshots=())
+
+    assert summary.overall_status == "READY"
+    assert summary.primary_failure == "none"
+    assert summary.failed_component_count == 0
+
+
+def test_runtime_health_summary_preserves_failed_component_and_reason():
+    rows = (
+        DashboardRuntimeComponentHealthView("Replay", "DISABLED", "Historical replay is disabled."),
+        DashboardRuntimeComponentHealthView(
+            "Runtime Contract",
+            "FAILED",
+            "Runtime Contract Failed | Reason=Timezone mismatch | Object=ADR",
+            owner="SymbolRuntime",
+            producer="RuntimeContractValidator",
+            consumer="Dashboard",
+        ),
+    )
+
+    summary = _runtime_health_summary(rows, application_status="Running", primary_blocker="-", runtime_snapshots=())
+
+    assert summary.overall_status == "FAILED"
+    assert summary.primary_failure == "Runtime Contract"
+    assert summary.failed_component_count == 1
+    assert "Timezone mismatch" in summary.failure_reason
+    assert "Component: Runtime Contract" in summary.tooltip
+    assert "Reason=Timezone mismatch" in summary.tooltip
+
+
+def test_runtime_health_summary_preserves_multiple_failures_in_priority_order():
+    rows = (
+        DashboardRuntimeComponentHealthView("Journal", "FAILED", "Journal write failed."),
+        DashboardRuntimeComponentHealthView("Market Data", "ERROR", "Feed disconnected."),
+    )
+
+    summary = _runtime_health_summary(rows, application_status="Running", primary_blocker="-", runtime_snapshots=())
+
+    assert summary.overall_status == "FAILED"
+    assert summary.primary_failure == "Multiple"
+    assert summary.failed_component_count == 2
+    assert "1. Market Data: Feed disconnected." in summary.failure_reason
+    assert "2. Journal: Journal write failed." in summary.failure_reason
+
+
+def test_runtime_health_summary_recovers_when_canonical_rows_recover():
+    failed = _runtime_health_summary(
+        (DashboardRuntimeComponentHealthView("Option Chain", "FAILED", "Snapshot stale."),),
+        application_status="Running",
+        primary_blocker="-",
+        runtime_snapshots=(),
+    )
+    recovered = _runtime_health_summary(
+        (DashboardRuntimeComponentHealthView("Option Chain", "READY", "Synchronized."),),
+        application_status="Running",
+        primary_blocker="-",
+        runtime_snapshots=(),
+    )
+
+    assert failed.overall_status == "FAILED"
+    assert recovered.overall_status == "READY"
+    assert recovered.primary_failure == "none"
+    assert recovered.failed_component_count == 0
 
 
 def test_runtime_view_exposes_vision_pipeline_health_and_reasons():
