@@ -66,26 +66,27 @@ def test_refresh_calls_lifecycle_snapshot_once_and_stores_view():
     assert window.current_view() is view
 
 
-def test_first_render_initializes_all_panels_and_records_diagnostics():
+def test_first_render_initializes_visible_panel_and_defers_hidden_panels():
     lifecycle = ApplicationBootstrap().create_application()
     window = VisionMainWindow(lifecycle)
     view = window.refresh()
     symbol = view.markets[0].symbol
     assert symbol in window._instrument_panels
     assert window._instrument_panels[symbol]["market"]._labels["Symbol"].text() == symbol
-    assert window._instrument_panels[symbol]["price_action"]._labels["Symbol"].text() == view.price_actions[0].symbol
-    assert window._instrument_panels[symbol]["option_chain"]._labels["Symbol"].text() == view.option_chains[0].symbol
-    assert window._instrument_panels[symbol]["ai"]._labels["Summary"].text() == view.ai[0].market_summary
-    assert window._instrument_panels[symbol]["journal"]._analytics_panel._status.text() == view.analytics[0].status
+    assert (symbol, "Market") in window._panel_render_cache
+    assert (symbol, "Price Action") not in window._panel_render_cache
+    assert (symbol, "Option Chain") not in window._panel_render_cache
+    assert (symbol, "AI") not in window._panel_render_cache
+    assert (symbol, "Journal") not in window._panel_render_cache
     assert window.current_view() is view
     assert window.diagnostics()["active_panel_render_ms"] >= 0.0
 
 
-def test_cached_tab_change_renders_without_runtime_snapshot_or_broker_work(monkeypatch):
+def test_cached_tab_change_renders_without_runtime_snapshot_supervisor_or_bridge_work(monkeypatch):
     lifecycle = ApplicationBootstrap().create_application()
     window = VisionMainWindow(lifecycle)
     window.refresh()
-    calls = {"snapshot": 0, "market": 0}
+    calls = {"snapshot": 0, "bridge": 0, "supervisor": 0, "market": 0}
     original_snapshot = lifecycle.snapshot
     original_market = window._instrument_panels["NIFTY"]["price_action"].render
 
@@ -98,13 +99,16 @@ def test_cached_tab_change_renders_without_runtime_snapshot_or_broker_work(monke
         return original_market(view)
 
     monkeypatch.setattr(lifecycle, "snapshot", count_snapshot)
+    monkeypatch.setattr(window._vision_method_bridge, "refresh", lambda: calls.__setitem__("bridge", calls["bridge"] + 1))
+    monkeypatch.setattr(window._runtime_supervisor, "monitor", lambda _snapshot: calls.__setitem__("supervisor", calls["supervisor"] + 1))
     monkeypatch.setattr(window._instrument_panels["NIFTY"]["price_action"], "render", count_market)
 
     window._instrument_panels["NIFTY"]["sections"].setCurrentIndex(1)
-    window._profile_tab_change()
 
-    assert calls == {"snapshot": 0, "market": 1}
+    assert calls == {"snapshot": 0, "bridge": 0, "supervisor": 0, "market": 1}
     assert window.diagnostics()["tab_change_ms"] >= 0.0
+    assert window.diagnostics()["tab_change_p95_ms"] >= 0.0
+    assert window.diagnostics()["ui_responsiveness"] in {"HEALTHY", "NOTICE", "SLOW", "UI_STALL"}
 
 
 def test_changed_refresh_renders_visible_panel_only(monkeypatch):
@@ -135,10 +139,48 @@ def test_changed_refresh_renders_visible_panel_only(monkeypatch):
     changed = replace(
         first,
         runtime=replace(first.runtime, last_error="connection was closed uncleanly"),
+        markets=(replace(first.markets[0], last_price=25001.0), *first.markets[1:]),
     )
     window.render(changed)
 
     assert calls == {"market": 1, "price_action": 0, "banknifty_market": 0}
+
+
+def test_hidden_panel_activation_uses_latest_prepared_view_without_refresh(monkeypatch):
+    lifecycle = ApplicationBootstrap().create_application()
+    window = VisionMainWindow(lifecycle)
+    first = window.refresh()
+    changed_option = replace(first.option_chains[0], runtime_status="Receiving", runtime_message="Live option chain synchronized")
+    changed = replace(first, option_chains=(changed_option, *first.option_chains[1:]))
+    calls = {"snapshot": 0}
+
+    monkeypatch.setattr(lifecycle, "snapshot", lambda: calls.__setitem__("snapshot", calls["snapshot"] + 1))
+    window.render(changed)
+
+    sections = window._instrument_panels[first.markets[0].symbol]["sections"]
+    sections.setCurrentIndex(2)
+
+    option_panel = window._instrument_panels[first.markets[0].symbol]["option_chain"]
+    assert calls["snapshot"] == 0
+    assert option_panel._labels["Status"].text() == "Receiving"
+    assert option_panel._labels["Message"].text() == "Live option chain synchronized"
+
+
+def test_repeated_tab_switches_reuse_prepared_view_and_keep_ui_responsive(monkeypatch):
+    lifecycle = ApplicationBootstrap().create_application()
+    window = VisionMainWindow(lifecycle)
+    window.refresh()
+    calls = {"snapshot": 0}
+
+    monkeypatch.setattr(lifecycle, "snapshot", lambda: calls.__setitem__("snapshot", calls["snapshot"] + 1))
+    sections = window._instrument_panels["NIFTY"]["sections"]
+    for index in range(140):
+        sections.setCurrentIndex(index % sections.count())
+
+    diagnostics = window.diagnostics()
+    assert calls["snapshot"] == 0
+    assert diagnostics["tab_change_p95_ms"] < 50.0
+    assert len(window.findChildren(QTimer)) == 1
 
 
 def test_selected_tab_is_preserved_across_refreshes():

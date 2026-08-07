@@ -329,6 +329,23 @@ def test_repeated_render_does_not_duplicate_summary_widgets_and_table_remains_us
     assert panel._event_table.rowCount() == 0
 
 
+def test_identical_option_chain_render_skips_heavy_table_work(monkeypatch):
+    app()
+    panel = OptionChainPanel()
+    first = view(rows=tuple(strike(price, is_atm=price == 100) for price in range(50, 151, 5)))
+    panel.render(first)
+    calls = {"runtime": 0, "events": 0, "strikes": 0}
+
+    monkeypatch.setattr(panel, "_render_runtime_table", lambda _view: calls.__setitem__("runtime", calls["runtime"] + 1))
+    monkeypatch.setattr(panel, "_render_event_table", lambda _view: calls.__setitem__("events", calls["events"] + 1))
+    monkeypatch.setattr(panel, "_render_strikes", lambda _view: calls.__setitem__("strikes", calls["strikes"] + 1))
+
+    panel.render(first)
+
+    assert calls == {"runtime": 0, "events": 0, "strikes": 0}
+    assert panel._table.rowCount() == len(first.strikes)
+
+
 def test_row_and_change_oi_styling_markers_are_applied():
     app()
     rows = (

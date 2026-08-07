@@ -54,6 +54,7 @@ class RuntimePanel(QGroupBox):
     def __init__(self, parent=None):
         super().__init__("Runtime", parent)
         self._labels = {}
+        self._last_view = None
         self._cards = {
             "Application": MetricCard("Application"),
             "Safety": MetricCard("Safety"),
@@ -144,6 +145,8 @@ class RuntimePanel(QGroupBox):
             grid.labels[field].deleteLater()
 
     def render(self, view: DashboardRuntimeView) -> None:
+        if view == self._last_view:
+            return
         self._cards["Application"].set_value(view.application_status)
         self._cards["Safety"].set_value(view.safety_mode)
         self._cards["Broker"].set_value(view.broker_mode)
@@ -207,3 +210,4 @@ class RuntimePanel(QGroupBox):
             status = item.status if item is not None else "Waiting"
             self._labels[field].set_status_text(status)
             self._labels[field].setToolTip(item.detail if item is not None else "-")
+        self._last_view = view

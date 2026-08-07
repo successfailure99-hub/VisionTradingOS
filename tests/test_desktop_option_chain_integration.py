@@ -267,6 +267,8 @@ def test_enabled_mode_resolves_expiry_atm_pairs_and_populates_dashboard_option_c
     assert option_view.runtime_rows[0].state == "Receiving"
     assert any(row.instrument == "NIFTY" and row.message == "Analytics updated" for row in option_view.event_rows)
     panel = dashboard.main_window._instrument_panels["NIFTY"]["option_chain"]
+    dashboard.main_window._tabs.setCurrentWidget(dashboard.main_window._instrument_panels["NIFTY"]["tab"])
+    dashboard.main_window._instrument_panels["NIFTY"]["sections"].setCurrentIndex(2)
     assert panel._tabs.tabText(0) == "Overview"
     assert panel._labels["Positioning Bias"].text() == "Mixed"
     assert panel._labels["OI PCR"].text() == "1.0009"
@@ -520,11 +522,17 @@ def test_nifty_receiving_and_banknifty_waiting_are_isolated_from_sensex_discover
     nifty_panel = dashboard.main_window._instrument_panels["NIFTY"]["option_chain"]
     bank_panel = dashboard.main_window._instrument_panels["BANKNIFTY"]["option_chain"]
     sensex_panel = dashboard.main_window._instrument_panels["SENSEX"]["option_chain"]
+    dashboard.main_window._tabs.setCurrentWidget(dashboard.main_window._instrument_panels["NIFTY"]["tab"])
+    dashboard.main_window._instrument_panels["NIFTY"]["sections"].setCurrentIndex(2)
     assert nifty_panel._labels["Status"].text() == "Receiving"
     assert nifty_panel._labels["Last Error"].text() == "-"
     assert nifty_panel._table.rowCount() == 3
+    dashboard.main_window._tabs.setCurrentWidget(dashboard.main_window._instrument_panels["BANKNIFTY"]["tab"])
+    dashboard.main_window._instrument_panels["BANKNIFTY"]["sections"].setCurrentIndex(2)
     assert bank_panel._labels["Status"].text() == "Waiting For Spot"
     assert bank_panel._labels["Last Error"].text() == "-"
+    dashboard.main_window._tabs.setCurrentWidget(dashboard.main_window._instrument_panels["SENSEX"]["tab"])
+    dashboard.main_window._instrument_panels["SENSEX"]["sections"].setCurrentIndex(2)
     assert sensex_panel._labels["Status"].text() == "Error"
     assert sensex_panel._labels["Last Error"].text() == "No valid SENSEX contracts were discovered."
     assert ticker.submitted_orders == []

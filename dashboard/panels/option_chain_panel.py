@@ -95,6 +95,10 @@ class OptionChainPanel(QGroupBox):
     def __init__(self, parent=None):
         super().__init__("Option Chain Analytics", parent)
         self._labels = {}
+        self._last_view = None
+        self._runtime_rows_signature = None
+        self._event_rows_signature = None
+        self._strike_rows_signature = None
         self._overview_fields = (
             "Status",
             "Available",
@@ -238,6 +242,8 @@ class OptionChainPanel(QGroupBox):
     def render(self, view: DashboardOptionChainView) -> None:
         if not isinstance(view, DashboardOptionChainView):
             raise TypeError("view must be DashboardOptionChainView")
+        if view == self._last_view:
+            return
         self._render_runtime_status(view)
         self._cards["Positioning Bias"].set_value(view.positioning_bias)
         self._cards["OI PCR"].set_value(formatters.ratio(view.oi_pcr), kind="neutral")
@@ -266,6 +272,7 @@ class OptionChainPanel(QGroupBox):
         self._render_runtime_table(view)
         self._render_event_table(view)
         self._render_strikes(view)
+        self._last_view = view
 
     def _render_runtime_status(self, view: DashboardOptionChainView) -> None:
         status_kind = _runtime_kind(view.runtime_status)
@@ -305,10 +312,8 @@ class OptionChainPanel(QGroupBox):
         self._cards["Dashboard"].set_value(_health_text(view.health_dashboard), kind=_health_kind(view.health_dashboard))
 
     def _render_runtime_table(self, view: DashboardOptionChainView) -> None:
-        rows = tuple(view.runtime_rows)
-        self._runtime_table.setRowCount(len(rows))
-        for row, item in enumerate(rows):
-            values = (
+        rows = tuple(
+            (
                 item.instrument,
                 item.state,
                 formatters.date_text(item.expiry),
@@ -317,42 +322,64 @@ class OptionChainPanel(QGroupBox):
                 formatters.timestamp(item.last_update),
                 item.last_error or formatters.MISSING,
             )
+            for item in view.runtime_rows
+        )
+        if rows == self._runtime_rows_signature:
+            return
+        self._runtime_rows_signature = rows
+        self._runtime_table.setRowCount(len(rows))
+        for row, values in enumerate(rows):
             for column, value in enumerate(values):
                 self._runtime_table.setItem(row, column, _read_only_item(value))
         self._runtime_table.resizeColumnsToContents()
         self._runtime_table.resizeRowsToContents()
 
     def _render_event_table(self, view: DashboardOptionChainView) -> None:
-        rows = tuple(view.event_rows)
+        rows = tuple((item.timestamp, item.instrument, item.state, item.message) for item in view.event_rows)
+        if rows == self._event_rows_signature:
+            return
+        self._event_rows_signature = rows
         self._event_table.setRowCount(len(rows))
-        for row, item in enumerate(rows):
-            for column, value in enumerate((item.timestamp, item.instrument, item.state, item.message)):
+        for row, values in enumerate(rows):
+            for column, value in enumerate(values):
                 self._event_table.setItem(row, column, _read_only_item(value))
         self._event_table.resizeColumnsToContents()
         self._event_table.resizeRowsToContents()
 
     def _render_strikes(self, view: DashboardOptionChainView) -> None:
-        rows = select_display_strikes(view)
+        rows = tuple(
+            (
+                strike,
+                _row_tags(view, strike),
+                (
+                    formatters.price(strike.call_bid_price),
+                    formatters.price(strike.call_ask_price),
+                    formatters.price(strike.call_last_price),
+                    formatters.integer(strike.call_volume),
+                    formatters.integer(strike.call_change_open_interest),
+                    formatters.integer(strike.call_open_interest),
+                    formatters.price(strike.strike_price),
+                    formatters.integer(strike.put_open_interest),
+                    formatters.integer(strike.put_change_open_interest),
+                    formatters.integer(strike.put_volume),
+                    formatters.price(strike.put_last_price),
+                    formatters.price(strike.put_bid_price),
+                    formatters.price(strike.put_ask_price),
+                ),
+            )
+            for strike in select_display_strikes(view)
+        )
+        signature = (
+            tuple((strike, row_tags, values) for strike, row_tags, values in rows),
+            _empty_chain_message(view) if not rows else formatters.MISSING,
+        )
+        if signature == self._strike_rows_signature:
+            return
+        self._strike_rows_signature = signature
         self._empty_chain.setText(formatters.MISSING if rows else _empty_chain_message(view))
         self._empty_chain.setVisible(not rows)
         self._table.setRowCount(len(rows))
-        for row, strike in enumerate(rows):
-            values = (
-                formatters.price(strike.call_bid_price),
-                formatters.price(strike.call_ask_price),
-                formatters.price(strike.call_last_price),
-                formatters.integer(strike.call_volume),
-                formatters.integer(strike.call_change_open_interest),
-                formatters.integer(strike.call_open_interest),
-                formatters.price(strike.strike_price),
-                formatters.integer(strike.put_open_interest),
-                formatters.integer(strike.put_change_open_interest),
-                formatters.integer(strike.put_volume),
-                formatters.price(strike.put_last_price),
-                formatters.price(strike.put_bid_price),
-                formatters.price(strike.put_ask_price),
-            )
-            row_tags = _row_tags(view, strike)
+        for row, (_strike, row_tags, values) in enumerate(rows):
             for column, value in enumerate(values):
                 item = _read_only_item(value)
                 item.setData(Qt.UserRole, row_tags)

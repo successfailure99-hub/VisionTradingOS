@@ -77,15 +77,24 @@ class VisionMainWindow(QMainWindow):
         self._current_view: DashboardView | None = None
         self._last_rendered_view: DashboardView | None = None
         self._rendering = False
+        self._panel_render_cache = {}
         self._slow_threshold_ms = 100.0
         self._diagnostics = {
             "snapshot_retrieval_ms": 0.0,
             "presenter_construction_ms": 0.0,
             "active_panel_render_ms": 0.0,
+            "visible_panel_switch_ms": 0.0,
             "tab_change_ms": 0.0,
             "dashboard_render_ms": 0.0,
+            "runtime_supervisor_ms": 0.0,
+            "vision_method_bridge_ms": 0.0,
+            "ui_responsiveness": "HEALTHY",
+            "tab_change_p50_ms": 0.0,
+            "tab_change_p95_ms": 0.0,
+            "tab_change_p99_ms": 0.0,
             "slow_operations": (),
         }
+        self._tab_change_samples = ()
         self._clock = clock or _default_clock
         self._settings = settings or QSettings("VisionTradingOS", "Dashboard")
         self._favorite_sections = tuple(str(item) for item in (self._settings.value("favorites", []) or ()))
@@ -133,9 +142,13 @@ class VisionMainWindow(QMainWindow):
             self._historical_replay_driver.poll()
         if self._deterministic_backtest_driver is not None:
             self._deterministic_backtest_driver.poll()
+        bridge_started = perf_counter()
         self._vision_method_bridge.refresh()
+        self._record_duration("vision_method_bridge_ms", bridge_started)
         view = self._build_view()
+        supervisor_started = perf_counter()
         self._runtime_supervisor.monitor(self._last_lifecycle_snapshot)
+        self._record_duration("runtime_supervisor_ms", supervisor_started)
         self._current_view = view
         if view != self._last_rendered_view:
             self.render(view)
@@ -169,19 +182,16 @@ class VisionMainWindow(QMainWindow):
     def render(self, view: DashboardView) -> None:
         if self._rendering:
             return
+        self._current_view = view
         self._rendering = True
         started = perf_counter()
         try:
-            first_render = self._last_rendered_view is None
             self._header_status.set_status_text(view.runtime.application_status)
             self._header_mode.set_status_text(view.runtime.safety_mode)
             self._update_header_health(view)
             self._sync_tabs(view)
             panel_started = perf_counter()
-            if first_render:
-                self._render_all_panels(view)
-            else:
-                self._render_visible_panels(view)
+            self._render_visible_panels(view)
             self._record_duration("active_panel_render_ms", panel_started)
             self.statusBar().showMessage(f"Application {view.runtime.application_status}")
             self._last_rendered_view = view
@@ -209,33 +219,27 @@ class VisionMainWindow(QMainWindow):
             return
         started = perf_counter()
         self._render_visible_panels(self._current_view)
-        self._record_duration("tab_change_ms", started)
-
-    def _render_all_panels(self, view: DashboardView) -> None:
-        self._runtime_panel.render(view.runtime)
-        self._live_market_data_panel.render(view.live_market_data)
-        self._backtest_panel.render(view.backtest)
-        for market in view.markets:
-            self._render_instrument_panels(view, market.symbol, all_sections=True)
+        self._record_duration("visible_panel_switch_ms", started)
+        self._record_tab_change(started)
 
     def _render_visible_panels(self, view: DashboardView) -> None:
         if self._main_tabs.currentWidget() is self._system_area:
             current_system = self._system_tabs.currentWidget()
             if current_system is self._system_tabs.widget(0):
-                self._runtime_panel.render(view.runtime)
+                self._render_cached(("system", "Runtime"), view.runtime, self._runtime_panel.render)
             elif current_system is self._system_tabs.widget(1):
-                self._live_market_data_panel.render(view.live_market_data)
+                self._render_cached(("system", "Live Feed"), view.live_market_data, self._live_market_data_panel.render)
             elif current_system is self._system_tabs.widget(2):
-                self._backtest_panel.render(view.backtest)
+                self._render_cached(("system", "Backtest"), view.backtest, self._backtest_panel.render)
             return
         if self._main_tabs.currentWidget() is self._vision_method_area:
             return
         if self._tabs.currentIndex() < 0:
             return
         symbol = self._tabs.tabText(self._tabs.currentIndex())
-        self._render_instrument_panels(view, symbol, all_sections=False)
+        self._render_instrument_panels(view, symbol)
 
-    def _render_instrument_panels(self, view: DashboardView, symbol: str, *, all_sections: bool) -> None:
+    def _render_instrument_panels(self, view: DashboardView, symbol: str) -> None:
         if symbol not in self._instrument_panels:
             return
         markets = {item.symbol: item for item in view.markets}
@@ -250,21 +254,21 @@ class VisionMainWindow(QMainWindow):
         analytics = {item.symbol: item for item in view.analytics}
         panels = self._instrument_panels[symbol]
         active_section = panels["sections"].tabText(panels["sections"].currentIndex())
-        if all_sections or active_section == "Market":
-            panels["market"].render(markets[symbol])
-        if all_sections or active_section == "Price Action":
-            panels["price_action"].render(price_actions[symbol])
-        if all_sections or active_section == "Option Chain":
-            panels["option_chain"].render(option_chains[symbol])
-        if all_sections or active_section == "AI":
-            panels["ai"].render(ai_views[symbol])
-        if all_sections or active_section == "Strategy":
-            panels["strategy"].render(strategies[symbol])
-        if all_sections or active_section == "Position":
-            panels["position"].render(positions[symbol])
-        if all_sections or active_section == "Journal":
-            panels["journal"].render(journals[symbol])
-            panels["journal"].render_analytics(analytics[symbol])
+        if active_section == "Market":
+            self._render_cached((symbol, "Market"), markets[symbol], panels["market"].render)
+        if active_section == "Price Action":
+            self._render_cached((symbol, "Price Action"), price_actions[symbol], panels["price_action"].render)
+        if active_section == "Option Chain":
+            self._render_cached((symbol, "Option Chain"), option_chains[symbol], panels["option_chain"].render)
+        if active_section == "AI":
+            self._render_cached((symbol, "AI"), ai_views[symbol], panels["ai"].render)
+        if active_section == "Strategy":
+            self._render_cached((symbol, "Strategy"), strategies[symbol], panels["strategy"].render)
+        if active_section == "Position":
+            self._render_cached((symbol, "Position"), positions[symbol], panels["position"].render)
+        if active_section == "Journal":
+            self._render_cached((symbol, "Journal"), journals[symbol], panels["journal"].render)
+            self._render_cached((symbol, "Analytics"), analytics[symbol], panels["journal"].render_analytics)
 
     def closeEvent(self, event):
         self._save_window_state()
@@ -404,6 +408,7 @@ class VisionMainWindow(QMainWindow):
         root.addWidget(sections)
         self._tabs.addTab(tab, symbol)
         self._register_tab_bar(sections)
+        _bind_signal(sections.currentChanged, self._profile_tab_change)
         self._instrument_panels[symbol] = {
             "tab": tab,
             "sections": sections,
@@ -430,9 +435,25 @@ class VisionMainWindow(QMainWindow):
     def _record_duration(self, field_name: str, started: float) -> None:
         elapsed_ms = max(0.0, (perf_counter() - started) * 1000.0)
         self._diagnostics[field_name] = elapsed_ms
+        if field_name in {"tab_change_ms", "visible_panel_switch_ms", "dashboard_render_ms"}:
+            self._diagnostics["ui_responsiveness"] = _responsiveness(elapsed_ms)
         if elapsed_ms >= self._slow_threshold_ms:
             rows = tuple(self._diagnostics.get("slow_operations", ()))
             self._diagnostics["slow_operations"] = rows[-15:] + ((field_name, elapsed_ms),)
+
+    def _record_tab_change(self, started: float) -> None:
+        self._record_duration("tab_change_ms", started)
+        samples = (self._tab_change_samples + (float(self._diagnostics["tab_change_ms"]),))[-500:]
+        self._tab_change_samples = samples
+        self._diagnostics["tab_change_p50_ms"] = _percentile(samples, 50)
+        self._diagnostics["tab_change_p95_ms"] = _percentile(samples, 95)
+        self._diagnostics["tab_change_p99_ms"] = _percentile(samples, 99)
+
+    def _render_cached(self, key: tuple[str, str], value, renderer) -> None:
+        if self._panel_render_cache.get(key) == value:
+            return
+        renderer(value)
+        self._panel_render_cache[key] = value
 
     def _install_navigation_shortcuts(self) -> None:
         for sequence, section in (
@@ -600,3 +621,21 @@ class VisionMainWindow(QMainWindow):
         }
         for name, status in values.items():
             self._health_badges[name].set_status_text(status)
+
+
+def _percentile(samples: tuple[float, ...], percentile: int) -> float:
+    if not samples:
+        return 0.0
+    values = sorted(samples)
+    index = round((len(values) - 1) * (percentile / 100.0))
+    return values[max(0, min(index, len(values) - 1))]
+
+
+def _responsiveness(elapsed_ms: float) -> str:
+    if elapsed_ms < 50.0:
+        return "HEALTHY"
+    if elapsed_ms < 100.0:
+        return "NOTICE"
+    if elapsed_ms < 250.0:
+        return "SLOW"
+    return "UI_STALL"
