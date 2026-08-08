@@ -91,6 +91,21 @@ def test_rc11_sparse_live_ticks_with_latency_still_close_elapsed_opening_minutes
     assert opening.missing_candle_timestamps == ()
 
 
+def test_rc11_zero_volume_gap_candles_do_not_alter_vwap_math():
+    item = runtime()
+    item.process_tick(tick(OPEN, price=100.0, volume=10))
+    item.process_tick(tick(OPEN + timedelta(minutes=15, milliseconds=350), price=103.0, volume=20))
+
+    snapshot = item.snapshot().runtime_snapshots[0]
+    history = item.get_candle_history("NIFTY")
+
+    assert tuple(c.volume for c in history[1:]) == (0,) * 14
+    assert snapshot.vwap is not None
+    assert snapshot.vwap.cumulative_volume == 30
+    assert snapshot.vwap.cumulative_price_volume == 3060.0
+    assert snapshot.vwap.vwap == 102.0
+
+
 def test_rc11_out_of_order_ticks_are_rejected_without_candle_loss():
     item = runtime()
     item.process_tick(tick(OPEN, price=100.0))

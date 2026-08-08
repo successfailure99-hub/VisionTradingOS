@@ -110,8 +110,8 @@ def test_vm20_weekend_reference_bootstrap_seeds_previous_session_candles_and_mov
     assert view.latest_candle == history[-1]
     assert view.cpr is not None
     assert view.camarilla is not None
-    assert view.cpr.trading_date == SUNDAY.date()
-    assert view.camarilla.trading_date == SUNDAY.date()
+    assert view.cpr.trading_date == FRIDAY_OPEN.date()
+    assert view.camarilla.trading_date == FRIDAY_OPEN.date()
     assert result.status.blocking_stage != "CANDLE_ENGINE"
 
 

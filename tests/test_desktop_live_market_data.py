@@ -24,6 +24,7 @@ from application.desktop_live_data import (
 from application.broker_session_persistence import BrokerSessionRecord, EncryptedBrokerSessionStore
 from application.live_market_data import LiveMarketDataRuntimeFactory, LiveMarketDataRuntimeStatus
 from application.reference_data_bootstrap import resolve_reference_bootstrap_bounds
+from application.reference_data_bootstrap import _active_reference_trading_date
 from brokers.zerodha.auth import ZerodhaCredentials, ZerodhaSessionManager
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
@@ -675,6 +676,16 @@ def test_weekend_reference_bootstrap_loads_adr_history_for_all_instruments():
     dashboard.shutdown()
 
 
+def test_reference_bootstrap_does_not_create_weekend_active_trading_date_from_wall_clock():
+    saturday = datetime(2026, 8, 8, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    sunday = datetime(2026, 8, 9, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    friday = datetime(2026, 8, 7, 8, 55, tzinfo=ZoneInfo("Asia/Kolkata"))
+
+    assert _active_reference_trading_date(saturday, resolve_reference_bootstrap_bounds(saturday)) == datetime(2026, 8, 7).date()
+    assert _active_reference_trading_date(sunday, resolve_reference_bootstrap_bounds(sunday)) == datetime(2026, 8, 7).date()
+    assert _active_reference_trading_date(friday, resolve_reference_bootstrap_bounds(friday)) == datetime(2026, 8, 7).date()
+
+
 def test_futures_vwap_discovers_valid_contracts_warms_vwap_and_surfaces_source_metadata():
     qt_app()
     ticker = FakeTickerClient()
@@ -750,6 +761,47 @@ def test_futures_vwap_before_open_reports_waiting_not_error_on_market_closed_sta
     assert historical_clients[0].calls == []
     assert rows["VWAP"].status != "ERROR"
     assert rows["VWAP"].status == "WAITING FOR FUTURES TICK"
+    dashboard.shutdown()
+
+
+def test_futures_vwap_zero_cumulative_volume_is_waiting_not_error():
+    qt_app()
+    ticker = FakeTickerClient()
+    current = datetime(2026, 7, 15, 9, 15, 1, tzinfo=ZoneInfo("Asia/Kolkata"))
+    dashboard = create_dashboard_application(
+        environ=live_env(
+            LIVE_MARKET_DATA_AUTO_CONNECT="false",
+            LIVE_FUTURES_VWAP_ENABLED="true",
+            REFERENCE_DATA_BOOTSTRAP_ENABLED="false",
+        ),
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: current),
+        instrument_client_factory=instrument_factory_factory([], futures_records()),
+        historical_client_factory=historical_factory_factory([]),
+        ticker_client=ticker,
+        clock=lambda: current,
+    )
+
+    ticker.callbacks["on_ticks"](
+        None,
+        (
+            {
+                "instrument_token": 201,
+                "last_price": 25333.0,
+                "exchange_timestamp": current,
+                "volume_traded": 0,
+            },
+        ),
+    )
+    snapshot = dashboard.live_futures_vwap_runtime.snapshot()
+    nifty = next(item for item in snapshot.instruments if item.underlying is Instrument.NIFTY)
+    view = dashboard.main_window.refresh()
+    rows = {row.name: row for row in view.runtime.component_health}
+
+    assert nifty.last_error is None
+    assert nifty.cumulative_volume == 0
+    assert nifty.vwap_ready is False
+    assert rows["VWAP"].status != "ERROR"
     dashboard.shutdown()
 
 

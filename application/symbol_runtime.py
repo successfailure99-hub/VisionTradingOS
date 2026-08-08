@@ -5,6 +5,7 @@ Per-symbol Application Orchestrator runtime.
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from core.enums.instrument import Instrument
 from core.enums.exchange import Exchange
@@ -118,6 +119,7 @@ from application.models import (
 from application.runtime_contract import RuntimeContractContext, RuntimeContractSubject, RuntimeContractValidator, RuntimeIntegrityViolation
 _OPTION_CHAIN_MAX_AGE_SECONDS = 180.0
 _OPTION_CHAIN_TIMESTAMP_TOLERANCE = timedelta(seconds=1)
+IST = ZoneInfo("Asia/Kolkata")
 
 from application.tradingview_evidence_assembly import (
     TradingViewEvidenceAssemblyCoordinator,
@@ -1552,7 +1554,7 @@ class SymbolRuntime:
         return current
 
     def _runtime_trading_session(self, market_timestamp: datetime | None) -> RuntimeTradingSession:
-        trading_date = market_timestamp.date() if market_timestamp is not None else None
+        trading_date = _market_date(market_timestamp)
         previous_completed = self._daily_context_source_date
         adr = self.adr_engine.state
         vwap = self.vwap_engine.get_latest(self._core_instrument)
@@ -2882,6 +2884,14 @@ def _positive_price(value) -> float | None:
         return None
     number = float(value)
     return number if number > 0.0 else None
+
+
+def _market_date(timestamp: datetime | None) -> date | None:
+    if not isinstance(timestamp, datetime):
+        return None
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        return timestamp.date()
+    return timestamp.astimezone(IST).date()
 
 
 def _valid_invalidation(direction, entry: float, candidate: float | None) -> bool:

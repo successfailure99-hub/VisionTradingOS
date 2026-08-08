@@ -613,8 +613,8 @@ def _raw_volume(row) -> int:
         text = value.strip()
         if text.isdigit():
             value = int(text)
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError("volume must be a positive integer")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("volume must be a non-negative integer")
     return value
 
 

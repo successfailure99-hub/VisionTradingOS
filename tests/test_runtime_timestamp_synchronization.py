@@ -90,6 +90,16 @@ def test_futures_vwap_timestamp_advances_canonical_runtime_timestamp():
     assert runtime_snapshot.runtime_session.market_timestamp == vwap_time
 
 
+def test_runtime_session_uses_exchange_local_date_for_aware_market_timestamp():
+    runtime = _runtime()
+    utc_market_time_on_previous_calendar_day = datetime(2026, 8, 6, 20, 0, tzinfo=UTC)
+
+    runtime_snapshot = runtime.process_tick(_tick(utc_market_time_on_previous_calendar_day))
+
+    assert runtime_snapshot.runtime_session.market_timestamp == utc_market_time_on_previous_calendar_day
+    assert runtime_snapshot.runtime_session.trading_date == date(2026, 8, 7)
+
+
 def test_vision_live_bridge_uses_canonical_runtime_timestamp_before_latest_tick():
     runtime = _runtime()
     vwap_time = NOW + timedelta(seconds=4)

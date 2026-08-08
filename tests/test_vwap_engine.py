@@ -6,7 +6,7 @@ Test - VWAP Engine
 """
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
@@ -434,6 +434,20 @@ def test_date_reset_vwap_starts_fresh_from_first_positive_tick():
     assert result.cumulative_volume == 20
     assert_close(result.cumulative_price_volume, 6000.0)
     assert_close(result.vwap, 300.0)
+
+
+def test_aware_tick_uses_exchange_local_trading_date_for_vwap():
+    engine = VWAPEngine(EventBus())
+
+    result = engine.on_tick(
+        make_tick(
+            timestamp=datetime(2026, 8, 6, 20, 0, tzinfo=timezone.utc),
+            price=100,
+            volume=10,
+        )
+    )
+
+    assert result.trading_date == datetime(2026, 8, 7).date()
 
 
 def test_new_date_zero_volume_tick_clears_stale_engine_data():

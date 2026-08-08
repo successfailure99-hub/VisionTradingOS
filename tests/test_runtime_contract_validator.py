@@ -4,7 +4,13 @@ from types import SimpleNamespace
 
 from application import RuntimeConfiguration, RuntimeInstrument, SymbolRuntime
 from application.models import RuntimeTradingSession
-from application.runtime_contract import RuntimeContractContext, RuntimeContractSubject, RuntimeContractValidator
+from application.runtime_contract import (
+    RuntimeContractContext,
+    RuntimeContractSubject,
+    RuntimeContractValidator,
+    RuntimeTemporalClass,
+    temporal_class_for,
+)
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
 from core.enums.timeframe import TimeFrame
@@ -94,6 +100,34 @@ def test_runtime_contract_accepts_previous_session_daily_ohlc_reference_for_acti
 
     assert report.valid is True
     assert report.violations == ()
+
+
+def test_runtime_contract_declares_temporal_classes_for_runtime_objects():
+    assert temporal_class_for("Candle") is RuntimeTemporalClass.INTERVAL
+    assert temporal_class_for("DailyOHLC") is RuntimeTemporalClass.HISTORICAL_REFERENCE
+    assert temporal_class_for("CPR") is RuntimeTemporalClass.ACTIVE_SESSION
+    assert temporal_class_for("Camarilla") is RuntimeTemporalClass.ACTIVE_SESSION
+    assert temporal_class_for("ADR") is RuntimeTemporalClass.ACTIVE_SESSION
+    assert temporal_class_for("VWAP") is RuntimeTemporalClass.ACTIVE_SESSION
+    assert temporal_class_for("OptionChainSnapshot") is RuntimeTemporalClass.EVENT_TIMESTAMPED
+    assert temporal_class_for("VisionMethodSnapshot") is RuntimeTemporalClass.ACTIVE_SESSION
+
+
+def test_runtime_contract_rejects_active_session_cpr_from_wall_clock_weekend_date():
+    friday_runtime = datetime(2026, 8, 7, 9, 31, tzinfo=UTC)
+    cpr_from_calendar_saturday = SimpleNamespace(
+        symbol="NIFTY",
+        timeframe="1m",
+        timestamp=friday_runtime,
+        trading_date=date(2026, 8, 8),
+    )
+
+    report = _report_for(cpr_from_calendar_saturday, object_name="CPR", context=_context(friday_runtime))
+
+    assert report.valid is False
+    assert report.violations[0].reason == "Trading date mismatch"
+    assert report.violations[0].expected == "2026-08-07"
+    assert report.violations[0].actual == "2026-08-08"
 
 
 def test_runtime_contract_rejects_future_daily_ohlc_reference():

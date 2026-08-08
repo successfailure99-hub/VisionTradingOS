@@ -82,7 +82,7 @@ def run_reference_data_bootstrap(
         configuration=HistoricalWarmupConfiguration(),
         clock=clock,
     )
-    active_trading_date = (bounds.current_start or now.astimezone(IST)).date()
+    active_trading_date = _active_reference_trading_date(now, bounds)
     completed_daily_results = _seed_completed_daily_history(
         lifecycle=lifecycle,
         historical_manager=manager,
@@ -199,6 +199,15 @@ def _seed_completed_daily_history(
 def _required_daily_history_sessions(lifecycle: ApplicationLifecycleManager) -> int:
     period = getattr(getattr(lifecycle.orchestrator, "configuration", None), "adr_period", 20)
     return period if isinstance(period, int) and not isinstance(period, bool) and period > 0 else 20
+
+
+def _active_reference_trading_date(now: datetime, bounds: ReferenceBootstrapBounds) -> date:
+    local = now.astimezone(IST)
+    if bounds.current_start is not None:
+        return bounds.current_start.date()
+    if local.weekday() < 5:
+        return local.date()
+    return bounds.previous_start.date()
 
 
 def _resolution_for(subscription: ZerodhaInstrumentSubscription) -> ZerodhaInstrumentResolution:

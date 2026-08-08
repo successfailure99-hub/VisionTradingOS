@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from zoneinfo import ZoneInfo
 
 from application.enums import RuntimeInstrument
@@ -13,6 +14,35 @@ from core.enums.instrument import Instrument
 
 
 IST = ZoneInfo("Asia/Kolkata")
+
+
+class RuntimeTemporalClass(str, Enum):
+    EVENT_TIMESTAMPED = "event_timestamped"
+    INTERVAL = "interval"
+    ACTIVE_SESSION = "active_session"
+    HISTORICAL_REFERENCE = "historical_reference"
+    CURRENT_OR_HISTORICAL_SERIES = "current_or_historical_series"
+    PERSISTENT_CROSS_SESSION = "persistent_cross_session"
+
+
+_TEMPORAL_CLASSES = {
+    "RuntimeSnapshot": RuntimeTemporalClass.EVENT_TIMESTAMPED,
+    "Candle": RuntimeTemporalClass.INTERVAL,
+    "DailyOHLC": RuntimeTemporalClass.HISTORICAL_REFERENCE,
+    "CPR": RuntimeTemporalClass.ACTIVE_SESSION,
+    "Camarilla": RuntimeTemporalClass.ACTIVE_SESSION,
+    "ADR": RuntimeTemporalClass.ACTIVE_SESSION,
+    "VWAP": RuntimeTemporalClass.ACTIVE_SESSION,
+    "OptionChainSnapshot": RuntimeTemporalClass.EVENT_TIMESTAMPED,
+    "OptionChainAnalyticsSnapshot": RuntimeTemporalClass.EVENT_TIMESTAMPED,
+    "PriceAction": RuntimeTemporalClass.ACTIVE_SESSION,
+    "Fusion": RuntimeTemporalClass.ACTIVE_SESSION,
+    "MarketState": RuntimeTemporalClass.ACTIVE_SESSION,
+    "ExpertSetup": RuntimeTemporalClass.ACTIVE_SESSION,
+    "ChartExplanation": RuntimeTemporalClass.ACTIVE_SESSION,
+    "VisionMethodSnapshot": RuntimeTemporalClass.ACTIVE_SESSION,
+    "ValidationReport": RuntimeTemporalClass.ACTIVE_SESSION,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,7 +210,8 @@ class RuntimeContractValidator:
         consumer: str,
     ) -> tuple[RuntimeContractViolation, ...]:
         violations: list[RuntimeContractViolation] = []
-        candle_interval = _candle_interval(snapshot) if object_name == "Candle" else None
+        temporal_class = temporal_class_for(object_name)
+        candle_interval = _candle_interval(snapshot) if temporal_class is RuntimeTemporalClass.INTERVAL else None
         timestamp = candle_interval[0] if candle_interval is not None else _timestamp(snapshot)
         if timestamp is not None:
             if not _aware(timestamp):
@@ -200,7 +231,7 @@ class RuntimeContractValidator:
             violations.append(_violation(object_name, "Timeframe mismatch", owner, producer, consumer, context.timeframe, actual_timeframe))
         actual_date = _trading_date(snapshot, timestamp)
         if context.trading_date is not None and actual_date is not None:
-            if object_name == "DailyOHLC":
+            if temporal_class is RuntimeTemporalClass.HISTORICAL_REFERENCE:
                 violations.extend(_daily_ohlc_date_violations(actual_date, context, object_name, owner, producer, consumer))
             elif actual_date != context.trading_date:
                 violations.append(_violation(object_name, "Trading date mismatch", owner, producer, consumer, str(context.trading_date), str(actual_date)))
@@ -211,6 +242,10 @@ class RuntimeContractValidator:
             if expected_session != observed_session:
                 violations.append(_violation(object_name, "Session mismatch", owner, producer, consumer, str(expected_session), str(observed_session)))
         return tuple(violations)
+
+
+def temporal_class_for(object_name: str) -> RuntimeTemporalClass:
+    return _TEMPORAL_CLASSES.get(object_name, RuntimeTemporalClass.EVENT_TIMESTAMPED)
 
 
 def _violation(object_name: str, reason: str, owner: str, producer: str, consumer: str, expected: str, actual: str) -> RuntimeContractViolation:

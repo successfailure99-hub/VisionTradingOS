@@ -9,12 +9,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from core.base_engine import BaseEngine
 from core.enums.instrument import Instrument
 from core.events import VWAP_UPDATED
 from core.models.tick import Tick
 from engines.vwap.levels import VWAPLevels
+
+
+IST = ZoneInfo("Asia/Kolkata")
 
 
 @dataclass(slots=True)
@@ -57,7 +61,7 @@ class VWAPEngine(BaseEngine):
         self._validate_tick(tick)
 
         state = self._state.get(tick.symbol)
-        trading_date = tick.timestamp.date()
+        trading_date = _market_date(tick.timestamp)
 
         if state is None:
             state = _VWAPAccumulator(
@@ -220,3 +224,9 @@ class VWAPEngine(BaseEngine):
                 return state.latest
 
         return None
+
+
+def _market_date(timestamp: datetime) -> date:
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        return timestamp.date()
+    return timestamp.astimezone(IST).date()
