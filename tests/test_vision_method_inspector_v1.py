@@ -13,6 +13,7 @@ from application import ApplicationBootstrap, RuntimeSnapshot
 from application.enums import RuntimeInstrument, RuntimeStatus
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
+from core.enums.timeframe import TimeFrame
 from core.models.candle import Candle
 from core.models.tick import Tick
 from dashboard.main_window import VisionMainWindow
@@ -652,6 +653,7 @@ def test_live_bridge_opening_range_fallback_is_session_and_window_scoped():
         ),
         history,
     )
+    runtime.vision_decision_timeframe = TimeFrame.ONE_MINUTE
     object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
     panel = VisionMethodInspector()
 

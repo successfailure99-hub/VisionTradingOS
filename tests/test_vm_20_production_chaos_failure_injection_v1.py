@@ -91,7 +91,7 @@ def test_vm20_weekend_reference_bootstrap_seeds_previous_session_candles_and_mov
     qt_app()
     lifecycle_manager = ApplicationBootstrap().create_application()
     lifecycle_manager.start()
-    client = HistoricalClient([[raw_minute(0), raw_minute(1), raw_minute(2)]])
+    client = HistoricalClient([[raw_minute(0), raw_minute(1), raw_minute(2), raw_minute(3), raw_minute(4)]])
 
     run_reference_data_bootstrap(
         lifecycle=lifecycle_manager,
@@ -105,7 +105,7 @@ def test_vm20_weekend_reference_bootstrap_seeds_previous_session_candles_and_mov
     view = runtime.snapshot()
     result = VisionMethodLiveInspectorBridge(lifecycle_manager, VisionMethodInspector()).refresh()
 
-    assert len(history) == 3
+    assert len(history) == 5
     assert history[-1].start_time.date().isoformat() == "2026-07-31"
     assert view.latest_candle == history[-1]
     assert view.cpr is not None

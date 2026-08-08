@@ -294,6 +294,58 @@ class RuntimeDiagnostics:
 
 
 @dataclass(frozen=True, slots=True)
+class VisionForensicCounters:
+    runtime_session_id: str
+    session_trading_date: date | None
+    decision_timeframe: str
+    candles_evaluated: int = 0
+    structure_events_detected: int = 0
+    qualified_setups: int = 0
+    prepare_long: int = 0
+    prepare_short: int = 0
+    observe: int = 0
+    avoid: int = 0
+    long_eligible: int = 0
+    short_eligible: int = 0
+    validation_pass: int = 0
+    validation_partial: int = 0
+    validation_failed: int = 0
+    trade_candidates_created: int = 0
+    risk_approved: int = 0
+    risk_rejected: int = 0
+    paper_positions_opened: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "runtime_session_id", _normalize_vision_forensic_text(self.runtime_session_id, "runtime_session_id"))
+        object.__setattr__(self, "decision_timeframe", _normalize_vision_forensic_text(self.decision_timeframe, "decision_timeframe"))
+        if self.session_trading_date is not None and (
+            isinstance(self.session_trading_date, datetime) or not isinstance(self.session_trading_date, date)
+        ):
+            raise TypeError("session_trading_date must be date or None")
+        for field_name in (
+            "candles_evaluated",
+            "structure_events_detected",
+            "qualified_setups",
+            "prepare_long",
+            "prepare_short",
+            "observe",
+            "avoid",
+            "long_eligible",
+            "short_eligible",
+            "validation_pass",
+            "validation_partial",
+            "validation_failed",
+            "trade_candidates_created",
+            "risk_approved",
+            "risk_rejected",
+            "paper_positions_opened",
+        ):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimePaperPositionSnapshot:
     trade_id: str
     instrument: RuntimeInstrument
@@ -638,6 +690,10 @@ class RuntimeSnapshot:
     operational_readiness: OperationalReadinessSnapshot | None = None
     runtime_contract_report: RuntimeContractReport | None = None
     candle_history_count: int = 0
+    base_timeframe: str = "1m"
+    vision_decision_timeframe: str = "5m"
+    confirmation_timeframe: str | None = "15m"
+    vision_forensic_counters: VisionForensicCounters | None = None
 
     def __post_init__(self) -> None:
         if self.runtime_session is not None and not isinstance(self.runtime_session, RuntimeTradingSession):
@@ -661,6 +717,12 @@ class RuntimeSnapshot:
             raise TypeError("runtime_contract_report must be RuntimeContractReport or None")
         if isinstance(self.candle_history_count, bool) or not isinstance(self.candle_history_count, int) or self.candle_history_count < 0:
             raise ValueError("candle_history_count must be a non-negative integer")
+        object.__setattr__(self, "base_timeframe", _normalize_vision_forensic_text(self.base_timeframe, "base_timeframe"))
+        object.__setattr__(self, "vision_decision_timeframe", _normalize_vision_forensic_text(self.vision_decision_timeframe, "vision_decision_timeframe"))
+        if self.confirmation_timeframe is not None:
+            object.__setattr__(self, "confirmation_timeframe", _normalize_vision_forensic_text(self.confirmation_timeframe, "confirmation_timeframe"))
+        if self.vision_forensic_counters is not None and not isinstance(self.vision_forensic_counters, VisionForensicCounters):
+            raise TypeError("vision_forensic_counters must be VisionForensicCounters or None")
         if self.vision_method_snapshot is not None and not isinstance(self.vision_method_snapshot, VisionMethodSnapshot):
             raise TypeError("vision_method_snapshot must be VisionMethodSnapshot or None")
         if self.vision_method_validation_report is not None and not isinstance(self.vision_method_validation_report, VisionMethodValidationReport):
@@ -747,3 +809,9 @@ class OrchestratorSnapshot:
     broker_account: BrokerAccountSnapshot | None = None
     broker_account_verification_report: tuple[BrokerRuntimeVerificationStage, ...] = ()
     broker_session: BrokerSessionPersistenceSnapshot | None = None
+
+
+def _normalize_vision_forensic_text(value: str, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be text")
+    return value.strip() or "-"

@@ -186,7 +186,7 @@ class VisionMethodLiveInspectorBridge:
     def _assemble_live(self) -> _LiveAssembly:
         runtime = self._select_runtime()
         runtime_snapshot = runtime.snapshot()
-        timeframe = TimeFrame.from_value(runtime_snapshot.timeframe)
+        timeframe = _vision_decision_timeframe(runtime, runtime_snapshot)
         timestamp = _runtime_timestamp(runtime_snapshot)
         trading_date = _market_session_date(timestamp)
         history = tuple(
@@ -452,7 +452,7 @@ class VisionMethodLiveInspectorBridge:
     def _build_snapshot(self) -> tuple[VisionMethodSnapshot, tuple[VisionContextAssemblyFailure, ...]]:
         runtime = self._select_runtime()
         runtime_snapshot = runtime.snapshot()
-        timeframe = TimeFrame.from_value(runtime_snapshot.timeframe)
+        timeframe = _vision_decision_timeframe(runtime, runtime_snapshot)
         timestamp = _runtime_timestamp(runtime_snapshot)
         trading_date = _market_session_date(timestamp)
         history = tuple(
@@ -1198,6 +1198,18 @@ def _fallback_option_confirmation(timestamp, failures: list[VisionContextAssembl
         quality=quality,
         timestamp=timestamp,
     )
+
+
+def _vision_decision_timeframe(runtime, runtime_snapshot) -> TimeFrame:
+    configured = getattr(runtime, "vision_decision_timeframe", None)
+    if isinstance(configured, TimeFrame):
+        return configured
+    if configured is not None:
+        return TimeFrame.from_value(str(configured))
+    snapshot_value = getattr(runtime_snapshot, "vision_decision_timeframe", None)
+    if snapshot_value is not None:
+        return TimeFrame.from_value(str(snapshot_value))
+    return TimeFrame.FIVE_MINUTES
 
 
 def _safe_error(exc: Exception) -> str:

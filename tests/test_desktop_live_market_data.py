@@ -136,15 +136,23 @@ class FailingSubscribeTickerClient(FakeTickerClient):
 
 
 class FakeHistoricalClient:
-    def __init__(self):
+    def __init__(self, candle_count: int = 2):
         self.calls = []
+        self.candle_count = candle_count
 
     def historical_data(self, **kwargs):
         self.calls.append(kwargs)
         start = kwargs["from_date"]
         return [
-            dict(date=start, open=100.0, high=103.0, low=99.0, close=101.0, volume=10),
-            dict(date=start + timedelta(minutes=1), open=101.0, high=104.0, low=100.0, close=102.0, volume=10),
+            dict(
+                date=start + timedelta(minutes=index),
+                open=100.0 + min(index, 1),
+                high=103.0 + min(index, 1),
+                low=99.0 + min(index, 1),
+                close=101.0 + min(index, 1),
+                volume=10,
+            )
+            for index in range(self.candle_count)
         ]
 
 
@@ -171,9 +179,9 @@ def read_only_auth_factory(store):
     return factory
 
 
-def historical_factory_factory(store):
+def historical_factory_factory(store, *, candle_count: int = 2):
     def factory(*, api_key, access_token):
-        client = FakeHistoricalClient()
+        client = FakeHistoricalClient(candle_count=candle_count)
         store.append(client)
         return client
 
@@ -1000,13 +1008,13 @@ def test_reference_bootstrap_before_open_loads_previous_levels_and_historical_ca
     historical_clients = []
     before_open = datetime(2026, 7, 15, 8, 55, tzinfo=ZoneInfo("Asia/Kolkata"))
     dashboard = create_dashboard_application(
-        environ=live_env(LIVE_MARKET_DATA_AUTO_CONNECT="false"),
-        auth_client_factory=auth_factory,
-        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: before_open),
-        historical_client_factory=historical_factory_factory(historical_clients),
-        ticker_client=FakeTickerClient(),
-        clock=lambda: before_open,
-    )
+            environ=live_env(LIVE_MARKET_DATA_AUTO_CONNECT="false"),
+            auth_client_factory=auth_factory,
+            runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: before_open),
+            historical_client_factory=historical_factory_factory(historical_clients, candle_count=5),
+            ticker_client=FakeTickerClient(),
+            clock=lambda: before_open,
+        )
     view = dashboard.main_window.refresh()
     assert len(historical_clients[0].calls) == 60
     runtime_snapshots = dashboard.lifecycle.orchestrator.snapshot().runtime_snapshots

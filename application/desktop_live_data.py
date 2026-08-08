@@ -382,6 +382,7 @@ def create_dashboard_application(
                 RuntimeInstrument.BANKNIFTY,
                 RuntimeInstrument.SENSEX,
             ),
+            timeframes=("1m", "5m", "15m"),
             risk_configuration=settings.risk_configuration,
             paper_trading_configuration=settings.paper_trading_configuration,
             performance_analytics_configuration=settings.performance_analytics_configuration,

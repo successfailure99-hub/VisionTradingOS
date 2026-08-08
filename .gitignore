@@ -49,4 +49,5 @@ dist/
 
 # Runtime journal/checkpoint artifacts
 /data/trade_journal_v1/
+/data/vision_forensics/
 /runtime/

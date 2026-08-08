@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from core.enums.instrument import Instrument
 from core.enums.exchange import Exchange
 from core.enums.timeframe import TimeFrame
+from core.models.building_candle import INTRADAY_SESSION_OPEN
 from core.models.candle import Candle
 from core.models.daily_ohlc import DailyOHLC
 from core.models.tick import Tick
@@ -118,6 +119,7 @@ from application.models import (
     RuntimeVWAPSource,
 )
 from application.runtime_contract import RuntimeContractContext, RuntimeContractSubject, RuntimeContractValidator, RuntimeIntegrityViolation
+from application.vision_forensics import VisionForensicTrace
 _OPTION_CHAIN_MAX_AGE_SECONDS = 180.0
 _OPTION_CHAIN_TIMESTAMP_TOLERANCE = timedelta(seconds=1)
 IST = ZoneInfo("Asia/Kolkata")
@@ -153,8 +155,16 @@ class SymbolRuntime:
         self._instrument = instrument
         self._status = RuntimeStatus.CREATED
         self._core_instrument = Instrument.from_symbol(instrument.value)
-        self._timeframes = tuple(TimeFrame.from_value(value) for value in configuration.timeframes)
-        self._primary_timeframe = self._timeframes[0]
+        configured_timeframes = tuple(TimeFrame.from_value(value) for value in configuration.timeframes)
+        self._base_timeframe = TimeFrame.ONE_MINUTE
+        self._primary_timeframe = configured_timeframes[0]
+        self._timeframes = configured_timeframes
+        self._vision_decision_timeframe = (
+            TimeFrame.FIVE_MINUTES if TimeFrame.FIVE_MINUTES in self._timeframes else self._primary_timeframe
+        )
+        self._confirmation_timeframe = (
+            TimeFrame.FIFTEEN_MINUTES if TimeFrame.FIFTEEN_MINUTES in self._timeframes else None
+        )
         self._last_tick: Tick | None = None
         self._updated_at = None
         self._canonical_market_timestamp = None
@@ -383,6 +393,10 @@ class SymbolRuntime:
         self._option_chain_last_error: str | None = None
         self._paper_recovery = None
         self._last_journal_write_timestamp: datetime | None = None
+        self._vision_forensic_trace = VisionForensicTrace(
+            instrument=self._instrument,
+            decision_timeframe=self._vision_decision_timeframe,
+        )
 
     @property
     def instrument(self) -> RuntimeInstrument:
@@ -391,6 +405,18 @@ class SymbolRuntime:
     @property
     def status(self) -> RuntimeStatus:
         return self._status
+
+    @property
+    def base_timeframe(self) -> TimeFrame:
+        return self._base_timeframe
+
+    @property
+    def vision_decision_timeframe(self) -> TimeFrame:
+        return self._vision_decision_timeframe
+
+    @property
+    def confirmation_timeframe(self) -> TimeFrame | None:
+        return self._confirmation_timeframe
 
     @property
     def cpr(self) -> CPRLevels | None:
@@ -601,6 +627,7 @@ class SymbolRuntime:
             normalized,
             replace=replace,
         )
+        self._seed_higher_timeframe_history()
 
         if replace and accepted:
             self.price_action_engine.reset()
@@ -642,6 +669,9 @@ class SymbolRuntime:
         self._last_processed_history_counts[self._primary_timeframe] = len(
             self.candle_engine.get_history(self._core_instrument)
         )
+        for timeframe, candle_engine in self.candle_engines.items():
+            if timeframe is not self._primary_timeframe:
+                self._last_processed_history_counts[timeframe] = len(candle_engine.get_history(self._core_instrument))
         if accepted:
             latest = accepted[-1]
             self._refresh_adr(latest.end_time, latest.close)
@@ -651,6 +681,23 @@ class SymbolRuntime:
     def get_candle_history(self, timeframe: str | TimeFrame | None = None) -> tuple[Candle, ...]:
         engine = self._candle_engine_for(timeframe)
         return tuple(engine.get_history(self._core_instrument))
+
+    def _seed_higher_timeframe_history(self) -> None:
+        if len(self._timeframes) <= 1:
+            return
+        primary_history = tuple(self.candle_engine.get_history(self._core_instrument))
+        if not primary_history:
+            return
+        for timeframe, candle_engine in self.candle_engines.items():
+            if timeframe is self._primary_timeframe:
+                continue
+            aggregated = _aggregate_candles_for_timeframe(
+                primary_history,
+                source_timeframe=self._primary_timeframe,
+                target_timeframe=timeframe,
+            )
+            if aggregated:
+                candle_engine.seed_history(self._core_instrument, aggregated, replace=True)
 
     def process_option_chain(self, snapshot: OptionChainSnapshot) -> OptionChainState:
         self._require_running()
@@ -1049,6 +1096,7 @@ class SymbolRuntime:
         self._vision_method_validation_report = None
         self._vision_ai_explanation = None
         self._decision_audit = None
+        self._vision_forensic_trace.reset_session(None)
 
     def snapshot(self, latest_journal_record=None, *, performance_analytics=None) -> RuntimeSnapshot:
         latest_candle = self.candle_engine.get_current(self._core_instrument)
@@ -1143,6 +1191,10 @@ class SymbolRuntime:
             operational_readiness=self._operational_readiness_snapshot(market_timestamp, runtime_session),
             runtime_contract_report=runtime_contract_report,
             candle_history_count=len(primary_candle_history),
+            base_timeframe=self._base_timeframe.value,
+            vision_decision_timeframe=self._vision_decision_timeframe.value,
+            confirmation_timeframe=self._confirmation_timeframe.value if self._confirmation_timeframe is not None else None,
+            vision_forensic_counters=self._vision_forensic_trace.counters,
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
@@ -1362,10 +1414,12 @@ class SymbolRuntime:
                 f"Vision Method candidate blocked: {candidate.reason}",
                 vision_trade_candidate=candidate,
             )
+            self._record_vision_forensic_trace(snapshot, validation_report, candidate)
             return candidate
 
         identity = _vision_trade_identity(candidate)
         if identity == self._last_vision_trade_identity:
+            self._record_vision_forensic_trace(snapshot, validation_report, candidate)
             return candidate
 
         strategy = self._build_vision_strategy_decision(candidate)
@@ -1376,7 +1430,56 @@ class SymbolRuntime:
             accepted_message="Vision Method paper-trading chain accepted the candidate.",
             vision_trade_candidate=candidate,
         )
+        self._record_vision_forensic_trace(snapshot, validation_report, candidate)
         return candidate
+
+    def _record_vision_forensic_trace(
+        self,
+        snapshot: VisionMethodSnapshot,
+        validation_report: VisionMethodValidationReport,
+        candidate: TradeCandidate,
+    ) -> None:
+        if snapshot.timeframe is not self._vision_decision_timeframe:
+            return
+        source_candle = self._latest_closed_decision_candle(snapshot.timestamp)
+        if source_candle is None:
+            return
+        runtime_session = self._runtime_trading_session(snapshot.timestamp)
+        if runtime_session.trading_date is not None and source_candle.end_time.date() != runtime_session.trading_date:
+            raise ValueError("forensic source candle trading date does not match active runtime session")
+        option_sync_status, option_latency_ms = self._option_forensic_sync(snapshot.timestamp)
+        self._vision_forensic_trace.record(
+            snapshot=snapshot,
+            validation_report=validation_report,
+            source_candle=source_candle,
+            runtime_timestamp=snapshot.timestamp,
+            trade_candidate=candidate,
+            risk_snapshot=self.risk_management_v2_engine.snapshot,
+            paper_position=self._canonical_paper_position(),
+            decision_audit=self._decision_audit,
+            option_sync_status=option_sync_status,
+            option_latency_ms=option_latency_ms,
+        )
+
+    def _latest_closed_decision_candle(self, timestamp: datetime) -> Candle | None:
+        history = tuple(
+            candle
+            for candle in self.get_candle_history(self._vision_decision_timeframe)
+            if candle.end_time <= timestamp
+        )
+        return history[-1] if history else None
+
+    def _option_forensic_sync(self, timestamp: datetime) -> tuple[str, float | None]:
+        option_timestamp = getattr(self.option_chain_engine.snapshot, "timestamp", None)
+        analytics_timestamp = getattr(self._option_chain_analytics, "timestamp", None)
+        candidates = tuple(value for value in (option_timestamp, analytics_timestamp) if isinstance(value, datetime))
+        if not candidates:
+            return "unavailable", None
+        latest = max(candidates)
+        if latest.tzinfo is None or timestamp.tzinfo is None or latest.utcoffset() != timestamp.utcoffset():
+            return "timezone_mismatch", None
+        latency_ms = abs((timestamp - latest).total_seconds()) * 1000.0
+        return ("synchronized" if latency_ms <= (_OPTION_CHAIN_TIMESTAMP_TOLERANCE.total_seconds() * 1000.0) else "not_aligned", round(latency_ms, 3))
 
     def _current_strategy_decision_v2_snapshot(self):
         if self._vision_trade_candidate is not None:
@@ -3030,6 +3133,68 @@ def _vision_journal_path(instrument: RuntimeInstrument) -> Path:
 
 def _vision_checkpoint_path(instrument: RuntimeInstrument) -> Path:
     return Path("data") / "trade_journal_v1" / f"{instrument.value.lower()}_active_checkpoint.json"
+
+
+def _aggregate_candles_for_timeframe(
+    candles: tuple[Candle, ...],
+    *,
+    source_timeframe: TimeFrame,
+    target_timeframe: TimeFrame,
+) -> tuple[Candle, ...]:
+    source_seconds = int(source_timeframe.duration.total_seconds())
+    target_seconds = int(target_timeframe.duration.total_seconds())
+    if source_seconds <= 0 or target_seconds <= source_seconds or target_seconds % source_seconds != 0:
+        return ()
+    expected_count = target_seconds // source_seconds
+    grouped: dict[datetime, list[Candle]] = {}
+    for candle in sorted(candles, key=lambda item: item.start_time):
+        if candle.timeframe != source_timeframe.value:
+            continue
+        bucket_start = _historical_bucket_start(candle.start_time, target_timeframe)
+        if bucket_start is None:
+            continue
+        grouped.setdefault(bucket_start, []).append(candle)
+
+    aggregated: list[Candle] = []
+    for bucket_start in sorted(grouped):
+        bucket = tuple(sorted(grouped[bucket_start], key=lambda item: item.start_time))
+        bucket_end = bucket_start + target_timeframe.duration
+        if len(bucket) != expected_count:
+            continue
+        if bucket[0].start_time != bucket_start or bucket[-1].end_time != bucket_end:
+            continue
+        if any(current.end_time != following.start_time for current, following in zip(bucket, bucket[1:])):
+            continue
+        aggregated.append(
+            Candle(
+                symbol=bucket[0].symbol,
+                timeframe=target_timeframe.value,
+                start_time=bucket_start,
+                end_time=bucket_end,
+                open=bucket[0].open,
+                high=max(item.high for item in bucket),
+                low=min(item.low for item in bucket),
+                close=bucket[-1].close,
+                volume=sum(item.volume for item in bucket),
+            )
+        )
+    return tuple(aggregated)
+
+
+def _historical_bucket_start(timestamp: datetime, timeframe: TimeFrame) -> datetime | None:
+    session_start = timestamp.replace(
+        hour=INTRADAY_SESSION_OPEN.hour,
+        minute=INTRADAY_SESSION_OPEN.minute,
+        second=0,
+        microsecond=0,
+    )
+    elapsed_seconds = int((timestamp - session_start).total_seconds())
+    if elapsed_seconds < 0:
+        return None
+    bucket_seconds = int(timeframe.duration.total_seconds())
+    return session_start + timedelta(seconds=(elapsed_seconds // bucket_seconds) * bucket_seconds)
+
+
 def _canonical_paper_trade_state(canonical: RuntimePaperPositionSnapshot | None, legacy_snapshot) -> str:
     if canonical is not None:
         return f"VISION_METHOD:{canonical.status}"

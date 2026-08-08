@@ -817,6 +817,9 @@ def _runtime_diagnostic_rows(snapshots) -> tuple[DashboardRuntimeComponentHealth
         prefix = _enum_text(getattr(snapshot, "symbol", None))
         rows.extend(
             (
+                DashboardRuntimeComponentHealthView(f"{prefix} Base Timeframe", "Ready", getattr(snapshot, "base_timeframe", "-")),
+                DashboardRuntimeComponentHealthView(f"{prefix} Vision Decision Timeframe", "Ready", getattr(snapshot, "vision_decision_timeframe", "-")),
+                DashboardRuntimeComponentHealthView(f"{prefix} Confirmation Timeframe", "Ready", getattr(snapshot, "confirmation_timeframe", None) or "unavailable"),
                 DashboardRuntimeComponentHealthView(f"{prefix} Current Stage", "Ready", diagnostics.current_stage),
                 DashboardRuntimeComponentHealthView(f"{prefix} Blocking Stage", "Ready", diagnostics.blocking_stage),
                 DashboardRuntimeComponentHealthView(f"{prefix} Current Candidate", "Ready", diagnostics.current_candidate),
@@ -826,6 +829,22 @@ def _runtime_diagnostic_rows(snapshots) -> tuple[DashboardRuntimeComponentHealth
                 DashboardRuntimeComponentHealthView(f"{prefix} Last Validation", "Ready", diagnostics.last_validation),
             )
         )
+        counters = getattr(snapshot, "vision_forensic_counters", None)
+        if counters is not None:
+            rows.extend(
+                (
+                    DashboardRuntimeComponentHealthView(f"{prefix} 5m Candles Evaluated", "Ready", str(counters.candles_evaluated)),
+                    DashboardRuntimeComponentHealthView(f"{prefix} Qualified Setups", "Ready", str(counters.qualified_setups)),
+                    DashboardRuntimeComponentHealthView(f"{prefix} Prepare Long", "Ready", str(counters.prepare_long)),
+                    DashboardRuntimeComponentHealthView(f"{prefix} Prepare Short", "Ready", str(counters.prepare_short)),
+                    DashboardRuntimeComponentHealthView(f"{prefix} Long Eligible", "Ready", str(counters.long_eligible)),
+                    DashboardRuntimeComponentHealthView(f"{prefix} Short Eligible", "Ready", str(counters.short_eligible)),
+                    DashboardRuntimeComponentHealthView(f"{prefix} Trade Candidates Created", "Ready", str(counters.trade_candidates_created)),
+                    DashboardRuntimeComponentHealthView(f"{prefix} Risk Approved", "Ready", str(counters.risk_approved)),
+                    DashboardRuntimeComponentHealthView(f"{prefix} Risk Rejected", "Ready", str(counters.risk_rejected)),
+                    DashboardRuntimeComponentHealthView(f"{prefix} Paper Positions Opened", "Ready", str(counters.paper_positions_opened)),
+                )
+            )
     return tuple(rows)
 
 
