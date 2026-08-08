@@ -843,8 +843,27 @@ def _runtime_diagnostic_rows(snapshots) -> tuple[DashboardRuntimeComponentHealth
                     DashboardRuntimeComponentHealthView(f"{prefix} Risk Approved", "Ready", str(counters.risk_approved)),
                     DashboardRuntimeComponentHealthView(f"{prefix} Risk Rejected", "Ready", str(counters.risk_rejected)),
                     DashboardRuntimeComponentHealthView(f"{prefix} Paper Positions Opened", "Ready", str(counters.paper_positions_opened)),
+                    DashboardRuntimeComponentHealthView(f"{prefix} Paper Positions Closed", "Ready", str(counters.paper_positions_closed)),
                 )
             )
+        journal = getattr(snapshot, "trade_journal_v1", None)
+        journal_analytics = getattr(journal, "analytics", None)
+        journal_overall = getattr(journal_analytics, "overall", None)
+        canonical_position = getattr(snapshot, "canonical_paper_position", None)
+        rows.extend(
+            (
+                DashboardRuntimeComponentHealthView(
+                    f"{prefix} Current Session Realized P&L",
+                    "Ready",
+                    str(getattr(journal_overall, "net_pnl", 0.0) if journal_overall is not None else 0.0),
+                ),
+                DashboardRuntimeComponentHealthView(
+                    f"{prefix} Current Session Unrealized P&L",
+                    "Ready",
+                    str(getattr(canonical_position, "unrealized_pnl", 0.0) if canonical_position is not None else 0.0),
+                ),
+            )
+        )
     return tuple(rows)
 
 

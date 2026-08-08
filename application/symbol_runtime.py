@@ -1994,7 +1994,9 @@ class SymbolRuntime:
         if checkpoint is None:
             return None
         active_date = self._active_runtime_trading_date()
-        if active_date is not None and getattr(checkpoint, "trading_date", None) != active_date:
+        if active_date is None:
+            return None
+        if getattr(checkpoint, "trading_date", None) != active_date:
             return None
         return checkpoint
 

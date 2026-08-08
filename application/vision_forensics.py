@@ -136,7 +136,9 @@ class VisionForensicTrace:
         option = snapshot.option_confirmation_context
         risk_decision = getattr(risk_snapshot, "decision", None)
         approved = risk_decision in {RiskDecisionV2.APPROVED, RiskDecisionV2.APPROVED_REDUCED}
-        paper_opened = bool(getattr(paper_position, "status", "") == "OPEN" or getattr(paper_position, "has_open_position", False))
+        paper_status = str(getattr(paper_position, "status", "")).lower()
+        paper_opened = bool(paper_status in {"open", "partially_closed", "objective_reached"} or getattr(paper_position, "has_open_position", False))
+        paper_closed = bool(paper_status in {"closed", "invalidated", "cancelled"})
         return {
             "runtime_session_id": self._runtime_session_id,
             "session_trading_date": _iso_date(self._session_trading_date),
@@ -225,6 +227,7 @@ class VisionForensicTrace:
             },
             "paper": {
                 "position_opened": paper_opened,
+                "position_closed": paper_closed,
                 "position_reference": getattr(paper_position, "trade_id", None) or getattr(paper_position, "position_id", None),
             },
             "vision_snapshot_reference": trade_candidate.snapshot_reference,
@@ -260,6 +263,7 @@ def _increment_counters(counters: VisionForensicCounters, record: dict[str, Any]
         risk_approved=counters.risk_approved + int(risk["approved"]),
         risk_rejected=counters.risk_rejected + int(risk["evaluated"] and not risk["approved"]),
         paper_positions_opened=counters.paper_positions_opened + int(paper["position_opened"]),
+        paper_positions_closed=counters.paper_positions_closed + int(paper["position_closed"]),
     )
 
 

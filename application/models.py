@@ -314,6 +314,7 @@ class VisionForensicCounters:
     risk_approved: int = 0
     risk_rejected: int = 0
     paper_positions_opened: int = 0
+    paper_positions_closed: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "runtime_session_id", _normalize_vision_forensic_text(self.runtime_session_id, "runtime_session_id"))
@@ -339,6 +340,7 @@ class VisionForensicCounters:
             "risk_approved",
             "risk_rejected",
             "paper_positions_opened",
+            "paper_positions_closed",
         ):
             value = getattr(self, field_name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:

@@ -289,6 +289,8 @@ def test_runtime_diagnostics_expose_timeframe_roles_and_forensic_counters_read_o
             candles_evaluated=3,
             prepare_long=1,
             trade_candidates_created=1,
+            paper_positions_opened=1,
+            paper_positions_closed=1,
         ),
     )
 
@@ -300,6 +302,10 @@ def test_runtime_diagnostics_expose_timeframe_roles_and_forensic_counters_read_o
     assert rows["NIFTY 5m Candles Evaluated"] == "3"
     assert rows["NIFTY Prepare Long"] == "1"
     assert rows["NIFTY Trade Candidates Created"] == "1"
+    assert rows["NIFTY Paper Positions Opened"] == "1"
+    assert rows["NIFTY Paper Positions Closed"] == "1"
+    assert rows["NIFTY Current Session Realized P&L"] == "0.0"
+    assert rows["NIFTY Current Session Unrealized P&L"] == "0.0"
 
 
 def _decision_candle(*, timestamp=NOW):

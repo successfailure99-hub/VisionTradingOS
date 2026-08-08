@@ -7,6 +7,7 @@ from application import RuntimeConfiguration, RuntimeInstrument, SymbolRuntime
 from application.models import RuntimePaperPositionSnapshot
 from core.event_bus import EventBus
 from core.enums.instrument import Instrument
+from dashboard.presenters import build_position_view
 from engines.trade_journal_v1 import PaperRecoveryStatus, TradeJournalV1Configuration, TradeJournalV1Engine
 from engines.trade_journal_v1.persistence import TradeJournalPersistence, TradeJournalQuery
 from tests.test_trade_journal_v1_integration import closed_lifecycle
@@ -209,6 +210,46 @@ def test_runtime_recovered_checkpoint_is_not_canonical_after_session_rollover(tm
         violation.object_name != "PaperPosition"
         for violation in runtime.runtime_contract_report.integrity_violations
     )
+
+
+def test_recovered_checkpoint_is_not_current_without_active_runtime_session(tmp_path):
+    item = SymbolRuntime(EventBus(), RuntimeConfiguration(), RuntimeInstrument.NIFTY)
+    engine = TradeJournalV1Engine(
+        configuration=TradeJournalV1Configuration(
+            journal_path=tmp_path / "vision_journal.jsonl",
+            checkpoint_path=tmp_path / "active_checkpoint.json",
+        )
+    )
+    engine.save_checkpoint(runtime_position(), trading_date=NOW.date())
+    item.trade_journal_v1_engine = engine
+    item.start()
+
+    runtime = item.snapshot()
+
+    assert runtime.journal_persistence.active_checkpoint_status == "ACTIVE"
+    assert runtime.journal_persistence.recovery_status == "RESTORED"
+    assert runtime.canonical_paper_position is None
+    assert build_position_view(runtime).status == "No Active Position"
+
+
+def test_durable_history_records_do_not_enter_current_runtime_analytics(tmp_path):
+    first = journal_engine(tmp_path)
+    recorded = first.record(closed_lifecycle(exit_price=120.0))
+    assert recorded.status.value == "recorded"
+    assert len(first.durable_records()) == 1
+
+    restarted = TradeJournalV1Engine(
+        configuration=TradeJournalV1Configuration(
+            journal_path=tmp_path / "vision_journal.jsonl",
+            checkpoint_path=tmp_path / "active_checkpoint.json",
+        )
+    )
+    restarted.start()
+
+    snapshot = restarted.snapshot()
+    assert len(restarted.durable_records()) == 1
+    assert snapshot.trade_count == 0
+    assert snapshot.analytics.overall.trade_count == 0
 
 
 def test_runtime_close_clears_checkpoint_and_writes_once(tmp_path):
