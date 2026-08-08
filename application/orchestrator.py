@@ -7,6 +7,7 @@ from application.models import OrchestratorSnapshot, RuntimeConfiguration, Runti
 from application.authorized_paper_execution import AuthorizedPaperExecutionCoordinator, AuthorizedPaperHandoffRequest
 from application.broker_account_sync import BrokerAccountSyncCoordinator
 from application.broker_session_persistence import EncryptedBrokerSessionStore
+from application.exchange_calendar import ExchangeTradingCalendar
 from application.symbol_runtime import SymbolRuntime
 from application.live_shadow_session import LiveShadowMarketSessionCoordinator, LiveShadowSessionRequest
 from adapters.zerodha import ZerodhaCredentials, ZerodhaReadOnlyAdapter
@@ -60,6 +61,7 @@ class ApplicationOrchestrator:
         if not isinstance(self._configuration, RuntimeConfiguration):
             raise ValueError("configuration must be a RuntimeConfiguration.")
         self._status = RuntimeStatus.CREATED
+        self.exchange_calendar = ExchangeTradingCalendar(self._configuration.exchange_holidays)
         self.market_data_engine = MarketDataEngine(event_bus)
         self.trade_journal_engine = TradeJournalEngine(event_bus)
         self.performance_analytics_engine = PerformanceAnalyticsEngine(
@@ -95,7 +97,7 @@ class ApplicationOrchestrator:
         if self.broker_adapter.mode is not BrokerExecutionMode.DRY_RUN:
             raise ValueError("Application Orchestrator V1 requires a DRY_RUN Zerodha adapter by default.")
         self._runtimes = {
-            instrument: SymbolRuntime(event_bus, self._configuration, instrument)
+            instrument: SymbolRuntime(event_bus, self._configuration, instrument, exchange_calendar=self.exchange_calendar)
             for instrument in self._configuration.instruments
         }
         self.live_shadow_session_coordinator = LiveShadowMarketSessionCoordinator(event_bus, orchestrator=self)

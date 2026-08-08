@@ -2,10 +2,11 @@
 Pure dashboard presentation builders.
 """
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 from application.lifecycle_manager import LifecycleSnapshot
+from application.exchange_calendar import DEFAULT_EXCHANGE_CALENDAR, ExchangeSessionPhase
 from application.live_market_data import LiveMarketDataRuntimeSnapshot
 from application.models import RuntimeSnapshot
 from dashboard import formatters
@@ -40,9 +41,7 @@ from dashboard.models import (
 MISSING = "-"
 INSTRUMENT_ORDER = ("NIFTY", "BANKNIFTY", "SENSEX")
 IST = ZoneInfo("Asia/Kolkata")
-PRE_OPEN_TIME = time(9, 0)
 MARKET_OPEN_TIME = time(9, 15)
-MARKET_CLOSE_TIME = time(15, 30)
 OPTION_CHAIN_STALE_SECONDS = 60
 
 
@@ -1816,29 +1815,30 @@ def _clock_now(clock) -> datetime:
 
 
 def _market_status(now: datetime) -> tuple[str, str, str]:
-    if now.weekday() >= 5:
-        next_open = _next_open(now)
-        return "NSE closed - weekend", "Closed", _next_open_text(next_open, include_day=True)
-    current = now.time()
-    today_open = now.replace(hour=MARKET_OPEN_TIME.hour, minute=MARKET_OPEN_TIME.minute, second=0, microsecond=0)
-    if current < PRE_OPEN_TIME:
-        return "Waiting for NSE to open", "Closed", _next_open_text(today_open)
-    if PRE_OPEN_TIME <= current < MARKET_OPEN_TIME:
-        return "NSE pre-open", "Pre-Open", _next_open_text(today_open)
-    if MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME:
+    session = DEFAULT_EXCHANGE_CALENDAR.resolve_active_session(now, "NSE")
+    if session.phase is ExchangeSessionPhase.NON_TRADING_DAY:
+        next_open = _session_open_for(session.next_trading_date)
+        status = "NSE closed - weekend" if "weekend" in session.reason.lower() else "NSE closed - non-trading day"
+        return status, "Closed", _next_open_text(next_open, include_day=True)
+    if session.phase is ExchangeSessionPhase.CLOSED:
+        return "Waiting for NSE to open", "Closed", _next_open_text(session.session_open)
+    if session.phase is ExchangeSessionPhase.PRE_MARKET:
+        return "NSE pre-open", "Pre-Open", _next_open_text(session.session_open)
+    if session.phase is ExchangeSessionPhase.OPEN:
         return "NSE market open", "Live", MISSING
-    next_open = _next_open(now)
+    next_open = _session_open_for(session.next_trading_date)
     return "NSE closed for the day", "Closed", _next_open_text(next_open, include_day=next_open.date() != now.date())
 
 
 def _next_open(now: datetime) -> datetime:
-    candidate = now.replace(hour=MARKET_OPEN_TIME.hour, minute=MARKET_OPEN_TIME.minute, second=0, microsecond=0)
-    if now.weekday() < 5 and now.time() < MARKET_OPEN_TIME:
-        return candidate
-    candidate = candidate + timedelta(days=1)
-    while candidate.weekday() >= 5:
-        candidate += timedelta(days=1)
-    return candidate
+    session = DEFAULT_EXCHANGE_CALENDAR.resolve_active_session(now, "NSE")
+    if session.session_open is not None and session.phase in {ExchangeSessionPhase.CLOSED, ExchangeSessionPhase.PRE_MARKET}:
+        return session.session_open
+    return _session_open_for(session.next_trading_date)
+
+
+def _session_open_for(trading_date) -> datetime:
+    return datetime.combine(trading_date, MARKET_OPEN_TIME, tzinfo=IST)
 
 
 def _next_open_text(value: datetime, *, include_day: bool = False) -> str:

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from application.exchange_calendar import DEFAULT_EXCHANGE_CALENDAR, ExchangeSessionPhase, ExchangeTradingCalendar
 from application.historical_warmup import HistoricalWarmupConfiguration, HistoricalWarmupCoordinator, derive_daily_ohlc
 from application.lifecycle_manager import ApplicationLifecycleManager
 from brokers.zerodha.historical import ZerodhaHistoricalDataManager
@@ -30,21 +31,21 @@ class ReferenceBootstrapBounds:
     current_end: datetime | None
 
 
-def resolve_reference_bootstrap_bounds(now: datetime) -> ReferenceBootstrapBounds:
+def resolve_reference_bootstrap_bounds(now: datetime, *, exchange: str = "NSE", calendar: ExchangeTradingCalendar | None = None) -> ReferenceBootstrapBounds:
     if not isinstance(now, datetime):
         raise TypeError("clock result must be datetime")
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("clock result must be timezone-aware")
+    calendar = calendar or DEFAULT_EXCHANGE_CALENDAR
     local = now.astimezone(IST)
-    previous_date = local.date() - timedelta(days=1)
-    while previous_date.weekday() >= 5:
-        previous_date -= timedelta(days=1)
+    session = calendar.resolve_active_session(local, exchange)
+    previous_date = session.previous_completed_trading_date
     previous_start = datetime.combine(previous_date, SESSION_OPEN, tzinfo=IST)
     previous_end = datetime.combine(previous_date, SESSION_CLOSE, tzinfo=IST)
 
     current_start = None
     current_end = None
-    if local.weekday() < 5 and local.time() >= SESSION_OPEN:
+    if session.trading_date is not None and session.phase in {ExchangeSessionPhase.OPEN, ExchangeSessionPhase.POST_MARKET}:
         today_start = local.replace(hour=SESSION_OPEN.hour, minute=SESSION_OPEN.minute, second=0, microsecond=0)
         if local.time() >= SESSION_CLOSE:
             completed = local.replace(hour=SESSION_CLOSE.hour, minute=SESSION_CLOSE.minute, second=0, microsecond=0)
@@ -72,7 +73,9 @@ def run_reference_data_bootstrap(
     clock,
 ):
     now = clock()
-    bounds = resolve_reference_bootstrap_bounds(now)
+    calendar = getattr(lifecycle.orchestrator, "exchange_calendar", DEFAULT_EXCHANGE_CALENDAR)
+    exchange = getattr(getattr(lifecycle.orchestrator, "configuration", None), "exchange", "NSE")
+    bounds = resolve_reference_bootstrap_bounds(now, exchange=exchange, calendar=calendar)
     manager = ZerodhaHistoricalDataManager(client=historical_client, clock=clock)
     resolutions = tuple(_resolution_for(subscription) for subscription in subscriptions)
     coordinator = HistoricalWarmupCoordinator(
@@ -82,13 +85,15 @@ def run_reference_data_bootstrap(
         configuration=HistoricalWarmupConfiguration(),
         clock=clock,
     )
-    active_trading_date = _active_reference_trading_date(now, bounds)
+    active_trading_date = _active_reference_trading_date(now, bounds, exchange=exchange, calendar=calendar)
     completed_daily_results = _seed_completed_daily_history(
         lifecycle=lifecycle,
         historical_manager=manager,
         resolutions=resolutions,
         completed_session_date=bounds.previous_start.date(),
         levels_trading_date=active_trading_date,
+        exchange=exchange,
+        calendar=calendar,
     )
     if bounds.current_start is None or bounds.current_end is None:
         return _bootstrap_previous_session_only(
@@ -153,7 +158,10 @@ def _seed_completed_daily_history(
     resolutions: tuple[ZerodhaInstrumentResolution, ...],
     completed_session_date: date,
     levels_trading_date: date,
+    exchange: str = "NSE",
+    calendar: ExchangeTradingCalendar | None = None,
 ) -> dict[tuple[object, date], object]:
+    calendar = calendar or DEFAULT_EXCHANGE_CALENDAR
     required_sessions = _required_daily_history_sessions(lifecycle)
     seeded: dict[tuple[object, date], object] = {}
     for resolution in resolutions:
@@ -163,7 +171,7 @@ def _seed_completed_daily_history(
         max_attempts = required_sessions + DAILY_HISTORY_LOOKBACK_BUFFER_DAYS
         while len(collected) < required_sessions and attempts < max_attempts:
             attempts += 1
-            if cursor.weekday() >= 5:
+            if not calendar.is_trading_day(cursor, exchange):
                 cursor -= timedelta(days=1)
                 continue
             start_at = datetime.combine(cursor, SESSION_OPEN, tzinfo=IST)
@@ -201,13 +209,21 @@ def _required_daily_history_sessions(lifecycle: ApplicationLifecycleManager) -> 
     return period if isinstance(period, int) and not isinstance(period, bool) and period > 0 else 20
 
 
-def _active_reference_trading_date(now: datetime, bounds: ReferenceBootstrapBounds) -> date:
+def _active_reference_trading_date(
+    now: datetime,
+    bounds: ReferenceBootstrapBounds,
+    *,
+    exchange: str = "NSE",
+    calendar: ExchangeTradingCalendar | None = None,
+) -> date:
+    calendar = calendar or DEFAULT_EXCHANGE_CALENDAR
     local = now.astimezone(IST)
-    if bounds.current_start is not None:
-        return bounds.current_start.date()
-    if local.weekday() < 5:
-        return local.date()
-    return bounds.previous_start.date()
+    session = calendar.resolve_active_session(local, exchange)
+    if bounds.current_start is not None and session.trading_date is not None:
+        return session.trading_date
+    if session.trading_date is not None:
+        return session.trading_date
+    return session.previous_completed_trading_date
 
 
 def _resolution_for(subscription: ZerodhaInstrumentSubscription) -> ZerodhaInstrumentResolution:

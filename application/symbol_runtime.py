@@ -102,6 +102,7 @@ from engines.vision_method import VisionMethodSnapshot, VisionMethodValidationRe
 from engines.vwap.vwap_engine import VWAPEngine
 
 from application.enums import RuntimeInstrument, RuntimeStatus
+from application.exchange_calendar import DEFAULT_EXCHANGE_CALENDAR, ExchangeSessionPhase, ExchangeTradingCalendar
 from application.models import (
     OperationalReadinessSnapshot,
     RuntimeADRStatus,
@@ -136,11 +137,19 @@ class SymbolRuntime:
     dashboard-facing RuntimeSnapshot objects.
     """
 
-    def __init__(self, event_bus, configuration: RuntimeConfiguration, instrument: RuntimeInstrument):
+    def __init__(
+        self,
+        event_bus,
+        configuration: RuntimeConfiguration,
+        instrument: RuntimeInstrument,
+        *,
+        exchange_calendar: ExchangeTradingCalendar | None = None,
+    ):
         if instrument not in configuration.instruments:
             raise ValueError("SymbolRuntime instrument must be configured.")
         self._event_bus = event_bus
         self._configuration = configuration
+        self._exchange_calendar = exchange_calendar or DEFAULT_EXCHANGE_CALENDAR
         self._instrument = instrument
         self._status = RuntimeStatus.CREATED
         self._core_instrument = Instrument.from_symbol(instrument.value)
@@ -686,7 +695,7 @@ class SymbolRuntime:
     ) -> MarketContextState:
         self._require_running()
         lane = self._timeframe_for(timeframe)
-        trading_date = timestamp.date()
+        trading_date = _market_date(timestamp)
         cpr = self.cpr if self.cpr is not None and self.cpr.trading_date <= trading_date else None
         camarilla = (
             self.camarilla
@@ -1554,8 +1563,18 @@ class SymbolRuntime:
         return current
 
     def _runtime_trading_session(self, market_timestamp: datetime | None) -> RuntimeTradingSession:
-        trading_date = _market_date(market_timestamp)
-        previous_completed = self._daily_context_source_date
+        exchange_session = None
+        if market_timestamp is not None:
+            exchange_session = self._exchange_calendar.resolve_active_session(
+                _session_authority_timestamp(market_timestamp),
+                self._configuration.exchange,
+            )
+        trading_date = getattr(exchange_session, "trading_date", None) if exchange_session is not None else _market_date(market_timestamp)
+        previous_completed = (
+            getattr(exchange_session, "previous_completed_trading_date", None)
+            if exchange_session is not None
+            else self._daily_context_source_date
+        )
         adr = self.adr_engine.state
         vwap = self.vwap_engine.get_latest(self._core_instrument)
         cpr_date = getattr(self.cpr, "trading_date", None)
@@ -1564,7 +1583,16 @@ class SymbolRuntime:
         vwap_date = getattr(vwap, "trading_date", None)
         status = "WAITING"
         reason = "Market timestamp is unavailable."
-        if trading_date is not None:
+        if exchange_session is not None and exchange_session.phase is ExchangeSessionPhase.NON_TRADING_DAY:
+            status = "MARKET_CLOSED"
+            reason = exchange_session.reason
+        elif exchange_session is not None and exchange_session.phase is ExchangeSessionPhase.POST_MARKET:
+            status = "MARKET_CLOSED"
+            reason = exchange_session.reason
+        elif exchange_session is not None and exchange_session.phase is ExchangeSessionPhase.CLOSED:
+            status = "MARKET_CLOSED"
+            reason = exchange_session.reason
+        elif trading_date is not None:
             missing = []
             stale = []
             if self.cpr is None:
@@ -1615,7 +1643,7 @@ class SymbolRuntime:
             raise ValueError("OptionChainSnapshot timestamp timezone-awareness must match runtime timestamp.")
         if snapshot.timestamp - market_timestamp > _OPTION_CHAIN_TIMESTAMP_TOLERANCE:
             raise ValueError("OptionChainSnapshot timestamp cannot be in the future relative to runtime timestamp.")
-        if snapshot.timestamp.date() != market_timestamp.date():
+        if self._exchange_session_date(snapshot.timestamp) != self._exchange_session_date(market_timestamp):
             raise ValueError("OptionChainSnapshot trading session does not match runtime session.")
         age = max(0.0, (market_timestamp - snapshot.timestamp).total_seconds())
         if age > _OPTION_CHAIN_MAX_AGE_SECONDS:
@@ -1640,11 +1668,17 @@ class SymbolRuntime:
             raise ValueError("OptionChainAnalyticsSnapshot must reference the canonical runtime option-chain analysis.")
         if analytics.timestamp - market_timestamp > _OPTION_CHAIN_TIMESTAMP_TOLERANCE:
             raise ValueError("OptionChainAnalyticsSnapshot timestamp cannot be in the future relative to runtime timestamp.")
-        if analytics.timestamp.date() != market_timestamp.date():
+        if self._exchange_session_date(analytics.timestamp) != self._exchange_session_date(market_timestamp):
             raise ValueError("OptionChainAnalyticsSnapshot trading session does not match runtime session.")
         age = max(0.0, (market_timestamp - analytics.timestamp).total_seconds())
         if age > _OPTION_CHAIN_MAX_AGE_SECONDS:
             raise ValueError("OptionChainAnalyticsSnapshot is stale for the runtime timestamp.")
+
+    def _exchange_session_date(self, timestamp: datetime) -> date | None:
+        return self._exchange_calendar.resolve_active_session(
+            _session_authority_timestamp(timestamp),
+            self._configuration.exchange,
+        ).trading_date
 
     def _adr_runtime_status(self, runtime_session: RuntimeTradingSession) -> RuntimeADRStatus:
         diagnostics = self.adr_engine.snapshot()
@@ -1718,7 +1752,7 @@ class SymbolRuntime:
             operational_state = "STALE"
             reason = reason if reason != "-" else "Option-chain snapshot is stale."
             recovery = "Receive a fresh option-chain snapshot and analytics for the active session."
-        elif runtime_session.trading_date is not None and snapshot.timestamp.date() != runtime_session.trading_date:
+        elif runtime_session.trading_date is not None and self._exchange_session_date(snapshot.timestamp) != runtime_session.trading_date:
             feed_status = "BLOCKED"
             snapshot_status = "SESSION_MISMATCH"
             analytics_status = "WAITING_FOR_ANALYTICS" if analytics is None else "SESSION_MISMATCH"
@@ -1827,7 +1861,7 @@ class SymbolRuntime:
         if canonical is None:
             return
         trading_date = getattr(getattr(self, "_vision_method_snapshot", None), "timestamp", None)
-        date_value = trading_date.date() if trading_date is not None else (canonical.updated_at.date() if canonical.updated_at is not None else None)
+        date_value = _market_date(trading_date) if trading_date is not None else _market_date(canonical.updated_at)
         if date_value is None:
             return
         if canonical.status in {"closed", "invalidated"}:
@@ -1868,7 +1902,7 @@ class SymbolRuntime:
             self._latest_closed_candle_at,
         ):
             if isinstance(timestamp, datetime):
-                return timestamp.date()
+                return _market_date(timestamp)
         return None
 
     def _paper_position_from_checkpoint(self) -> RuntimePaperPositionSnapshot | None:
@@ -2295,7 +2329,7 @@ class SymbolRuntime:
                 (
                     candle
                     for candle in candle_history
-                    if candle.start_time.date() == trading_date and candle.timeframe == self._primary_timeframe.value
+                    if _market_date(candle.start_time) == trading_date and candle.timeframe == self._primary_timeframe.value
                 ),
                 key=lambda item: item.start_time,
             )
@@ -2611,10 +2645,11 @@ class SymbolRuntime:
             self._current_notional_exposure(entry),
         )
         previous_risk = self.risk_management_v2_engine.snapshot
-        if previous_risk is not None and previous_risk.session.trading_date == strategy.timestamp.date():
+        strategy_date = _market_date(strategy.timestamp)
+        if previous_risk is not None and previous_risk.session.trading_date == strategy_date:
             session = previous_risk.session
         else:
-            session = SessionRiskState(strategy.timestamp.date(), 0, 0, 0, 0, 0.0)
+            session = SessionRiskState(strategy_date, 0, 0, 0, 0, 0.0)
         exposure = InstrumentExposureState(
             self._core_instrument,
             self._current_position_quantity(),
@@ -2697,7 +2732,7 @@ class SymbolRuntime:
                 if getattr(result, "entry", None) is not None:
                     self._last_journal_write_timestamp = result.entry.closed_at
                 self.trade_journal_v1_engine.clear_checkpoint()
-                self._paper_recovery = self.trade_journal_v1_engine.load_checkpoint(expected_instrument=self._core_instrument, trading_date=tick.timestamp.date())
+                self._paper_recovery = self.trade_journal_v1_engine.load_checkpoint(expected_instrument=self._core_instrument, trading_date=_market_date(tick.timestamp))
             except Exception as exc:
                 self._record_decision_audit(
                     "Journal",
@@ -2748,7 +2783,9 @@ class SymbolRuntime:
         self._daily_ohlc_history = tuple(existing[key] for key in sorted(existing))
 
     def _ensure_daily_context_for_session(self, timestamp: datetime) -> None:
-        active_date = timestamp.date()
+        active_date = self._exchange_session_date(timestamp)
+        if active_date is None:
+            return
         if (
             self.cpr is not None
             and self.camarilla is not None
@@ -2763,9 +2800,12 @@ class SymbolRuntime:
 
     def _refresh_adr(self, timestamp, current_price: float) -> None:
         try:
+            trading_date = self._exchange_session_date(timestamp)
+            if trading_date is None:
+                return
             session_high, session_low = self._session_high_low(current_price, self._primary_timeframe)
             self.adr_engine.update(
-                trading_date=timestamp.date(),
+                trading_date=trading_date,
                 daily_history=self._daily_ohlc_history,
                 latest_price=current_price,
                 session_high=session_high,
@@ -2892,6 +2932,12 @@ def _market_date(timestamp: datetime | None) -> date | None:
     if timestamp.tzinfo is None or timestamp.utcoffset() is None:
         return timestamp.date()
     return timestamp.astimezone(IST).date()
+
+
+def _session_authority_timestamp(timestamp: datetime) -> datetime:
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        return timestamp.replace(tzinfo=IST)
+    return timestamp
 
 
 def _valid_invalidation(direction, entry: float, candidate: float | None) -> bool:

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 from application.enums import ExecutionSafetyMode, RuntimeInstrument, RuntimeStatus
+from application.exchange_calendar import ExchangeHoliday
 from adapters.zerodha.models import ZerodhaConnectionSnapshot
 from brokers.zerodha.enums import BrokerExecutionMode
 from core.enums.timeframe import TimeFrame
@@ -177,6 +178,7 @@ class RuntimeConfiguration:
     moving_average_periods: tuple[int, ...] = (20, 50, 200)
     momentum_period: int = 14
     volume_lookback: int = 20
+    exchange_holidays: tuple[ExchangeHoliday, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.instruments, tuple) or not self.instruments:
@@ -210,6 +212,11 @@ class RuntimeConfiguration:
             raise TypeError("RuntimeConfiguration deterministic_backtest_configuration must be BacktestConfiguration or None.")
         if isinstance(self.adr_period, bool) or not isinstance(self.adr_period, int) or self.adr_period not in {5, 10, 20, 50}:
             raise ValueError("RuntimeConfiguration adr_period must be one of 5, 10, 20 or 50.")
+        if not isinstance(self.exchange_holidays, tuple):
+            raise TypeError("RuntimeConfiguration exchange_holidays must be a tuple.")
+        for holiday in self.exchange_holidays:
+            if not isinstance(holiday, ExchangeHoliday):
+                raise TypeError("RuntimeConfiguration exchange_holidays must contain ExchangeHoliday values.")
         moving_average_profile = MovingAverageContextProfile(self.moving_average_periods)
         momentum_profile = MomentumContextProfile(self.momentum_period)
         volume_profile = VolumeContextProfile(self.volume_lookback)
@@ -220,6 +227,7 @@ class RuntimeConfiguration:
         object.__setattr__(self, "moving_average_periods", moving_average_profile.periods)
         object.__setattr__(self, "momentum_period", momentum_profile.period)
         object.__setattr__(self, "volume_lookback", volume_profile.lookback)
+        object.__setattr__(self, "exchange_holidays", tuple(self.exchange_holidays))
 
 
 def _normalize_runtime_timeframes(
