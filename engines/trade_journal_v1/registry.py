@@ -22,6 +22,19 @@ class TradeJournalRegistry:
         with self._lock:
             existing = self._entries.get(entry.trade_id)
             if existing is not None:
+                if getattr(existing, "record_state", "closed") == "open" and getattr(entry, "record_state", "closed") == "open":
+                    return TradeJournalRecordResult(
+                        TradeRecordStatus.DUPLICATE,
+                        existing,
+                        "Open trade update suppressed.",
+                    )
+                if getattr(existing, "record_state", "closed") == "open" and getattr(entry, "record_state", "closed") == "closed":
+                    self._entries[entry.trade_id] = entry
+                    return TradeJournalRecordResult(
+                        TradeRecordStatus.RECORDED,
+                        entry,
+                        "Open trade finalized.",
+                    )
                 if existing != entry:
                     return TradeJournalRecordResult(
                         TradeRecordStatus.REJECTED,

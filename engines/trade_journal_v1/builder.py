@@ -3,7 +3,17 @@ Stateless Trade Journal V1 entry builder.
 """
 
 from application.trade_lifecycle_v1.models import TradeLifecycleV1Snapshot
+from core.enums.instrument import Instrument
+from engines.option_paper_execution.enums import (
+    OptionPaperPositionStatus,
+    OptionPaperRiskDecision,
+    OptionPaperUnderlyingDirection,
+)
+from engines.option_paper_execution.models import OptionPaperPositionSnapshot
 from engines.position_management_v1.enums import PositionExitReason
+from engines.risk_management_v2.enums import RiskDecision
+from application.execution_runtime_v1.enums import ExecutionSide
+from engines.strategy_decision_v2.enums import StrategyDecisionQuality, StrategyDirection, StrategySetupFamily
 from engines.trade_journal_v1.configuration import TradeJournalV1Configuration
 from engines.trade_journal_v1.enums import TradeCloseCategory, TradeOutcome
 from engines.trade_journal_v1.models import TradeJournalEntry
@@ -79,6 +89,72 @@ class TradeJournalEntryBuilder:
             vision_method_validation_reference=getattr(strategy, "vision_method_validation_reference", None),
         )
 
+    def build_option_paper(self, position: OptionPaperPositionSnapshot) -> TradeJournalEntry:
+        if not isinstance(position, OptionPaperPositionSnapshot):
+            raise TypeError("position must be OptionPaperPositionSnapshot")
+        candidate = position.candidate
+        risk = position.risk
+        closed = position.closed_at is not None and position.status is not OptionPaperPositionStatus.OPEN
+        closed_at = position.closed_at or position.opened_at
+        exit_premium = position.exit_premium if position.exit_premium is not None else position.current_premium
+        realized = position.realized_pnl if closed else 0.0
+        risk_amount = risk.planned_rupee_risk
+        r_multiple = realized / risk_amount if risk_amount > 0 and closed else None
+        return TradeJournalEntry(
+            trade_id=position.position_id,
+            instrument=Instrument(candidate.underlying.value),
+            opened_at=position.opened_at,
+            closed_at=closed_at,
+            duration_seconds=(closed_at - position.opened_at).total_seconds(),
+            direction=_option_direction(candidate.underlying_direction),
+            setup_family=StrategySetupFamily.STRUCTURAL_RETEST,
+            setup_quality=StrategyDecisionQuality.MODERATE,
+            entry_price=position.entry_premium,
+            average_exit_price=exit_premium,
+            initial_quantity=position.quantity,
+            closed_quantity=position.quantity,
+            invalidation_price=risk.stop_premium,
+            objective_price=risk.target_premium,
+            realized_pnl=realized,
+            risk_amount=risk_amount,
+            r_multiple=r_multiple,
+            outcome=_outcome(realized, self._configuration.flat_pnl_tolerance),
+            exit_reason=_option_exit_reason(position),
+            close_category=_close_category(_option_exit_reason(position)),
+            market_state="VISION_METHOD",
+            market_phase="VISION_METHOD",
+            structural_confidence="VISION_METHOD",
+            context_confidence=1.0,
+            reasoning_direction=candidate.underlying_direction.value,
+            reasoning_conviction=risk.decision.value,
+            reasoning_confidence=1.0,
+            risk_decision=_option_risk_decision(risk.decision),
+            risk_approved_quantity=risk.approved_quantity,
+            execution_side=ExecutionSide.SELL,
+            execution_fill_price=position.entry_premium,
+            execution_filled_quantity=position.quantity,
+            lifecycle_snapshot=position,
+            trade_source="VISION_METHOD_OPTION_SELLING_PAPER",
+            trade_candidate_reference=candidate.source_trade_candidate_reference,
+            vision_method_snapshot_reference=candidate.source_vision_reference,
+            vision_method_validation_reference=candidate.source_trade_candidate_reference,
+            record_state="closed" if closed else "open",
+            instrument_type="OPTION",
+            execution_style="DIRECTIONAL_OPTION_SELLING_PAPER",
+            option_candidate_reference=candidate.candidate_id,
+            option_position_reference=position.position_id,
+            contract_trading_symbol=candidate.trading_symbol,
+            instrument_token=candidate.instrument_token,
+            expiry=candidate.expiry,
+            strike=candidate.strike,
+            option_type=candidate.option_type.value,
+            transaction_type=candidate.transaction_type.value,
+            moneyness=candidate.moneyness.value,
+            itm_steps=candidate.itm_steps,
+            lots=position.lots,
+            lot_size=candidate.lot_size,
+        )
+
 
 def build_trade_id(position) -> str:
     return (
@@ -105,3 +181,25 @@ def _close_category(reason: PositionExitReason) -> TradeCloseCategory:
     if reason is PositionExitReason.MANUAL_DRY_RUN:
         return TradeCloseCategory.MANUAL_DRY_RUN
     return TradeCloseCategory.OTHER
+
+
+def _option_direction(direction: OptionPaperUnderlyingDirection) -> StrategyDirection:
+    if direction is OptionPaperUnderlyingDirection.BULLISH:
+        return StrategyDirection.LONG
+    return StrategyDirection.SHORT
+
+
+def _option_risk_decision(decision: OptionPaperRiskDecision) -> RiskDecision:
+    if decision is OptionPaperRiskDecision.APPROVED:
+        return RiskDecision.APPROVED
+    if decision is OptionPaperRiskDecision.APPROVED_REDUCED:
+        return RiskDecision.APPROVED_REDUCED
+    return RiskDecision.REJECTED
+
+
+def _option_exit_reason(position: OptionPaperPositionSnapshot) -> PositionExitReason:
+    if position.status is OptionPaperPositionStatus.TARGET_HIT:
+        return PositionExitReason.OBJECTIVE
+    if position.status in {OptionPaperPositionStatus.STOP_HIT, OptionPaperPositionStatus.INVALIDATED}:
+        return PositionExitReason.INVALIDATION
+    return PositionExitReason.MANUAL_DRY_RUN

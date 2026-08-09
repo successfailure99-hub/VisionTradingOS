@@ -10,6 +10,7 @@ from numbers import Real
 from application.execution_runtime_v1.enums import ExecutionSide
 from application.trade_lifecycle_v1.models import TradeLifecycleV1Snapshot
 from core.enums.instrument import Instrument
+from engines.option_paper_execution.models import OptionPaperPositionSnapshot
 from engines.position_management_v1.enums import PositionExitReason
 from engines.risk_management_v2.enums import RiskDecision
 from engines.risk_management_v2.models import SUPPORTED_INSTRUMENTS
@@ -68,6 +69,21 @@ class TradeJournalEntry:
     trade_candidate_reference: str | None = None
     vision_method_snapshot_reference: str | None = None
     vision_method_validation_reference: str | None = None
+    record_state: str = "closed"
+    instrument_type: str = "UNDERLYING"
+    execution_style: str = "STRATEGY_DECISION_V2"
+    option_candidate_reference: str | None = None
+    option_position_reference: str | None = None
+    contract_trading_symbol: str | None = None
+    instrument_token: int | None = None
+    expiry: date | None = None
+    strike: float | None = None
+    option_type: str | None = None
+    transaction_type: str | None = None
+    moneyness: str | None = None
+    itm_steps: int | None = None
+    lots: int | None = None
+    lot_size: int | None = None
 
     def __post_init__(self) -> None:
         _non_empty(self.trade_id, "trade_id")
@@ -101,24 +117,52 @@ class TradeJournalEntry:
         object.__setattr__(self, "reasoning_confidence", _bounded(self.reasoning_confidence, "reasoning_confidence"))
         _non_negative_int(self.risk_approved_quantity, "risk_approved_quantity")
         _positive_int(self.execution_filled_quantity, "execution_filled_quantity")
-        if not isinstance(self.lifecycle_snapshot, TradeLifecycleV1Snapshot):
-            raise TypeError("lifecycle_snapshot must be TradeLifecycleV1Snapshot")
-        if self.lifecycle_snapshot.instrument is not self.instrument:
-            raise ValueError("lifecycle snapshot instrument mismatch")
-        position = self.lifecycle_snapshot.position_result.position if self.lifecycle_snapshot.position_result else None
-        if position is None or position.open_quantity != 0 or position.closed_at is None:
-            raise ValueError("lifecycle snapshot must contain a closed position")
-        if position.dry_run is not True or position.analysis_only is not True:
-            raise ValueError("journal entries must remain dry-run and analysis-only")
+        object.__setattr__(self, "record_state", _one_of(self.record_state, "record_state", {"open", "closed"}))
+        if isinstance(self.lifecycle_snapshot, TradeLifecycleV1Snapshot):
+            if self.lifecycle_snapshot.instrument is not self.instrument:
+                raise ValueError("lifecycle snapshot instrument mismatch")
+            position = self.lifecycle_snapshot.position_result.position if self.lifecycle_snapshot.position_result else None
+            if position is None or position.open_quantity != 0 or position.closed_at is None:
+                raise ValueError("lifecycle snapshot must contain a closed position")
+            if position.dry_run is not True or position.analysis_only is not True:
+                raise ValueError("journal entries must remain dry-run and analysis-only")
+            if self.record_state != "closed":
+                raise ValueError("standard lifecycle journal entries must be closed")
+        elif isinstance(self.lifecycle_snapshot, OptionPaperPositionSnapshot):
+            option_position = self.lifecycle_snapshot
+            if self.option_position_reference is not None and self.option_position_reference != option_position.position_id:
+                raise ValueError("option position reference mismatch")
+            if self.record_state == "closed" and option_position.closed_at is None:
+                raise ValueError("closed option journal entry requires a closed option paper position")
+        else:
+            raise TypeError("lifecycle_snapshot must be TradeLifecycleV1Snapshot or OptionPaperPositionSnapshot")
         object.__setattr__(self, "trade_source", _non_empty(self.trade_source, "trade_source"))
+        object.__setattr__(self, "instrument_type", _non_empty(self.instrument_type, "instrument_type"))
+        object.__setattr__(self, "execution_style", _non_empty(self.execution_style, "execution_style"))
         for name in (
             "trade_candidate_reference",
             "vision_method_snapshot_reference",
             "vision_method_validation_reference",
+            "option_candidate_reference",
+            "option_position_reference",
+            "contract_trading_symbol",
+            "option_type",
+            "transaction_type",
+            "moneyness",
         ):
             value = getattr(self, name)
             if value is not None:
                 object.__setattr__(self, name, _non_empty(value, name))
+        if self.instrument_token is not None:
+            _positive_int(self.instrument_token, "instrument_token")
+        if self.expiry is not None and (not isinstance(self.expiry, date) or isinstance(self.expiry, datetime)):
+            raise TypeError("expiry must be date or None")
+        if self.strike is not None:
+            object.__setattr__(self, "strike", _positive_real(self.strike, "strike"))
+        for name in ("itm_steps", "lots", "lot_size"):
+            value = getattr(self, name)
+            if value is not None:
+                _non_negative_int(value, name)
 
 @dataclass(frozen=True, slots=True)
 class VisionTradeJournalRecord:
@@ -157,6 +201,21 @@ class VisionTradeJournalRecord:
     created_at: datetime
     updated_at: datetime
     record_version: int = 1
+    record_state: str = "closed"
+    instrument_type: str = "UNDERLYING"
+    execution_style: str = "STRATEGY_DECISION_V2"
+    option_candidate_reference: str | None = None
+    option_position_reference: str | None = None
+    contract_trading_symbol: str | None = None
+    instrument_token: int | None = None
+    expiry: date | None = None
+    strike: float | None = None
+    option_type: str | None = None
+    transaction_type: str | None = None
+    moneyness: str | None = None
+    itm_steps: int | None = None
+    lots: int | None = None
+    lot_size: int | None = None
 
     def __post_init__(self) -> None:
         _non_empty(self.trade_id, "trade_id")
@@ -199,6 +258,30 @@ class VisionTradeJournalRecord:
         object.__setattr__(self, "supporting_reasons", _strings(self.supporting_reasons, "supporting_reasons"))
         object.__setattr__(self, "blocking_reasons", _strings(self.blocking_reasons, "blocking_reasons"))
         _positive_int(self.record_version, "record_version")
+        object.__setattr__(self, "record_state", _one_of(self.record_state, "record_state", {"open", "closed"}))
+        object.__setattr__(self, "instrument_type", _non_empty(self.instrument_type, "instrument_type"))
+        object.__setattr__(self, "execution_style", _non_empty(self.execution_style, "execution_style"))
+        for name in (
+            "option_candidate_reference",
+            "option_position_reference",
+            "contract_trading_symbol",
+            "option_type",
+            "transaction_type",
+            "moneyness",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, _non_empty(value, name))
+        if self.instrument_token is not None:
+            _positive_int(self.instrument_token, "instrument_token")
+        if self.expiry is not None and (not isinstance(self.expiry, date) or isinstance(self.expiry, datetime)):
+            raise TypeError("expiry must be date or None")
+        if self.strike is not None:
+            object.__setattr__(self, "strike", _positive_real(self.strike, "strike"))
+        for name in ("itm_steps", "lots", "lot_size"):
+            value = getattr(self, name)
+            if value is not None:
+                _non_negative_int(value, name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -537,6 +620,13 @@ def _non_empty(value: str, name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be non-empty string")
     return value.strip()
+
+
+def _one_of(value: str, name: str, allowed: set[str]) -> str:
+    text = _non_empty(value, name).lower()
+    if text not in allowed:
+        raise ValueError(f"{name} must be one of {sorted(allowed)}")
+    return text
 
 
 def _strings(values, name: str) -> tuple[str, ...]:

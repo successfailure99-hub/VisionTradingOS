@@ -13,6 +13,7 @@ from brokers.zerodha.options.models import (
     ZerodhaOptionUniverse,
 )
 from core.enums.exchange import Exchange
+from core.enums.instrument import Instrument
 from core.event_bus import EventBus
 from dashboard.presenters import build_position_view
 from engines.option_chain.enums import OptionType
@@ -27,6 +28,7 @@ from engines.option_paper_execution.lifecycle import open_option_paper_position,
 from engines.option_paper_execution.risk import evaluate_option_paper_risk
 from engines.option_paper_execution.selector import build_directional_option_trade_candidate
 from engines.runtime_adapter import TradeCandidateDirection, TradeCandidateState
+from engines.trade_journal_v1 import TradeJournalV1Configuration, TradeJournalV1Engine, TradeRecordStatus
 from engines.vision_method import (
     VisionBOS,
     VisionBreakDirection,
@@ -406,3 +408,213 @@ def test_symbol_runtime_directional_option_selling_stays_paper_only_and_has_no_s
     assert view.option_paper_position.position_id == view.canonical_paper_position.trade_id
     assert build_position_view(view).status == "Paper Option Position Open"
     assert build_position_view(view).last_price == view.option_paper_position.current_premium
+
+
+def _option_position_for_journal(*, method=None, report=None, bearish=False):
+    method = method or (bearish_snapshot() if bearish else snapshot())
+    report = report or validate_vision_method(method)
+    trade = __import__("engines.runtime_adapter", fromlist=["adapt_vision_method_to_trade_candidate"]).adapt_vision_method_to_trade_candidate(method, report)
+    option_trade = build_directional_option_trade_candidate(
+        trade_candidate=trade,
+        vision_snapshot=method,
+        validation_report=report,
+        option_universe=universe(),
+        option_chain_snapshot=chain_snapshot(call_bid=110.0, put_bid=100.0),
+        configuration=option_config(),
+        runtime_session_id="NIFTY:2026-08-03",
+        trading_date=NOW.date(),
+    )
+    return open_option_paper_position(evaluate_option_paper_risk(option_trade, option_config()))
+
+
+def _journal_engine(tmp_path):
+    engine = TradeJournalV1Engine(
+        configuration=TradeJournalV1Configuration(
+            journal_path=tmp_path / "journal.jsonl",
+            checkpoint_path=tmp_path / "checkpoint.json",
+        )
+    )
+    engine.start()
+    return engine
+
+
+def test_option_paper_journal_open_and_premium_target_close_finalize_same_trade_once(tmp_path):
+    engine = _journal_engine(tmp_path)
+    opened = _option_position_for_journal()
+
+    opened_result = engine.record_option_paper_position(opened)
+    assert opened_result.status is TradeRecordStatus.RECORDED
+    assert opened_result.entry.record_state == "open"
+    assert engine.snapshot().trade_count == 1
+    assert engine.analytics_snapshot().overall.trade_count == 0
+    assert engine.durable_records() == ()
+
+    closed = update_option_paper_position(opened, current_premium=49.0, underlying_price=25050.0, timestamp=NOW + timedelta(minutes=1))
+    closed_result = engine.record_option_paper_position(closed)
+    duplicate = engine.record_option_paper_position(closed)
+
+    assert closed_result.status is TradeRecordStatus.RECORDED
+    assert closed_result.entry.trade_id == opened.position_id
+    assert closed_result.entry.record_state == "closed"
+    assert duplicate.status is TradeRecordStatus.DUPLICATE
+    assert len(engine.entries()) == 1
+    assert engine.analytics_snapshot().overall.trade_count == 1
+    assert engine.analytics_snapshot().overall.total_pnl == closed.realized_pnl
+    records = engine.durable_records()
+    assert len(records) == 1
+    record = records[0]
+    assert record.trade_id == opened.position_id
+    assert record.option_position_reference == opened.position_id
+    assert record.option_candidate_reference == opened.candidate.candidate_id
+    assert record.trade_candidate_reference == opened.candidate.source_trade_candidate_reference
+    assert record.vision_method_snapshot_reference == opened.candidate.source_vision_reference
+    assert record.contract_trading_symbol == opened.candidate.trading_symbol
+    assert record.instrument_token == opened.candidate.instrument_token
+    assert record.expiry == opened.candidate.expiry
+    assert record.strike == opened.candidate.strike
+    assert record.option_type == opened.candidate.option_type.value
+    assert record.transaction_type == "sell"
+    assert record.quantity == opened.quantity
+    assert record.lots == opened.lots
+    assert record.lot_size == opened.candidate.lot_size
+    assert record.gross_pnl == closed.realized_pnl
+    assert record.net_pnl == closed.realized_pnl
+    assert record.fees == 0.0
+    assert record.slippage == 0.0
+
+
+def test_option_paper_journal_stop_invalidation_and_simultaneous_exit_close_once(tmp_path):
+    engine = _journal_engine(tmp_path)
+
+    def cloned_position(label, *, invalidation=None):
+        base = _option_position_for_journal()
+        candidate = replace(
+            base.candidate,
+            candidate_id=f"{base.candidate.candidate_id}:{label}",
+            underlying_invalidation=invalidation or base.candidate.underlying_invalidation,
+        )
+        risk = replace(base.risk, candidate=candidate)
+        return replace(base, position_id=f"OSE1-PAPER:{candidate.candidate_id}", candidate=candidate, risk=risk)
+
+    stopped_open = cloned_position("stop")
+    invalidated_open = cloned_position("invalidation", invalidation="Below 24900")
+    simultaneous_open = cloned_position("simultaneous", invalidation="Below 24900")
+
+    stopped = update_option_paper_position(stopped_open, current_premium=151.0, underlying_price=25000.0, timestamp=NOW + timedelta(minutes=1))
+    invalidated = update_option_paper_position(invalidated_open, current_premium=100.0, underlying_price=24899.0, timestamp=NOW + timedelta(minutes=2))
+    simultaneous = update_option_paper_position(simultaneous_open, current_premium=49.0, underlying_price=24899.0, timestamp=NOW + timedelta(minutes=3))
+
+    for item in (stopped, invalidated, simultaneous):
+        engine.record_option_paper_position(open_option_paper_position(item.risk))
+        first = engine.record_option_paper_position(item)
+        second = engine.record_option_paper_position(item)
+        assert first.status is TradeRecordStatus.RECORDED
+        assert second.status is TradeRecordStatus.DUPLICATE
+
+    assert len(engine.entries()) == 3
+    assert len(engine.durable_records()) == 3
+    assert engine.analytics_snapshot().overall.trade_count == 3
+
+
+def test_option_paper_journal_previous_session_remains_historical(tmp_path):
+    engine = _journal_engine(tmp_path)
+    current = _option_position_for_journal()
+    old_candidate = replace(current.candidate, trading_date=NOW.date() - timedelta(days=1), candidate_id=current.candidate.candidate_id + ":old")
+    old_risk = replace(current.risk, candidate=old_candidate)
+    old_opened_at = current.opened_at - timedelta(days=1)
+    old = replace(
+        current,
+        position_id=current.position_id + ":old",
+        candidate=old_candidate,
+        risk=old_risk,
+        opened_at=old_opened_at,
+        updated_at=old_opened_at,
+    )
+
+    current_closed = update_option_paper_position(current, current_premium=49.0, underlying_price=25050.0, timestamp=NOW + timedelta(minutes=1))
+    old_closed = update_option_paper_position(old, current_premium=49.0, underlying_price=25050.0, timestamp=NOW - timedelta(days=1))
+    engine.record_option_paper_position(old_closed)
+    engine.record_option_paper_position(current_closed)
+
+    assert len(engine.durable_records(trading_date=NOW.date() - timedelta(days=1))) == 1
+    assert len(engine.durable_records(trading_date=NOW.date())) == 1
+    assert len(engine.durable_records()) == 2
+
+
+def test_old_historical_trade_journal_records_remain_backward_compatible():
+    from engines.trade_journal_v1.models import VisionTradeJournalRecord
+    from engines.position_management_v1.enums import PositionExitReason
+    from engines.trade_journal_v1.enums import TradeOutcome
+    from core.enums.instrument import Instrument
+
+    record = VisionTradeJournalRecord(
+        trade_id="legacy",
+        instrument=Instrument.NIFTY,
+        exchange="NSE",
+        timeframe="1m",
+        trading_date=NOW.date(),
+        trade_source="VISION_METHOD",
+        setup_classification="trend_continuation",
+        candidate_direction="long",
+        candidate_quality="high",
+        validation_result="valid",
+        outcome=TradeOutcome.WIN,
+        exit_reason=PositionExitReason.OBJECTIVE,
+        vision_method_snapshot_reference="vision",
+        vision_method_validation_reference="validation",
+        trade_candidate_reference="candidate",
+        risk_reference="risk",
+        lifecycle_reference="lifecycle",
+        paper_position_reference="position",
+        validation_trace_reference="trace",
+        entry_timestamp=NOW,
+        entry_price=100.0,
+        quantity=75,
+        stop_price=90.0,
+        target_price=120.0,
+        exit_timestamp=NOW + timedelta(minutes=1),
+        exit_price=120.0,
+        gross_pnl=100.0,
+        fees=0.0,
+        slippage=0.0,
+        net_pnl=100.0,
+        supporting_reasons=("legacy",),
+        blocking_reasons=(),
+        created_at=NOW,
+        updated_at=NOW,
+    )
+
+    assert record.instrument_type == "UNDERLYING"
+    assert record.option_candidate_reference is None
+
+
+def test_symbol_runtime_option_paper_close_is_journaled_and_forensic_linked(tmp_path):
+    item = SymbolRuntime(
+        EventBus(),
+        configuration=RuntimeConfiguration(
+            option_expiry_date=EXPIRY,
+            directional_option_selling_configuration=option_config(),
+        ),
+        instrument=RuntimeInstrument.NIFTY,
+    )
+    item.trade_journal_v1_engine = _journal_engine(tmp_path)
+    item.start()
+    item.set_option_universe(universe())
+    item.process_option_chain_runtime(chain_snapshot(put_bid=100.0))
+    method = snapshot()
+    report = validate_vision_method(method)
+
+    item.process_vision_method_paper_trade(method, report)
+    item.process_option_chain_runtime(chain_snapshot(put_bid=49.0, timestamp=NOW + timedelta(minutes=1)))
+    item.process_option_chain_runtime(chain_snapshot(put_bid=48.0, timestamp=NOW + timedelta(minutes=2)))
+    view = item.snapshot()
+    records = item.trade_journal_v1_engine.durable_records()
+
+    assert view.option_paper_position.status is OptionPaperPositionStatus.TARGET_HIT
+    assert len(records) == 1
+    assert records[0].option_position_reference == view.option_paper_position.position_id
+    assert records[0].option_candidate_reference == view.option_trade_candidate.candidate_id
+    assert records[0].trade_candidate_reference == view.option_trade_candidate.source_trade_candidate_reference
+    assert records[0].vision_method_snapshot_reference == view.option_trade_candidate.source_vision_reference
+    assert records[0].gross_pnl == view.option_paper_position.realized_pnl
+    assert view.trade_journal_v1.analytics.overall.trade_count == 1

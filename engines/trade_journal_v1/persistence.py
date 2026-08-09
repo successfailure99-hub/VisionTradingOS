@@ -13,6 +13,7 @@ from tempfile import NamedTemporaryFile
 from typing import Iterator
 
 from core.enums.instrument import Instrument
+from engines.option_paper_execution.models import OptionPaperPositionSnapshot
 from engines.position_management_v1.enums import PositionExitReason
 from engines.trade_journal_v1.enums import PaperRecoveryStatus, TradeOutcome
 from engines.trade_journal_v1.models import (
@@ -23,7 +24,7 @@ from engines.trade_journal_v1.models import (
 
 JOURNAL_SCHEMA_VERSION = 1
 CHECKPOINT_SCHEMA_VERSION = 1
-SENSITIVE_KEYS = ("token", "access_token", "api_key", "secret", "credential", "password")
+SENSITIVE_KEYS = ("access_token", "api_key", "secret", "credential", "password")
 
 
 class TradeJournalPersistence:
@@ -192,6 +193,63 @@ class TradeJournalQuery:
 
 def record_from_entry(entry, *, exchange: str = "NSE", timeframe: str = "1m", created_at: datetime | None = None) -> VisionTradeJournalRecord:
     created_at = created_at or entry.closed_at
+    if isinstance(entry.lifecycle_snapshot, OptionPaperPositionSnapshot):
+        position = entry.lifecycle_snapshot
+        candidate = position.candidate
+        trace_ref = f"{entry.vision_method_validation_reference or '-'}:trace"
+        risk_ref = f"OSE1:{position.risk.decision.value}:{position.risk.approved_quantity}"
+        lifecycle_ref = f"{position.position_id}:{position.status.value}:{position.closed_at.isoformat() if position.closed_at else position.updated_at.isoformat()}"
+        return VisionTradeJournalRecord(
+            trade_id=entry.trade_id,
+            instrument=entry.instrument,
+            exchange=entry.exchange if hasattr(entry, "exchange") else exchange,
+            timeframe=timeframe,
+            trading_date=position.candidate.trading_date,
+            trade_source=entry.trade_source,
+            setup_classification=entry.setup_family.value,
+            candidate_direction=entry.direction.value,
+            candidate_quality=entry.setup_quality.value,
+            validation_result="valid",
+            outcome=entry.outcome,
+            exit_reason=entry.exit_reason,
+            vision_method_snapshot_reference=entry.vision_method_snapshot_reference or "-",
+            vision_method_validation_reference=entry.vision_method_validation_reference or "-",
+            trade_candidate_reference=entry.trade_candidate_reference or "-",
+            risk_reference=risk_ref,
+            lifecycle_reference=lifecycle_ref,
+            paper_position_reference=position.position_id,
+            validation_trace_reference=trace_ref,
+            entry_timestamp=entry.opened_at,
+            entry_price=entry.entry_price,
+            quantity=entry.closed_quantity,
+            stop_price=entry.invalidation_price,
+            target_price=entry.objective_price,
+            exit_timestamp=entry.closed_at,
+            exit_price=entry.average_exit_price,
+            gross_pnl=entry.realized_pnl,
+            fees=0.0,
+            slippage=0.0,
+            net_pnl=entry.realized_pnl,
+            supporting_reasons=tuple(candidate.selection_reasoning) + (position.risk.reason,),
+            blocking_reasons=position.risk.warnings,
+            created_at=created_at,
+            updated_at=created_at,
+            record_state=entry.record_state,
+            instrument_type=entry.instrument_type,
+            execution_style=entry.execution_style,
+            option_candidate_reference=candidate.candidate_id,
+            option_position_reference=position.position_id,
+            contract_trading_symbol=candidate.trading_symbol,
+            instrument_token=candidate.instrument_token,
+            expiry=candidate.expiry,
+            strike=candidate.strike,
+            option_type=candidate.option_type.value,
+            transaction_type=candidate.transaction_type.value,
+            moneyness=candidate.moneyness.value,
+            itm_steps=candidate.itm_steps,
+            lots=position.lots,
+            lot_size=candidate.lot_size,
+        )
     trace_ref = f"{entry.vision_method_validation_reference or '-'}:trace"
     risk_ref = f"{entry.instrument.value}:{entry.risk_decision.value}:{entry.risk_approved_quantity}"
     lifecycle_ref = f"{entry.instrument.value}:{entry.lifecycle_snapshot.timestamp.isoformat()}:{entry.lifecycle_snapshot.stage.value}"
@@ -231,6 +289,21 @@ def record_from_entry(entry, *, exchange: str = "NSE", timeframe: str = "1m", cr
         blocking_reasons=entry.lifecycle_snapshot.strategy_decision.warnings if entry.lifecycle_snapshot.strategy_decision else (),
         created_at=created_at,
         updated_at=created_at,
+        record_state=entry.record_state,
+        instrument_type=entry.instrument_type,
+        execution_style=entry.execution_style,
+        option_candidate_reference=entry.option_candidate_reference,
+        option_position_reference=entry.option_position_reference,
+        contract_trading_symbol=entry.contract_trading_symbol,
+        instrument_token=entry.instrument_token,
+        expiry=entry.expiry,
+        strike=entry.strike,
+        option_type=entry.option_type,
+        transaction_type=entry.transaction_type,
+        moneyness=entry.moneyness,
+        itm_steps=entry.itm_steps,
+        lots=entry.lots,
+        lot_size=entry.lot_size,
     )
 
 
@@ -277,6 +350,8 @@ def _record_from_payload(payload: dict[str, object]) -> VisionTradeJournalRecord
     data["trading_date"] = date.fromisoformat(data["trading_date"])
     data["outcome"] = TradeOutcome(data["outcome"])
     data["exit_reason"] = PositionExitReason(data["exit_reason"])
+    if data.get("expiry") is not None:
+        data["expiry"] = date.fromisoformat(data["expiry"])
     for name in ("entry_timestamp", "exit_timestamp", "created_at", "updated_at"):
         data[name] = datetime.fromisoformat(data[name])
     data["supporting_reasons"] = tuple(data.get("supporting_reasons") or ())

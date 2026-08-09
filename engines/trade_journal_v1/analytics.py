@@ -40,7 +40,7 @@ class TradePerformanceAnalyticsCalculator:
     ) -> TradePerformanceAnalyticsSnapshot:
         if not isinstance(configuration, TradeJournalV1Configuration):
             raise TypeError("configuration must be TradeJournalV1Configuration")
-        items = tuple(entries)
+        items = tuple(entry for entry in tuple(entries) if getattr(entry, "record_state", "closed") == "closed")
         if any(not isinstance(item, TradeJournalEntry) for item in items):
             raise TypeError("entries must contain TradeJournalEntry")
         equity_curve = _equity_curve(items, configuration.equity_curve_limit)

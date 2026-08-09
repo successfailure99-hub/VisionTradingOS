@@ -765,6 +765,7 @@ class SymbolRuntime:
             underlying_price=underlying_price,
             timestamp=timestamp,
         )
+        self._record_option_paper_journal_if_available()
 
     def build_market_context(
         self,
@@ -1248,6 +1249,7 @@ class SymbolRuntime:
                     underlying_price=tick.last_price,
                     timestamp=tick.timestamp,
                 )
+                self._record_option_paper_journal_if_available()
             return
         if self._vision_strategy_decision_v2 is not None or self._canonical_lifecycle_position() is not None:
             self._process_trade_lifecycle_price(tick)
@@ -1572,12 +1574,27 @@ class SymbolRuntime:
             )
             return
         self._option_paper_position = open_option_paper_position(risk)
+        self._record_option_paper_journal_if_available()
         self._record_decision_audit(
             "NONE",
             "OSE-1 directional option-selling paper chain accepted the candidate.",
             rejected=False,
             vision_trade_candidate=candidate,
         )
+
+    def _record_option_paper_journal_if_available(self) -> None:
+        if self._option_paper_position is None:
+            return
+        try:
+            result = self.trade_journal_v1_engine.record_option_paper_position(self._option_paper_position)
+            if getattr(result, "entry", None) is not None:
+                self._last_journal_write_timestamp = result.entry.closed_at
+        except Exception as exc:
+            self._record_decision_audit(
+                "Journal",
+                f"Trade Journal V1 rejected the option paper lifecycle: {_safe_error(exc)}",
+                vision_trade_candidate=self._vision_trade_candidate,
+            )
 
     def _record_vision_forensic_trace(
         self,

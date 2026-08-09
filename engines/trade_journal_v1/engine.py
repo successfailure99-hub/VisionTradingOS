@@ -18,6 +18,7 @@ from engines.trade_journal_v1.analytics import TradePerformanceAnalyticsCalculat
 from engines.trade_journal_v1.builder import TradeJournalEntryBuilder
 from engines.trade_journal_v1.configuration import TradeJournalV1Configuration
 from engines.trade_journal_v1.enums import JournalChange, TradeJournalStatus, TradeRecordStatus
+from engines.option_paper_execution.models import OptionPaperPositionSnapshot
 from engines.trade_journal_v1.models import (
     ActivePaperPositionCheckpoint,
     PaperRecoverySnapshot,
@@ -90,11 +91,18 @@ class TradeJournalV1Engine(BaseEngine):
     def record(self, lifecycle: TradeLifecycleV1Snapshot) -> TradeJournalRecordResult:
         if not isinstance(lifecycle, TradeLifecycleV1Snapshot):
             raise TypeError("lifecycle must be TradeLifecycleV1Snapshot")
+        return self._record_entry(self._builder.build(lifecycle))
+
+    def record_option_paper_position(self, position: OptionPaperPositionSnapshot) -> TradeJournalRecordResult:
+        if not isinstance(position, OptionPaperPositionSnapshot):
+            raise TypeError("position must be OptionPaperPositionSnapshot")
+        return self._record_entry(self._builder.build_option_paper(position))
+
+    def _record_entry(self, entry) -> TradeJournalRecordResult:
         with self._lock:
             if self._status is not TradeJournalStatus.RUNNING:
                 raise RuntimeError("trade journal engine must be RUNNING")
             try:
-                entry = self._builder.build(lifecycle)
                 result = self._registry.add(entry)
                 if result.status is TradeRecordStatus.RECORDED:
                     self._latest_entry = result.entry
@@ -102,7 +110,8 @@ class TradeJournalV1Engine(BaseEngine):
                     self._change = JournalChange.TRADE_RECORDED
                     self._last_error = None
                     snapshot = self._store_snapshot()
-                    self._persist_completed_record(result.entry)
+                    if getattr(result.entry, "record_state", "closed") == "closed":
+                        self._persist_completed_record(result.entry)
                     self._event_bus.publish(TRADE_JOURNAL_ENTRY_RECORDED, result.entry)
                     self._event_bus.publish(TRADE_PERFORMANCE_ANALYTICS_UPDATED, self._analytics_snapshot)
                     self._event_bus.publish(TRADE_JOURNAL_V1_UPDATED, snapshot)
