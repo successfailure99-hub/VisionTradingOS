@@ -397,6 +397,7 @@ class DesktopOptionChainRuntimeManager:
             underlying_price=underlying_price,
             strikes_each_side=self._settings.strikes_each_side,
         )
+        self._lifecycle.orchestrator.get_runtime(RuntimeInstrument(underlying.value)).set_option_universe(universe)
         state.contracts_resolved = True
         state.option_token_count = len(universe.subscriptions)
         state.last_expiry = universe.expiry.expiry

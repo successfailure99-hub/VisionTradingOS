@@ -40,6 +40,16 @@ from engines.volume_context.models import VolumeContextProfile
 from engines.option_chain.models import OptionChainSnapshot, OptionChainState
 from engines.option_chain_analytics.models import OptionChainAnalyticsSnapshot
 from engines.option_chain.option_chain_engine import OptionChainEngine
+from engines.option_paper_execution import (
+    OptionPaperExecutionStyle,
+    OptionPaperPositionStatus,
+    OptionPaperRiskDecision,
+    OptionPaperPositionSnapshot,
+    OptionPaperRiskSnapshot,
+    OptionTradeCandidate,
+)
+from engines.option_paper_execution.lifecycle import open_option_paper_position, update_option_paper_position
+from engines.option_paper_execution.risk import evaluate_option_paper_risk
 from engines.order_management.enums import ProductType
 from engines.order_management.models import OrderCommand, OrderRequest, OrderSnapshot, OrderState
 from engines.order_management.order_management_engine import OrderManagementEngine
@@ -391,6 +401,10 @@ class SymbolRuntime:
         self._vision_ai_explanation: str | None = None
         self._option_chain_analytics: OptionChainAnalyticsSnapshot | None = None
         self._option_chain_last_error: str | None = None
+        self._option_universe = None
+        self._option_trade_candidate: OptionTradeCandidate | None = None
+        self._option_paper_risk: OptionPaperRiskSnapshot | None = None
+        self._option_paper_position: OptionPaperPositionSnapshot | None = None
         self._paper_recovery = None
         self._last_journal_write_timestamp: datetime | None = None
         self._vision_forensic_trace = VisionForensicTrace(
@@ -712,6 +726,11 @@ class SymbolRuntime:
         self._observe_market_timestamp(state.timestamp)
         return state
 
+    def set_option_universe(self, universe) -> None:
+        if getattr(getattr(universe, "underlying", None), "value", None) != self._instrument.value:
+            raise ValueError("option universe underlying does not match SymbolRuntime instrument")
+        self._option_universe = universe
+
     def process_option_chain_runtime(
         self,
         snapshot: OptionChainSnapshot,
@@ -720,6 +739,7 @@ class SymbolRuntime:
         self.process_option_chain(snapshot)
         if analytics is not None:
             self.process_option_chain_analytics(analytics)
+        self._process_option_paper_market_update()
         return self.snapshot()
 
     def process_option_chain_analytics(self, analytics: OptionChainAnalyticsSnapshot) -> OptionChainAnalyticsSnapshot:
@@ -730,6 +750,21 @@ class SymbolRuntime:
         self._option_chain_last_error = None
         self._observe_market_timestamp(analytics.timestamp)
         return analytics
+
+    def _process_option_paper_market_update(self) -> None:
+        if self._option_paper_position is None or self._option_paper_position.status is not OptionPaperPositionStatus.OPEN:
+            return
+        premium = self._current_option_premium(self._option_paper_position.candidate)
+        timestamp = getattr(self.option_chain_engine.snapshot, "timestamp", None)
+        if premium is None or not isinstance(timestamp, datetime):
+            return
+        underlying_price = getattr(self.option_chain_engine.snapshot, "underlying_price", None)
+        self._option_paper_position = update_option_paper_position(
+            self._option_paper_position,
+            current_premium=premium,
+            underlying_price=underlying_price,
+            timestamp=timestamp,
+        )
 
     def build_market_context(
         self,
@@ -1095,6 +1130,9 @@ class SymbolRuntime:
         self._vision_method_snapshot = None
         self._vision_method_validation_report = None
         self._vision_ai_explanation = None
+        self._option_trade_candidate = None
+        self._option_paper_risk = None
+        self._option_paper_position = None
         self._decision_audit = None
         self._vision_forensic_trace.reset_session(None)
 
@@ -1181,6 +1219,9 @@ class SymbolRuntime:
             vision_method_snapshot=self._vision_method_snapshot,
             vision_method_validation_report=self._vision_method_validation_report,
             vision_trade_candidate=self._vision_trade_candidate,
+            option_trade_candidate=self._option_trade_candidate,
+            option_paper_risk=self._option_paper_risk,
+            option_paper_position=self._option_paper_position,
             canonical_paper_position=self._canonical_paper_position(),
             journal_persistence=self._journal_persistence_snapshot(),
             decision_audit=self._decision_audit,
@@ -1198,6 +1239,16 @@ class SymbolRuntime:
         )
 
     def _process_paper_tick(self, tick: Tick) -> None:
+        if self._option_paper_position is not None and self._option_paper_position.status is OptionPaperPositionStatus.OPEN:
+            premium = self._current_option_premium(self._option_paper_position.candidate)
+            if premium is not None:
+                self._option_paper_position = update_option_paper_position(
+                    self._option_paper_position,
+                    current_premium=premium,
+                    underlying_price=tick.last_price,
+                    timestamp=tick.timestamp,
+                )
+            return
         if self._vision_strategy_decision_v2 is not None or self._canonical_lifecycle_position() is not None:
             self._process_trade_lifecycle_price(tick)
             return
@@ -1212,6 +1263,22 @@ class SymbolRuntime:
             updated = self.trade_plan_engine.record_paper_trade_close(realized_pnl=record.net_pnl)
             if updated is not None:
                 self.risk_engine.record_decision(updated)
+
+    def _current_option_premium(self, candidate: OptionTradeCandidate) -> float | None:
+        snapshot = self.option_chain_engine.snapshot
+        if snapshot is None:
+            return None
+        for strike in snapshot.strikes:
+            if strike.strike_price != candidate.strike:
+                continue
+            leg = strike.put if candidate.option_type.value == "put" else strike.call
+            if leg is None:
+                return None
+            if leg.bid_price is not None and leg.bid_price > 0:
+                return float(leg.bid_price)
+            if leg.last_price > 0:
+                return float(leg.last_price)
+        return None
 
     def _shutdown_paper_trading(self) -> None:
         timestamp = self._updated_at or getattr(self._last_tick, "timestamp", None)
@@ -1409,6 +1476,8 @@ class SymbolRuntime:
         self._vision_ai_explanation = _vision_method_explanation(candidate, validation_report)
         if not _is_actionable_vision_candidate(candidate):
             self._vision_strategy_decision_v2 = None
+            self._option_trade_candidate = None
+            self._option_paper_risk = None
             self._record_decision_audit(
                 "Vision Method",
                 f"Vision Method candidate blocked: {candidate.reason}",
@@ -1422,6 +1491,15 @@ class SymbolRuntime:
             self._record_vision_forensic_trace(snapshot, validation_report, candidate)
             return candidate
 
+        if (
+            self._configuration.directional_option_selling_configuration.execution_style
+            is OptionPaperExecutionStyle.DIRECTIONAL_OPTION_SELLING_PAPER
+        ):
+            self._process_directional_option_paper_trade(candidate, snapshot, validation_report)
+            self._last_vision_trade_identity = identity
+            self._record_vision_forensic_trace(snapshot, validation_report, candidate)
+            return candidate
+
         strategy = self._build_vision_strategy_decision(candidate)
         self._vision_strategy_decision_v2 = strategy
         self._last_vision_trade_identity = identity
@@ -1432,6 +1510,74 @@ class SymbolRuntime:
         )
         self._record_vision_forensic_trace(snapshot, validation_report, candidate)
         return candidate
+
+    def _process_directional_option_paper_trade(
+        self,
+        candidate: TradeCandidate,
+        snapshot: VisionMethodSnapshot,
+        validation_report: VisionMethodValidationReport,
+    ) -> None:
+        config = self._configuration.directional_option_selling_configuration
+        if self._option_paper_position is not None and self._option_paper_position.status is OptionPaperPositionStatus.OPEN:
+            self._record_decision_audit(
+                "Option Paper Risk",
+                "Existing directional option paper position is already open.",
+                vision_trade_candidate=candidate,
+            )
+            return
+        runtime_session = self._runtime_trading_session(candidate.timestamp)
+        if runtime_session.trading_date is None:
+            self._record_decision_audit("Option Paper", "Runtime trading date unavailable.", vision_trade_candidate=candidate)
+            return
+        if self._option_universe is None:
+            self._record_decision_audit("Option Paper", "Canonical option universe unavailable.", vision_trade_candidate=candidate)
+            return
+        option_snapshot = self.option_chain_engine.snapshot
+        if option_snapshot is None:
+            self._record_decision_audit("Option Paper", "Canonical option-chain snapshot unavailable.", vision_trade_candidate=candidate)
+            return
+        try:
+            from engines.option_paper_execution.selector import build_directional_option_trade_candidate
+
+            option_candidate = build_directional_option_trade_candidate(
+                trade_candidate=candidate,
+                vision_snapshot=snapshot,
+                validation_report=validation_report,
+                option_universe=self._option_universe,
+                option_chain_snapshot=option_snapshot,
+                configuration=config,
+                runtime_session_id=_runtime_session_id(runtime_session),
+                trading_date=runtime_session.trading_date,
+            )
+            risk = evaluate_option_paper_risk(
+                option_candidate,
+                config,
+                open_position_exists=self._option_paper_position is not None
+                and self._option_paper_position.status is OptionPaperPositionStatus.OPEN,
+            )
+        except Exception as exc:
+            self._record_decision_audit(
+                "Option Paper",
+                f"Directional option paper candidate unavailable: {_safe_error(exc)}",
+                vision_trade_candidate=candidate,
+            )
+            return
+        self._option_trade_candidate = option_candidate
+        self._option_paper_risk = risk
+        if risk.decision not in {OptionPaperRiskDecision.APPROVED, OptionPaperRiskDecision.APPROVED_REDUCED}:
+            self._record_decision_audit(
+                "Option Paper Risk",
+                risk.reason,
+                vision_trade_candidate=candidate,
+            )
+            return
+        self._option_paper_position = open_option_paper_position(risk)
+        self._record_decision_audit(
+            "NONE",
+            "OSE-1 directional option-selling paper chain accepted the candidate.",
+            rejected=False,
+            vision_trade_candidate=candidate,
+        )
 
     def _record_vision_forensic_trace(
         self,
@@ -1904,6 +2050,44 @@ class SymbolRuntime:
         return lifecycle.position_snapshot.active_position
 
     def _canonical_paper_position(self) -> RuntimePaperPositionSnapshot | None:
+        if self._option_paper_position is not None:
+            position = self._option_paper_position
+            risk = self._option_paper_risk
+            candidate = self._vision_trade_candidate
+            option_candidate = self._option_trade_candidate
+            risk_state = getattr(getattr(risk, "decision", None), "value", "-")
+            blocking_reason = getattr(risk, "reason", "-") if risk is not None and risk.approved_quantity == 0 else "-"
+            return RuntimePaperPositionSnapshot(
+                trade_id=position.position_id,
+                instrument=self._instrument,
+                source="VISION_METHOD_OPTION_SELLING_PAPER",
+                candidate_state=getattr(getattr(candidate, "candidate_state", None), "value", "-"),
+                direction=getattr(getattr(option_candidate, "underlying_direction", None), "value", "-"),
+                status=position.status.value,
+                lifecycle_state="option_paper",
+                risk_state=risk_state,
+                candidate_reference=getattr(option_candidate, "candidate_id", "-"),
+                vision_method_snapshot_reference=getattr(option_candidate, "source_vision_reference", "-"),
+                validation_report_reference=getattr(candidate, "validation_reference", "-"),
+                risk_reference=f"OSE1:{risk_state}",
+                entry_timestamp=position.opened_at,
+                entry_price=position.entry_premium,
+                current_price=position.current_premium,
+                quantity=position.quantity,
+                stop_reference="Premium stop",
+                target_reference="Premium target",
+                stop_price=getattr(risk, "stop_premium", None),
+                target_price=getattr(risk, "target_premium", None),
+                gross_pnl=position.total_pnl,
+                fees=0.0,
+                slippage=0.0,
+                net_pnl=position.total_pnl,
+                unrealized_pnl=position.unrealized_pnl,
+                realized_pnl=position.realized_pnl,
+                blocking_reason=blocking_reason,
+                recovery_status="OPTION_PAPER",
+                updated_at=position.updated_at,
+            )
         position = self._canonical_lifecycle_position()
         if position is None:
             if self._vision_trade_candidate is not None:
@@ -3201,6 +3385,12 @@ def _canonical_paper_trade_state(canonical: RuntimePaperPositionSnapshot | None,
     if canonical is not None:
         return f"VISION_METHOD:{canonical.status}"
     return _paper_trade_state(legacy_snapshot)
+
+
+def _runtime_session_id(session: RuntimeTradingSession) -> str:
+    trading_date = session.trading_date.isoformat() if session.trading_date is not None else "unknown"
+    timestamp = session.market_timestamp.isoformat() if session.market_timestamp is not None else "unknown"
+    return ":".join((session.instrument.value, trading_date, timestamp))
 
 def _paper_trade_state(snapshot) -> str:
     if snapshot is None:

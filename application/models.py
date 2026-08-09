@@ -43,6 +43,12 @@ from engines.volume_context.models import (
 )
 from engines.option_chain.models import OptionChainSnapshot, OptionChainState
 from engines.option_chain_analytics.models import OptionChainAnalyticsSnapshot
+from engines.option_paper_execution.models import (
+    DirectionalOptionSellingConfiguration,
+    OptionPaperPositionSnapshot,
+    OptionPaperRiskSnapshot,
+    OptionTradeCandidate,
+)
 from engines.order_management.models import OrderState
 from engines.paper_trading.configuration import PaperTradingConfiguration
 from engines.paper_trading.models import PaperTradingSnapshot
@@ -174,6 +180,9 @@ class RuntimeConfiguration:
     live_validation_configuration: LiveMarketValidationConfiguration | None = None
     historical_replay_configuration: ReplayConfiguration | None = None
     deterministic_backtest_configuration: BacktestConfiguration | None = None
+    directional_option_selling_configuration: DirectionalOptionSellingConfiguration = (
+        DirectionalOptionSellingConfiguration()
+    )
     adr_period: int = 20
     moving_average_periods: tuple[int, ...] = (20, 50, 200)
     momentum_period: int = 14
@@ -210,6 +219,8 @@ class RuntimeConfiguration:
             raise TypeError("RuntimeConfiguration historical_replay_configuration must be ReplayConfiguration or None.")
         if self.deterministic_backtest_configuration is not None and not isinstance(self.deterministic_backtest_configuration, BacktestConfiguration):
             raise TypeError("RuntimeConfiguration deterministic_backtest_configuration must be BacktestConfiguration or None.")
+        if not isinstance(self.directional_option_selling_configuration, DirectionalOptionSellingConfiguration):
+            raise TypeError("RuntimeConfiguration directional_option_selling_configuration must be DirectionalOptionSellingConfiguration.")
         if isinstance(self.adr_period, bool) or not isinstance(self.adr_period, int) or self.adr_period not in {5, 10, 20, 50}:
             raise ValueError("RuntimeConfiguration adr_period must be one of 5, 10, 20 or 50.")
         if not isinstance(self.exchange_holidays, tuple):
@@ -678,6 +689,9 @@ class RuntimeSnapshot:
     vision_method_snapshot: VisionMethodSnapshot | None = None
     vision_method_validation_report: VisionMethodValidationReport | None = None
     vision_trade_candidate: TradeCandidate | None = None
+    option_trade_candidate: OptionTradeCandidate | None = None
+    option_paper_risk: OptionPaperRiskSnapshot | None = None
+    option_paper_position: OptionPaperPositionSnapshot | None = None
     canonical_paper_position: RuntimePaperPositionSnapshot | None = None
     journal_persistence: RuntimeJournalPersistenceSnapshot | None = None
     decision_audit: "RuntimeDecisionAudit" | None = None
@@ -729,6 +743,12 @@ class RuntimeSnapshot:
             raise TypeError("vision_method_snapshot must be VisionMethodSnapshot or None")
         if self.vision_method_validation_report is not None and not isinstance(self.vision_method_validation_report, VisionMethodValidationReport):
             raise TypeError("vision_method_validation_report must be VisionMethodValidationReport or None")
+        if self.option_trade_candidate is not None and not isinstance(self.option_trade_candidate, OptionTradeCandidate):
+            raise TypeError("option_trade_candidate must be OptionTradeCandidate or None")
+        if self.option_paper_risk is not None and not isinstance(self.option_paper_risk, OptionPaperRiskSnapshot):
+            raise TypeError("option_paper_risk must be OptionPaperRiskSnapshot or None")
+        if self.option_paper_position is not None and not isinstance(self.option_paper_position, OptionPaperPositionSnapshot):
+            raise TypeError("option_paper_position must be OptionPaperPositionSnapshot or None")
         if self.canonical_paper_position is not None and not isinstance(self.canonical_paper_position, RuntimePaperPositionSnapshot):
             raise TypeError("canonical_paper_position must be RuntimePaperPositionSnapshot or None")
         if self.journal_persistence is not None and not isinstance(self.journal_persistence, RuntimeJournalPersistenceSnapshot):
