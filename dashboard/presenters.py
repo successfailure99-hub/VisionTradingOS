@@ -1220,9 +1220,19 @@ def build_position_view(runtime_snapshot: RuntimeSnapshot) -> DashboardPositionV
     canonical = getattr(runtime_snapshot, "canonical_paper_position", None)
     if canonical is not None:
         has_position = str(getattr(canonical, "status", "")).lower() in {"open", "partially_closed", "objective_reached"}
+        source = getattr(canonical, "source", "-")
+        is_option_paper = source == "VISION_METHOD_OPTION_SELLING_PAPER"
         return DashboardPositionView(
             symbol=_enum_text(runtime_snapshot.symbol),
-            status="Vision Paper Position Open" if has_position else "Vision Paper Position Closed",
+            status=(
+                "Paper Option Position Open"
+                if has_position and is_option_paper
+                else "Paper Option Position Closed"
+                if is_option_paper
+                else "Vision Paper Position Open"
+                if has_position
+                else "Vision Paper Position Closed"
+            ),
             has_position=has_position,
             side=_enum_text(getattr(canonical, "direction", None)),
             quantity=getattr(canonical, "quantity", None),
@@ -1237,7 +1247,7 @@ def build_position_view(runtime_snapshot: RuntimeSnapshot) -> DashboardPositionV
             opened_at=getattr(canonical, "entry_timestamp", None),
             closed_at=None if has_position else getattr(canonical, "updated_at", None),
             exit_type=_enum_text(getattr(canonical, "status", None)),
-            trade_source=getattr(canonical, "source", "-"),
+            trade_source=source,
             trade_id=getattr(canonical, "trade_id", None),
             candidate_state=getattr(canonical, "candidate_state", "-"),
             risk_state=getattr(canonical, "risk_state", "-"),

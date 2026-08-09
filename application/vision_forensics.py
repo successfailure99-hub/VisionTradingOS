@@ -135,10 +135,15 @@ class VisionForensicTrace:
         setup = snapshot.setup_qualification_context
         option = snapshot.option_confirmation_context
         risk_decision = getattr(risk_snapshot, "decision", None)
-        approved = risk_decision in {RiskDecisionV2.APPROVED, RiskDecisionV2.APPROVED_REDUCED}
+        risk_decision_value = getattr(risk_decision, "value", str(risk_decision or ""))
+        approved = risk_decision in {RiskDecisionV2.APPROVED, RiskDecisionV2.APPROVED_REDUCED} or risk_decision_value in {
+            "approved",
+            "approved_reduced",
+        }
         paper_status = str(getattr(paper_position, "status", "")).lower()
         paper_opened = bool(paper_status in {"open", "partially_closed", "objective_reached"} or getattr(paper_position, "has_open_position", False))
-        paper_closed = bool(paper_status in {"closed", "invalidated", "cancelled"})
+        paper_closed = bool(paper_status in {"closed", "invalidated", "cancelled", "target_hit", "stop_hit"})
+        option_candidate = getattr(risk_snapshot, "candidate", None)
         return {
             "runtime_session_id": self._runtime_session_id,
             "session_trading_date": _iso_date(self._session_trading_date),
@@ -221,9 +226,26 @@ class VisionForensicTrace:
             "risk": {
                 "evaluated": risk_snapshot is not None and trade_candidate.direction is not TradeCandidateDirection.NONE,
                 "approved": approved,
+                "decision": risk_decision_value,
+                "approved_quantity": getattr(risk_snapshot, "approved_quantity", None),
                 "rejection_reason": getattr(decision_audit, "reason", None)
                 if getattr(decision_audit, "rejected_at", None) == "Risk"
                 else None,
+            },
+            "option_paper": {
+                "constructor_invoked": option_candidate is not None,
+                "selected_contract": getattr(option_candidate, "trading_symbol", None),
+                "instrument_token": getattr(option_candidate, "instrument_token", None),
+                "expiry": _iso_date(getattr(option_candidate, "expiry", None)),
+                "strike": getattr(option_candidate, "strike", None),
+                "option_type": getattr(getattr(option_candidate, "option_type", None), "value", None),
+                "transaction_type": getattr(getattr(option_candidate, "transaction_type", None), "value", None),
+                "moneyness": getattr(getattr(option_candidate, "moneyness", None), "value", None),
+                "itm_steps": getattr(option_candidate, "itm_steps", None),
+                "entry_premium": getattr(risk_snapshot, "entry_premium", None),
+                "stop_premium": getattr(risk_snapshot, "stop_premium", None),
+                "target_premium": getattr(risk_snapshot, "target_premium", None),
+                "risk_result": risk_decision_value,
             },
             "paper": {
                 "position_opened": paper_opened,

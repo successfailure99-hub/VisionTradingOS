@@ -1600,7 +1600,7 @@ class SymbolRuntime:
             source_candle=source_candle,
             runtime_timestamp=snapshot.timestamp,
             trade_candidate=candidate,
-            risk_snapshot=self.risk_management_v2_engine.snapshot,
+            risk_snapshot=self._option_paper_risk or self.risk_management_v2_engine.snapshot,
             paper_position=self._canonical_paper_position(),
             decision_audit=self._decision_audit,
             option_sync_status=option_sync_status,

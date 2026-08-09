@@ -39,6 +39,13 @@ def build_directional_option_trade_candidate(
         raise ValueError("option chain snapshot underlying does not match option universe")
     if option_chain_snapshot.expiry_date != option_universe.expiry.expiry:
         raise ValueError("option chain snapshot expiry does not match option universe")
+    if option_chain_snapshot.expiry_date < trading_date:
+        raise ValueError("expired option contract cannot be selected")
+    if option_chain_snapshot.timestamp.date() != trading_date:
+        raise ValueError("option chain snapshot trading session does not match runtime trading date")
+    age_seconds = abs((trade_candidate.timestamp - option_chain_snapshot.timestamp).total_seconds())
+    if age_seconds > configuration.maximum_quote_age_seconds:
+        raise ValueError("stale option premium cannot be selected")
 
     option_type = OptionType.PUT if trade_candidate.direction is TradeCandidateDirection.LONG else OptionType.CALL
     underlying_direction = (
