@@ -200,6 +200,7 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
     liquidity = snapshot.liquidity_context
     setup = snapshot.setup_qualification_context
     option = snapshot.option_confirmation_context
+    entry = snapshot.entry_location_context
     values = {
         "Instrument": snapshot.instrument.value,
         "Timeframe": snapshot.timeframe.value,
@@ -252,6 +253,19 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
         "Option Supporting Factors": formatters.joined(option.supporting_factors),
         "Option Contradicting Factors": formatters.joined(option.contradicting_factors),
         "Option Neutral Factors": formatters.joined(option.neutral_factors),
+        "Direction": entry.direction,
+        "Direction Quality": entry.direction_quality.value,
+        "Entry Location": entry.entry_location_state.value,
+        "Entry Location Quality": entry.entry_location_quality.value,
+        "Remaining Room": f"{entry.remaining_room:.2f}" if entry.remaining_room is not None else "-",
+        "Nearest Destination": entry.nearest_target_or_destination,
+        "Nearest Invalidation": entry.nearest_invalidation,
+        "Move Maturity": entry.move_maturity.value,
+        "Chase Risk": entry.chase_risk.value,
+        "Retest State": entry.retest_state,
+        "Location Supporting Reasons": formatters.joined(entry.location_supporting_reasons),
+        "Location Warning Reasons": formatters.joined(entry.location_warning_reasons),
+        "Location Blocking Reasons": formatters.joined(entry.location_blocking_reasons),
         "Method Candidate State": snapshot.candidate_state.value,
         "Method Quality": snapshot.quality,
         "Assembly Failures": _assembly_failures(snapshot),
@@ -517,6 +531,14 @@ def _diagnostic_values(status: VisionMethodLiveStatus) -> dict[str, str]:
                     "Option Neutral Factors": failure.validation_message,
                 }
             )
+        elif "entry location" in stage:
+            values.update(
+                {
+                    "Entry Location": marker,
+                    "Entry Location Quality": marker,
+                    "Location Warning Reasons": failure.validation_message,
+                }
+            )
     return values
 
 
@@ -694,6 +716,24 @@ _SECTION_FIELDS = (
             "Option Supporting Factors",
             "Option Contradicting Factors",
             "Option Neutral Factors",
+        ),
+    ),
+    (
+        "Entry Location",
+        (
+            "Direction",
+            "Direction Quality",
+            "Entry Location",
+            "Entry Location Quality",
+            "Remaining Room",
+            "Nearest Destination",
+            "Nearest Invalidation",
+            "Move Maturity",
+            "Chase Risk",
+            "Retest State",
+            "Location Supporting Reasons",
+            "Location Warning Reasons",
+            "Location Blocking Reasons",
         ),
     ),
     (

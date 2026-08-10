@@ -217,12 +217,13 @@ def test_prepare_state_and_unavailable_option_are_traced_without_hard_blocking(t
     )
 
     row = _read_rows(tmp_path / "trace.jsonl")[0]
-    assert snapshot.candidate_state is VisionCandidateState.PREPARE_LONG
-    assert candidate.candidate_state is TradeCandidateState.WAITING_LONG
+    assert snapshot.candidate_state is VisionCandidateState.LONG_ELIGIBLE
+    assert candidate.candidate_state is TradeCandidateState.LONG
     assert row["option_confirmation"]["state"] == "unavailable"
+    assert row["entry_location"]["entry_location_state"] == "acceptable"
     assert row["runtime_adapter"]["trade_candidate_created"] is True
     assert row["risk"]["evaluated"] is False
-    assert trace.counters.prepare_long == 1
+    assert trace.counters.long_eligible == 1
 
 
 def test_historical_warmup_seeds_complete_five_minute_decision_candles():

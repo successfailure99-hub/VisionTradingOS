@@ -257,7 +257,7 @@ def test_valid_bullish_snapshot_produces_ordered_validation_trace():
 
     assert report.validation_result is VisionMethodValidationResult.VALID
     assert report.candidate_state is VisionCandidateState.LONG_ELIGIBLE
-    assert report.metrics.completed_steps == 10
+    assert report.metrics.completed_steps == 11
     assert report.metrics.failed_steps == 0
     assert report.metrics.missing_steps == 0
     assert tuple(step.stage for step in report.trace[:3]) == ("CPR", "Camarilla", "Previous Day")
@@ -328,10 +328,12 @@ def test_missing_option_confirmation_continues_as_partial_methodology():
     report = validate_vision_method(snapshot(option_confirmation_context=option(state=VisionOptionConfirmation.UNAVAILABLE)))
 
     assert report.validation_result is VisionMethodValidationResult.PARTIAL
-    assert report.candidate_state is VisionCandidateState.PREPARE_LONG
+    assert report.candidate_state is VisionCandidateState.LONG_ELIGIBLE
     assert report.metrics.blocking_stage is None
     assert report.trace[9].stage == "Option Chain"
     assert report.trace[9].status == "missing"
+    assert report.trace[10].stage == "Entry Location"
+    assert report.trace[10].status == "pass"
     assert report.blocking_reasons == ()
 
 

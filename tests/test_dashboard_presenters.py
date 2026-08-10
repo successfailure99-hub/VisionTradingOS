@@ -208,12 +208,12 @@ def test_ai_and_strategy_views_reflect_canonical_vision_candidate_from_runtime_s
     ai = build_ai_view(runtime)
     strategy = build_strategy_view(runtime)
 
-    assert validation.candidate_state.value == "prepare_long"
-    assert candidate.candidate_state.value == "waiting_long"
-    assert ai.market_summary == "Vision Method: Waiting Long"
-    assert ai.trading_suitability == "Waiting Long"
+    assert validation.candidate_state.value == "long_eligible"
+    assert candidate.candidate_state.value == "long"
+    assert ai.market_summary == "Vision Method: Long"
+    assert ai.trading_suitability == "Long"
     assert ai.agreement == "Vision Method"
-    assert strategy.candidate_state == "Waiting Long"
+    assert strategy.candidate_state == "Long"
     assert strategy.candidate_direction == "Long"
     assert strategy.candidate_validation == "Partial"
     assert strategy.candidate_source == "VISION_METHOD"

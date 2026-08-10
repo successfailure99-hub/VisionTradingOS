@@ -259,6 +259,13 @@ def _trace(snapshot: VisionMethodSnapshot) -> tuple[VisionMethodValidationTraceS
             _option_status(option.confirmation_state),
             "; ".join(option.contradicting_factors or option.neutral_factors),
         ),
+        VisionMethodValidationTraceStep(
+            11,
+            "Entry Location",
+            snapshot.entry_location_context.entry_location_state.value,
+            _entry_location_status(snapshot),
+            _entry_location_detail(snapshot),
+        ),
         VisionMethodValidationTraceStep(None, "FINAL", snapshot.candidate_state.value, "pass", snapshot.quality),
     )
     return trace
@@ -442,8 +449,33 @@ def _option_status(state: VisionOptionConfirmation) -> str:
     return "pass"
 
 
+def _entry_location_status(snapshot: VisionMethodSnapshot) -> str:
+    context = snapshot.entry_location_context
+    if context.entry_location_quality is VisionLevelQuality.INSUFFICIENT:
+        return "missing"
+    return "pass"
+
+
+def _entry_location_detail(snapshot: VisionMethodSnapshot) -> str:
+    context = snapshot.entry_location_context
+    parts = (
+        f"direction={context.direction}",
+        f"direction_quality={context.direction_quality.value}",
+        f"location_quality={context.entry_location_quality.value}",
+        f"remaining_room={context.remaining_room:.2f}" if context.remaining_room is not None else "remaining_room=unknown",
+        f"destination={context.nearest_target_or_destination}",
+        f"maturity={context.move_maturity.value}",
+        f"chase_risk={context.chase_risk.value}",
+        f"retest={context.retest_state}",
+    )
+    reasons = context.location_blocking_reasons or context.location_warning_reasons
+    if reasons:
+        return "; ".join((*parts, *reasons))
+    return "; ".join(parts)
+
+
 def _trace_step_blocks(step: VisionMethodValidationTraceStep) -> bool:
-    return step.stage not in {"ADR", "VWAP", "Liquidity", "Option Chain"}
+    return step.stage not in {"ADR", "VWAP", "Liquidity", "Option Chain", "Entry Location"}
 
 
 def _normalize_trace(values: tuple[VisionMethodValidationTraceStep, ...]) -> tuple[VisionMethodValidationTraceStep, ...]:

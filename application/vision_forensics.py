@@ -134,6 +134,7 @@ class VisionForensicTrace:
         liquidity = snapshot.liquidity_context
         setup = snapshot.setup_qualification_context
         option = snapshot.option_confirmation_context
+        entry = snapshot.entry_location_context
         risk_decision = getattr(risk_snapshot, "decision", None)
         risk_decision_value = getattr(risk_decision, "value", str(risk_decision or ""))
         approved = risk_decision in {RiskDecisionV2.APPROVED, RiskDecisionV2.APPROVED_REDUCED} or risk_decision_value in {
@@ -212,6 +213,21 @@ class VisionForensicTrace:
                 "neutral_factors": option.neutral_factors,
                 "sync_status": option_sync_status,
                 "latency_ms": option_latency_ms,
+            },
+            "entry_location": {
+                "direction": entry.direction,
+                "direction_quality": entry.direction_quality.value,
+                "entry_location_state": entry.entry_location_state.value,
+                "entry_location_quality": entry.entry_location_quality.value,
+                "remaining_room": entry.remaining_room,
+                "nearest_target_or_destination": entry.nearest_target_or_destination,
+                "nearest_invalidation": entry.nearest_invalidation,
+                "move_maturity": entry.move_maturity.value,
+                "retest_state": entry.retest_state,
+                "chase_risk": entry.chase_risk.value,
+                "supporting_reasons": entry.location_supporting_reasons,
+                "warning_reasons": entry.location_warning_reasons,
+                "blocking_reasons": entry.location_blocking_reasons,
             },
             "vision_method": {
                 "candidate_state": snapshot.candidate_state.value,

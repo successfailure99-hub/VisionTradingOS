@@ -25,6 +25,10 @@ from engines.vision_method import (
     VisionCamarillaContext,
     VisionCamarillaZone,
     VisionCandidateState,
+    VisionChaseRisk,
+    VisionDirectionQuality,
+    VisionEntryLocationContext,
+    VisionEntryLocationState,
     VisionFairValueGapDirection,
     VisionLevelContext,
     VisionLevelQuality,
@@ -36,6 +40,7 @@ from engines.vision_method import (
     VisionMitigationState,
     VisionMSS,
     VisionMethodSnapshot,
+    VisionMoveMaturity,
     VisionOpeningContext,
     VisionOpeningLocation,
     VisionOpeningRangeContext,
@@ -227,12 +232,54 @@ def test_enum_contracts_and_serialization_are_deterministic():
     assert VisionOptionConfirmation.CONTRADICTS.value == "contradicts"
     assert VisionCandidateState.PREPARE_LONG.value == "prepare_long"
     assert VisionCandidateState.INSUFFICIENT_DATA.value == "insufficient_data"
+    assert VisionEntryLocationState.ACCEPTABLE.value == "acceptable"
+    assert VisionMoveMaturity.MATURE.value == "mature"
+    assert VisionChaseRisk.HIGH.value == "high"
     assert VisionOpeningRangeState.WAITING.value == "waiting"
     assert VisionOpeningRangeState.FALSE_BREAK.value == "false_break"
     assert VisionBreakDirection.UP.value == "up"
     assert VisionRangeLocation.INSIDE_RANGE.value == "inside_range"
     assert VisionSwingType.HIGH.value == "high"
     assert VisionStructureTrend.BEARISH.value == "bearish"
+
+
+def test_entry_location_context_is_immutable_and_validated():
+    context = VisionEntryLocationContext(
+        direction="Bullish",
+        direction_quality=VisionDirectionQuality.HIGH,
+        entry_location_state=VisionEntryLocationState.ACCEPTABLE,
+        entry_location_quality=VisionLevelQuality.FULL,
+        remaining_room=2.5,
+        nearest_target_or_destination="H4",
+        nearest_invalidation="Below Swing Low",
+        move_maturity=VisionMoveMaturity.DEVELOPING,
+        retest_state="break_above",
+        chase_risk=VisionChaseRisk.LOW,
+        location_supporting_reasons=("Direction confirmed",),
+        location_warning_reasons=(),
+        location_blocking_reasons=(),
+    )
+
+    assert context.direction == "bullish"
+    assert context.remaining_room == 2.5
+    with pytest.raises(FrozenInstanceError):
+        context.direction = "bearish"
+    with pytest.raises(ValueError, match="direction"):
+        VisionEntryLocationContext(
+            direction="sideways",
+            direction_quality=VisionDirectionQuality.HIGH,
+            entry_location_state=VisionEntryLocationState.ACCEPTABLE,
+            entry_location_quality=VisionLevelQuality.FULL,
+            remaining_room=1.0,
+            nearest_target_or_destination="H4",
+            nearest_invalidation="Below Swing Low",
+            move_maturity=VisionMoveMaturity.EARLY,
+            retest_state="break_above",
+            chase_risk=VisionChaseRisk.LOW,
+            location_supporting_reasons=(),
+            location_warning_reasons=(),
+            location_blocking_reasons=(),
+        )
     assert VisionStructurePattern.HH.value == "hh"
     assert VisionStructurePattern.UNKNOWN.value == "unknown"
     assert VisionLiquidityPool.BUY_SIDE.value == "buy_side"

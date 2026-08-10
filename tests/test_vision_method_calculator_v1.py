@@ -18,6 +18,7 @@ from engines.vision_method import (
     VisionCPRRelation,
     VisionCamarillaContext,
     VisionCamarillaZone,
+    VisionChaseRisk,
     VisionLevelContext,
     VisionLevelQuality,
     VisionLiquidityContext,
@@ -49,6 +50,9 @@ from engines.vision_method import (
     VisionVWAPContext,
     VisionVWAPRelation,
     VisionCandidateState,
+    VisionDirectionQuality,
+    VisionEntryLocationState,
+    VisionMoveMaturity,
     calculate_vision_method_snapshot,
 )
 
@@ -76,13 +80,14 @@ def level(
     cpr: VisionCPRRelation = VisionCPRRelation.ABOVE_CPR,
     zone: VisionCamarillaZone = VisionCamarillaZone.H3_H4,
     vwap: VisionVWAPRelation = VisionVWAPRelation.ABOVE_VWAP,
+    adr_used: float = 32.0,
     quality: VisionLevelQuality = VisionLevelQuality.FULL,
 ) -> VisionLevelContext:
     return VisionLevelContext(
         cpr_context=VisionCPRContext(cpr, 99.0, 101.0, 100.0, 2.0, 2.0),
         camarilla_context=VisionCamarillaContext(zone, 103.0, 104.0, 105.0, 106.0, 97.0, 96.0, 95.0, 94.0),
         previous_day_context=previous_day(),
-        adr_context=VisionADRContext(32.0, 68.0, False, False, "normal", "normal"),
+        adr_context=VisionADRContext(adr_used, max(0.0, 100.0 - adr_used), False, False, "normal", "normal"),
         vwap_context=VisionVWAPContext(vwap, 100.0, 1.0, 1.0),
         quality=quality,
     )
@@ -260,6 +265,9 @@ def test_complete_bullish_methodology_produces_long_eligible_high_quality_snapsh
     assert result.opening_range_context.range_complete is True
     assert result.setup_qualification_context.setup_type is VisionSetupType.TREND_CONTINUATION
     assert result.option_confirmation_context.confirmation_state is VisionOptionConfirmation.CONFIRMS
+    assert result.entry_location_context.direction == "bullish"
+    assert result.entry_location_context.direction_quality is VisionDirectionQuality.HIGH
+    assert result.entry_location_context.entry_location_state is VisionEntryLocationState.ACCEPTABLE
     assert "Above CPR" in result.supporting_reasons
     assert "Put writing supports setup" in result.supporting_reasons
 
@@ -320,7 +328,7 @@ def test_observe_wait_prepare_avoid_and_insufficient_states_are_deterministic():
     assert "Option contradiction: Call writing contradicts setup" in contradicted.supporting_reasons
 
     insufficient = calculate_vision_method_snapshot(request(option_confirmation_context=option(state=VisionOptionConfirmation.UNAVAILABLE)))
-    assert insufficient.candidate_state is VisionCandidateState.PREPARE_LONG
+    assert insufficient.candidate_state is VisionCandidateState.LONG_ELIGIBLE
     assert insufficient.quality == "low"
     assert insufficient.blocking_reasons == ()
 
@@ -334,8 +342,53 @@ def test_supporting_evidence_never_blocks_candidate_evaluation():
     assert missing_liquidity.blocking_reasons == ()
 
     missing_option = calculate_vision_method_snapshot(request(option_confirmation_context=option(state=VisionOptionConfirmation.UNAVAILABLE)))
-    assert missing_option.candidate_state is not VisionCandidateState.INSUFFICIENT_DATA
+    assert missing_option.candidate_state is VisionCandidateState.LONG_ELIGIBLE
     assert missing_option.blocking_reasons == ()
+
+
+def test_neutral_or_unavailable_option_does_not_veto_good_direction_and_location():
+    neutral = calculate_vision_method_snapshot(request(option_confirmation_context=option(state=VisionOptionConfirmation.NEUTRAL)))
+    unavailable = calculate_vision_method_snapshot(request(option_confirmation_context=option(state=VisionOptionConfirmation.UNAVAILABLE)))
+
+    assert neutral.candidate_state is VisionCandidateState.LONG_ELIGIBLE
+    assert neutral.quality == "medium"
+    assert unavailable.candidate_state is VisionCandidateState.LONG_ELIGIBLE
+    assert unavailable.quality == "low"
+    assert unavailable.entry_location_context.entry_location_state is VisionEntryLocationState.ACCEPTABLE
+
+
+def test_poor_late_entry_location_preserves_direction_without_creating_fresh_entry():
+    result = calculate_vision_method_snapshot(
+        request(
+            current_price=103.9,
+            level_context=level(adr_used=88.0),
+            option_confirmation_context=option(state=VisionOptionConfirmation.NEUTRAL),
+        )
+    )
+
+    assert result.candidate_state is VisionCandidateState.PREPARE_LONG
+    assert result.entry_location_context.entry_location_state is VisionEntryLocationState.WAIT_FOR_RETEST
+    assert result.entry_location_context.move_maturity is VisionMoveMaturity.MATURE
+    assert result.entry_location_context.chase_risk is VisionChaseRisk.HIGH
+    assert "Entry location is not suitable for a fresh entry" in result.entry_location_context.location_blocking_reasons
+
+
+def test_bearish_retest_with_neutral_options_can_be_short_eligible():
+    result = calculate_vision_method_snapshot(
+        request(
+            current_price=99.0,
+            level_context=level(cpr=VisionCPRRelation.BELOW_CPR, zone=VisionCamarillaZone.L3_L4, vwap=VisionVWAPRelation.BELOW_VWAP),
+            opening_range_context=opening(state=VisionOpeningRangeState.RETEST, direction=VisionBreakDirection.DOWN, location=VisionRangeLocation.BELOW_RANGE),
+            structure_context=structure(trend=VisionStructureTrend.BEARISH, pattern=VisionStructurePattern.LL),
+            structure_event_context=event(bos=VisionBOS.BEARISH_BOS),
+            setup_qualification_context=setup(supporting=("Below CPR", "Below L3", "Bearish BOS")),
+            option_confirmation_context=option(state=VisionOptionConfirmation.NEUTRAL),
+        )
+    )
+
+    assert result.candidate_state is VisionCandidateState.SHORT_ELIGIBLE
+    assert result.entry_location_context.direction == "bearish"
+    assert result.entry_location_context.entry_location_state is VisionEntryLocationState.FAVORABLE
 
 
 def test_duplicate_reasons_are_suppressed_preserving_first_seen_order():

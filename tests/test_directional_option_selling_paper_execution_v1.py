@@ -410,6 +410,29 @@ def test_symbol_runtime_directional_option_selling_stays_paper_only_and_has_no_s
     assert build_position_view(view).last_price == view.option_paper_position.current_premium
 
 
+def test_symbol_runtime_blocks_fresh_vision_option_paper_candidate_after_market_close():
+    item = SymbolRuntime(
+        EventBus(),
+        RuntimeConfiguration(option_expiry_date=EXPIRY, directional_option_selling_configuration=option_config()),
+        RuntimeInstrument.NIFTY,
+    )
+    item.start()
+
+    post_market = NOW.replace(hour=16, minute=0)
+    method = snapshot(timestamp=post_market)
+    report = validate_vision_method(method)
+    candidate = item.process_vision_method_paper_trade(method, report)
+    view = item.snapshot()
+
+    assert candidate.candidate_state is TradeCandidateState.LONG
+    assert view.vision_trade_candidate is candidate
+    assert view.option_trade_candidate is None
+    assert view.option_paper_risk is None
+    assert view.option_paper_position is None
+    assert view.decision_audit.rejected_at == "Vision Method"
+    assert "outside live session" in view.decision_audit.reason
+
+
 def _option_position_for_journal(*, method=None, report=None, bearish=False):
     method = method or (bearish_snapshot() if bearish else snapshot())
     report = report or validate_vision_method(method)

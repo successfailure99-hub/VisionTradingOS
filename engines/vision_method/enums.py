@@ -233,3 +233,34 @@ class VisionSetupQuality(str, Enum):
     MEDIUM = "medium"
     LOW = "low"
     INVALID = "invalid"
+
+
+class VisionDirectionQuality(str, Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    INVALID = "invalid"
+
+
+class VisionEntryLocationState(str, Enum):
+    FAVORABLE = "favorable"
+    ACCEPTABLE = "acceptable"
+    POOR = "poor"
+    DO_NOT_CHASE = "do_not_chase"
+    WAIT_FOR_RETEST = "wait_for_retest"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class VisionMoveMaturity(str, Enum):
+    EARLY = "early"
+    DEVELOPING = "developing"
+    MATURE = "mature"
+    EXTENDED = "extended"
+    UNKNOWN = "unknown"
+
+
+class VisionChaseRisk(str, Enum):
+    NONE = "none"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"

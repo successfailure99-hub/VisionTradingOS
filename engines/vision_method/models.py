@@ -7,7 +7,7 @@ evidence contexts without recalculating indicator values or producing trades.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from application.enums import RuntimeInstrument
@@ -22,7 +22,10 @@ from .enums import (
     VisionCPRRelation,
     VisionCamarillaZone,
     VisionCandidateState,
+    VisionChaseRisk,
     VisionContextAssemblyStatus,
+    VisionDirectionQuality,
+    VisionEntryLocationState,
     VisionFairValueGapDirection,
     VisionGapType,
     VisionLevelQuality,
@@ -30,6 +33,7 @@ from .enums import (
     VisionLiquiditySweep,
     VisionMarketRegime,
     VisionMitigationState,
+    VisionMoveMaturity,
     VisionOpeningLocation,
     VisionOpeningRangeState,
     VisionOrderBlockDirection,
@@ -543,6 +547,50 @@ class VisionOptionConfirmationContext:
 
 
 @dataclass(frozen=True, slots=True)
+class VisionEntryLocationContext:
+    direction: str
+    direction_quality: VisionDirectionQuality
+    entry_location_state: VisionEntryLocationState
+    entry_location_quality: VisionLevelQuality
+    remaining_room: float | None
+    nearest_target_or_destination: str
+    nearest_invalidation: str
+    move_maturity: VisionMoveMaturity
+    retest_state: str
+    chase_risk: VisionChaseRisk
+    location_supporting_reasons: tuple[str, ...]
+    location_warning_reasons: tuple[str, ...]
+    location_blocking_reasons: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        direction = _normalize_text(self.direction, "direction").casefold()
+        if direction not in {"bullish", "bearish", "neutral", "unknown"}:
+            raise ValueError("direction must be bullish, bearish, neutral, or unknown.")
+        object.__setattr__(self, "direction", direction)
+        if not isinstance(self.direction_quality, VisionDirectionQuality):
+            raise TypeError("direction_quality must be VisionDirectionQuality.")
+        if not isinstance(self.entry_location_state, VisionEntryLocationState):
+            raise TypeError("entry_location_state must be VisionEntryLocationState.")
+        if not isinstance(self.entry_location_quality, VisionLevelQuality):
+            raise TypeError("entry_location_quality must be VisionLevelQuality.")
+        if self.remaining_room is not None:
+            room = _finite_number(self.remaining_room, "remaining_room")
+            if room < 0:
+                raise ValueError("remaining_room cannot be negative.")
+            object.__setattr__(self, "remaining_room", room)
+        object.__setattr__(self, "nearest_target_or_destination", _normalize_text(self.nearest_target_or_destination, "nearest_target_or_destination"))
+        object.__setattr__(self, "nearest_invalidation", _normalize_text(self.nearest_invalidation, "nearest_invalidation"))
+        if not isinstance(self.move_maturity, VisionMoveMaturity):
+            raise TypeError("move_maturity must be VisionMoveMaturity.")
+        object.__setattr__(self, "retest_state", _normalize_text(self.retest_state, "retest_state"))
+        if not isinstance(self.chase_risk, VisionChaseRisk):
+            raise TypeError("chase_risk must be VisionChaseRisk.")
+        object.__setattr__(self, "location_supporting_reasons", _normalize_unique_text_tuple(self.location_supporting_reasons, "location_supporting_reasons"))
+        object.__setattr__(self, "location_warning_reasons", _normalize_unique_text_tuple(self.location_warning_reasons, "location_warning_reasons"))
+        object.__setattr__(self, "location_blocking_reasons", _normalize_unique_text_tuple(self.location_blocking_reasons, "location_blocking_reasons"))
+
+
+@dataclass(frozen=True, slots=True)
 class VisionLevelContext:
     cpr_context: VisionCPRContext
     camarilla_context: VisionCamarillaContext
@@ -587,6 +635,21 @@ class VisionMethodSnapshot:
     blocking_reasons: tuple[str, ...]
     supporting_reasons: tuple[str, ...]
     quality: str
+    entry_location_context: VisionEntryLocationContext = field(default_factory=lambda: VisionEntryLocationContext(
+        direction="unknown",
+        direction_quality=VisionDirectionQuality.INVALID,
+        entry_location_state=VisionEntryLocationState.INSUFFICIENT_DATA,
+        entry_location_quality=VisionLevelQuality.INSUFFICIENT,
+        remaining_room=None,
+        nearest_target_or_destination="unknown",
+        nearest_invalidation="unknown",
+        move_maturity=VisionMoveMaturity.UNKNOWN,
+        retest_state="unknown",
+        chase_risk=VisionChaseRisk.HIGH,
+        location_supporting_reasons=(),
+        location_warning_reasons=("Entry location not evaluated",),
+        location_blocking_reasons=("Entry location unavailable",),
+    ))
     assembly_failures: tuple[VisionContextAssemblyFailure, ...] = ()
 
     def __post_init__(self) -> None:
@@ -617,6 +680,8 @@ class VisionMethodSnapshot:
             raise TypeError("market_regime must be VisionMarketRegime.")
         if not isinstance(self.candidate_state, VisionCandidateState):
             raise TypeError("candidate_state must be VisionCandidateState.")
+        if not isinstance(self.entry_location_context, VisionEntryLocationContext):
+            raise TypeError("entry_location_context must be VisionEntryLocationContext.")
         object.__setattr__(self, "blocking_reasons", _normalize_text_tuple(self.blocking_reasons, "blocking_reasons"))
         object.__setattr__(self, "supporting_reasons", _normalize_text_tuple(self.supporting_reasons, "supporting_reasons"))
         object.__setattr__(self, "quality", _normalize_text(self.quality, "quality"))

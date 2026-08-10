@@ -63,6 +63,9 @@ def test_inspector_renders_snapshot_header_and_method_sections():
     assert panel._labels["Camarilla Zone"].text() == "h3_h4"
     assert panel._labels["Setup Classification"].text() == "trend_continuation"
     assert panel._labels["Option Confirmation"].text() == "confirms"
+    assert panel._labels["Entry Location"].text() == "acceptable"
+    assert panel._labels["Direction Quality"].text() == "high"
+    assert panel._labels["Chase Risk"].text() == "low"
 
 
 def test_inspector_renders_validation_metrics_and_trace_in_order():
@@ -74,7 +77,7 @@ def test_inspector_renders_validation_metrics_and_trace_in_order():
     panel.render(item, report)
 
     assert panel._labels["Validation Result"].text() == "valid"
-    assert panel._labels["Completed Steps"].text() == "10"
+    assert panel._labels["Completed Steps"].text() == "11"
     assert panel._labels["Failed Steps"].text() == "0"
     assert panel._labels["Missing Steps"].text() == "0"
     assert panel._trace_labels[0].text() == "STEP 1 | CPR | above_cpr | pass"
@@ -119,16 +122,16 @@ def test_live_status_cannot_override_canonical_snapshot_and_report_values():
 
     panel.render_live_status(status, item, report)
 
-    assert report.candidate_state.value == "prepare_long"
+    assert report.candidate_state.value == "long_eligible"
     assert report.metrics.blocking_stage is None
-    assert panel._labels["Candidate State"].text() == "prepare_long"
-    assert panel._labels["Method Candidate State"].text() == "prepare_long"
+    assert panel._labels["Candidate State"].text() == "long_eligible"
+    assert panel._labels["Method Candidate State"].text() == "long_eligible"
     assert panel._labels["Quality"].text() == "low"
     assert panel._labels["Validation Result"].text() == "partial"
     assert panel._labels["Blocking Stage"].text() == "-"
     assert panel._labels["Setup Classification"].text() == "trend_continuation"
     assert panel._labels["Option Confirmation"].text() == "unavailable"
-    assert panel._trace_labels[-1].text() == "FINAL | FINAL | prepare_long | pass | low"
+    assert panel._trace_labels[-1].text() == "FINAL | FINAL | long_eligible | pass | low"
 
 
 def test_inspector_missing_data_state_uses_placeholders():
@@ -519,7 +522,7 @@ def test_live_bridge_missing_option_chain_is_safe_and_deterministic():
     assert panel._labels["Blocking Stage"].text() == "Setup"
 
 
-def test_live_bridge_option_timezone_failure_is_neutral_when_candidate_prepares(monkeypatch):
+def test_live_bridge_option_timezone_failure_is_neutral_without_hard_veto(monkeypatch):
     app()
     lifecycle, _runtime = _live_lifecycle()
     panel = VisionMethodInspector()
@@ -537,13 +540,14 @@ def test_live_bridge_option_timezone_failure_is_neutral_when_candidate_prepares(
 
     assert result.snapshot is not None
     assert result.validation_report is not None
-    assert result.snapshot.candidate_state is VisionCandidateState.PREPARE_SHORT
+    assert result.snapshot.candidate_state is VisionCandidateState.SHORT_ELIGIBLE
     assert result.snapshot.option_confirmation_context.confirmation_state is VisionOptionConfirmation.NEUTRAL
     assert result.validation_report.trace[9].status == "pass"
-    assert result.validation_report.trace[-1].observed == "prepare_short"
+    assert result.validation_report.trace[-1].observed == "short_eligible"
     assert result.validation_report.trace[-1].status == "pass"
-    assert panel._labels["Candidate State"].text() == "prepare_short"
+    assert panel._labels["Candidate State"].text() == "short_eligible"
     assert panel._labels["Option Confirmation"].text() == "neutral"
+    assert panel._labels["Entry Location"].text() in {"acceptable", "favorable"}
     assert "ignored for setup evaluation" in panel._labels["Option Neutral Factors"].text()
     assert "timezone-aligned runtime data" not in panel._labels["Option Neutral Factors"].text()
     assert "timezone-aligned runtime data" not in panel._labels["Assembly Failures"].text()

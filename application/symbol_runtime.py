@@ -1488,6 +1488,19 @@ class SymbolRuntime:
             self._record_vision_forensic_trace(snapshot, validation_report, candidate)
             return candidate
 
+        runtime_session = self._runtime_trading_session(candidate.timestamp)
+        if runtime_session.status == "MARKET_CLOSED":
+            self._vision_strategy_decision_v2 = None
+            self._option_trade_candidate = None
+            self._option_paper_risk = None
+            self._record_decision_audit(
+                "Vision Method",
+                f"Vision Method actionable candidate blocked outside live session: {runtime_session.blocking_reason}",
+                vision_trade_candidate=candidate,
+            )
+            self._record_vision_forensic_trace(snapshot, validation_report, candidate)
+            return candidate
+
         identity = _vision_trade_identity(candidate)
         if identity == self._last_vision_trade_identity:
             self._record_vision_forensic_trace(snapshot, validation_report, candidate)
