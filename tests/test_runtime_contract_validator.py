@@ -20,7 +20,11 @@ from core.models.daily_ohlc import DailyOHLC
 from core.event_bus import EventBus
 from core.models.tick import Tick
 from dashboard.presenters import build_runtime_view
+from engines.runtime_adapter import adapt_vision_method_to_trade_candidate
 from tests.test_dashboard_presenters import lifecycle
+from tests.test_vision_method_validation_v1 import NOW as VISION_NOW
+from tests.test_vision_method_validation_v1 import snapshot as vision_snapshot
+from engines.vision_method import validate_vision_method
 
 
 NOW = datetime(2026, 7, 29, 9, 31, tzinfo=UTC)
@@ -49,6 +53,25 @@ def _context(timestamp=NOW):
         trading_date=timestamp.date(),
         session=_session(timestamp.date()),
         previous_runtime_timestamp=timestamp - timedelta(seconds=1),
+    )
+
+
+def _decision_context(timestamp=VISION_NOW):
+    return RuntimeContractContext(
+        instrument=RuntimeInstrument.NIFTY,
+        timeframe="1m",
+        runtime_timestamp=timestamp,
+        trading_date=timestamp.date(),
+        session=_session(timestamp.date()),
+        previous_runtime_timestamp=timestamp - timedelta(seconds=1),
+        timeframe_overrides=(
+            ("VisionMethodSnapshot", "5m"),
+            ("ValidationReport", "5m"),
+            ("TradeCandidate", "5m"),
+            ("OptionTradeCandidate", "5m"),
+            ("OptionPaperRisk", "5m"),
+            ("OptionPaperPosition", "5m"),
+        ),
     )
 
 
@@ -229,6 +252,55 @@ def test_runtime_contract_reports_ownership_instrument_and_timeframe_failures():
     assert report.violations[0].consumer == "TestConsumer"
 
 
+def test_runtime_contract_accepts_5m_vision_snapshot_inside_1m_base_runtime():
+    method = vision_snapshot()
+    report = validate_vision_method(method)
+
+    contract = RuntimeContractValidator().validate_many(
+        (
+            ("VisionMethodSnapshot", method, "SymbolRuntime", "Vision Method Calculator", "Vision Validation"),
+            ("ValidationReport", report, "SymbolRuntime", "Vision Method Validation", "Runtime Adapter"),
+        ),
+        _decision_context(method.timestamp),
+    )
+
+    assert contract.valid is True
+    assert contract.violations == ()
+
+
+def test_runtime_contract_rejects_non_decision_timeframe_vision_snapshots():
+    method = vision_snapshot()
+
+    for timeframe in (TimeFrame.ONE_MINUTE, TimeFrame.FIFTEEN_MINUTES, TimeFrame.THREE_MINUTES):
+        bad = replace(method, timeframe=timeframe)
+        contract = RuntimeContractValidator().validate_many(
+            (("VisionMethodSnapshot", bad, "SymbolRuntime", "Vision Method Calculator", "Vision Validation"),),
+            _decision_context(method.timestamp),
+        )
+        assert contract.valid is False
+        assert contract.violations[0].reason == "Timeframe mismatch"
+        assert contract.violations[0].expected == "5m"
+        assert contract.violations[0].actual == timeframe.value
+
+
+def test_runtime_contract_preserves_5m_trade_candidate_decision_identity():
+    method = vision_snapshot()
+    validation = validate_vision_method(method)
+    candidate = adapt_vision_method_to_trade_candidate(method, validation)
+
+    contract = RuntimeContractValidator().validate_many(
+        (
+            ("VisionMethodSnapshot", method, "SymbolRuntime", "Vision Method Calculator", "Vision Validation"),
+            ("ValidationReport", validation, "SymbolRuntime", "Vision Method Validation", "Runtime Adapter"),
+            ("TradeCandidate", candidate, "SymbolRuntime", "Vision Runtime Adapter", "Option Paper"),
+        ),
+        _decision_context(method.timestamp),
+    )
+
+    assert candidate.timeframe is TimeFrame.FIVE_MINUTES
+    assert contract.valid is True
+
+
 def test_symbol_runtime_snapshot_includes_canonical_contract_report_and_dashboard_row():
     runtime = SymbolRuntime(EventBus(), RuntimeConfiguration(), RuntimeInstrument.NIFTY)
     runtime.start()
@@ -252,6 +324,71 @@ def test_symbol_runtime_snapshot_includes_canonical_contract_report_and_dashboar
     assert snapshot.runtime_contract_report is not None
     assert rows["Runtime Contract"].status in {"READY", "FAILED"}
     assert rows["Runtime Contract"].owner != "-"
+
+
+def test_symbol_runtime_runtime_contract_accepts_configured_5m_vision_decision_snapshot():
+    runtime = SymbolRuntime(
+        EventBus(),
+        RuntimeConfiguration(timeframe="1m", timeframes=("1m", "5m", "15m")),
+        RuntimeInstrument.NIFTY,
+    )
+    runtime.start()
+    runtime.process_tick(
+        Tick(
+            symbol=Instrument.NIFTY,
+            exchange=Exchange.NSE,
+            timestamp=VISION_NOW,
+            last_price=25000.0,
+            volume=100,
+            bid_price=24999.5,
+            ask_price=25000.5,
+            open_interest=0,
+        )
+    )
+    method = vision_snapshot()
+    validation = validate_vision_method(method)
+    runtime._vision_method_snapshot = method
+    runtime._vision_method_validation_report = validation
+    runtime._vision_trade_candidate = adapt_vision_method_to_trade_candidate(method, validation)
+
+    snapshot = runtime.snapshot()
+
+    assert snapshot.base_timeframe == "1m"
+    assert snapshot.vision_decision_timeframe == "5m"
+    assert snapshot.confirmation_timeframe == "15m"
+    assert snapshot.vision_method_snapshot.timeframe is TimeFrame.FIVE_MINUTES
+    assert snapshot.runtime_contract_report.valid is True
+
+
+def test_symbol_runtime_runtime_contract_rejects_vision_snapshot_that_uses_base_or_confirmation_timeframe():
+    for timeframe in (TimeFrame.ONE_MINUTE, TimeFrame.FIFTEEN_MINUTES, TimeFrame.THREE_MINUTES):
+        runtime = SymbolRuntime(
+            EventBus(),
+            RuntimeConfiguration(timeframe="1m", timeframes=("1m", "5m", "15m")),
+            RuntimeInstrument.NIFTY,
+        )
+        runtime.start()
+        runtime.process_tick(
+            Tick(
+                symbol=Instrument.NIFTY,
+                exchange=Exchange.NSE,
+                timestamp=VISION_NOW,
+                last_price=25000.0,
+                volume=100,
+                bid_price=24999.5,
+                ask_price=25000.5,
+                open_interest=0,
+            )
+        )
+        runtime._vision_method_snapshot = replace(vision_snapshot(), timeframe=timeframe)
+
+        contract = runtime.snapshot().runtime_contract_report
+
+        assert contract.valid is False
+        assert contract.violations[0].object_name == "VisionMethodSnapshot"
+        assert contract.violations[0].reason == "Timeframe mismatch"
+        assert contract.violations[0].expected == "5m"
+        assert contract.violations[0].actual == timeframe.value
 
 
 def test_dashboard_displays_structured_runtime_contract_failure():

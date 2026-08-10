@@ -2304,6 +2304,14 @@ class SymbolRuntime:
             trading_date=runtime_session.trading_date,
             session=runtime_session,
             previous_runtime_timestamp=self._previous_runtime_snapshot_timestamp,
+            timeframe_overrides=(
+                ("VisionMethodSnapshot", self._vision_decision_timeframe.value),
+                ("ValidationReport", self._vision_decision_timeframe.value),
+                ("TradeCandidate", self._vision_decision_timeframe.value),
+                ("OptionTradeCandidate", self._vision_decision_timeframe.value),
+                ("OptionPaperRisk", self._vision_decision_timeframe.value),
+                ("OptionPaperPosition", self._vision_decision_timeframe.value),
+            ),
         )
         runtime_subject = RuntimeContractSubject(
             instrument=self._instrument,
@@ -2330,6 +2338,10 @@ class SymbolRuntime:
                 ("ChartExplanation", self.chart_explanation_engine.snapshot(), "SymbolRuntime", "ChartExplanationEngine", "AI Reasoning V2"),
                 ("VisionMethodSnapshot", self._vision_method_snapshot, "SymbolRuntime", "Vision Method Calculator", "Vision Validation"),
                 ("ValidationReport", self._vision_method_validation_report, "SymbolRuntime", "Vision Method Validation", "Runtime Adapter"),
+                ("TradeCandidate", self._vision_trade_candidate, "SymbolRuntime", "Vision Runtime Adapter", "Option Paper"),
+                ("OptionTradeCandidate", self._option_trade_candidate, "SymbolRuntime", "OptionTradeConstructor", "Option Paper Risk"),
+                ("OptionPaperRisk", self._option_paper_risk, "SymbolRuntime", "OptionPaperRisk", "Option Paper Lifecycle"),
+                ("OptionPaperPosition", self._option_paper_position, "SymbolRuntime", "OptionPaperLifecycle", "TradeJournalV1"),
             ),
             context,
         )

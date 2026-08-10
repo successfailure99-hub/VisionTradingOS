@@ -42,6 +42,10 @@ _TEMPORAL_CLASSES = {
     "ChartExplanation": RuntimeTemporalClass.ACTIVE_SESSION,
     "VisionMethodSnapshot": RuntimeTemporalClass.ACTIVE_SESSION,
     "ValidationReport": RuntimeTemporalClass.ACTIVE_SESSION,
+    "TradeCandidate": RuntimeTemporalClass.ACTIVE_SESSION,
+    "OptionTradeCandidate": RuntimeTemporalClass.ACTIVE_SESSION,
+    "OptionPaperRisk": RuntimeTemporalClass.ACTIVE_SESSION,
+    "OptionPaperPosition": RuntimeTemporalClass.ACTIVE_SESSION,
 }
 
 
@@ -151,6 +155,7 @@ class RuntimeContractContext:
     trading_date: object
     session: object | None = None
     previous_runtime_timestamp: datetime | None = None
+    timeframe_overrides: tuple[tuple[str, str], ...] = ()
     owner: str = "SymbolRuntime"
     producer: str = "RuntimeSnapshot"
     consumer: str = "Dashboard"
@@ -161,6 +166,17 @@ class RuntimeContractContext:
         if not isinstance(self.timeframe, str) or not self.timeframe.strip():
             raise ValueError("timeframe must be non-empty text")
         object.__setattr__(self, "timeframe", self.timeframe.strip())
+        overrides: list[tuple[str, str]] = []
+        for item in tuple(self.timeframe_overrides or ()):
+            if not isinstance(item, tuple) or len(item) != 2:
+                raise TypeError("timeframe_overrides must contain (object_name, timeframe) pairs")
+            object_name, timeframe = item
+            if not isinstance(object_name, str) or not object_name.strip():
+                raise ValueError("timeframe override object name must be non-empty text")
+            if not isinstance(timeframe, str) or not timeframe.strip():
+                raise ValueError("timeframe override value must be non-empty text")
+            overrides.append((object_name.strip(), timeframe.strip()))
+        object.__setattr__(self, "timeframe_overrides", tuple(overrides))
         for field_name in ("runtime_timestamp", "previous_runtime_timestamp"):
             value = getattr(self, field_name)
             if value is not None and not isinstance(value, datetime):
@@ -227,8 +243,9 @@ class RuntimeContractValidator:
         if actual_instrument is not None and actual_instrument != context.instrument.value:
             violations.append(_violation(object_name, "Instrument mismatch", owner, producer, consumer, context.instrument.value, actual_instrument))
         actual_timeframe = _timeframe(snapshot)
-        if actual_timeframe is not None and actual_timeframe != context.timeframe:
-            violations.append(_violation(object_name, "Timeframe mismatch", owner, producer, consumer, context.timeframe, actual_timeframe))
+        expected_timeframe = _expected_timeframe(context, object_name)
+        if actual_timeframe is not None and actual_timeframe != expected_timeframe:
+            violations.append(_violation(object_name, "Timeframe mismatch", owner, producer, consumer, expected_timeframe, actual_timeframe))
         actual_date = _trading_date(snapshot, timestamp)
         if context.trading_date is not None and actual_date is not None:
             if temporal_class is RuntimeTemporalClass.HISTORICAL_REFERENCE:
@@ -253,7 +270,7 @@ def _violation(object_name: str, reason: str, owner: str, producer: str, consume
 
 
 def _timestamp(snapshot: object) -> datetime | None:
-    for field_name in ("snapshot_created_at", "timestamp", "updated_at", "end_time", "journal_write_timestamp"):
+    for field_name in ("snapshot_created_at", "timestamp", "updated_at", "created_at", "end_time", "journal_write_timestamp"):
         value = getattr(snapshot, field_name, None)
         if isinstance(value, datetime):
             return value
@@ -333,6 +350,9 @@ def _trading_date(snapshot: object, timestamp: datetime | None):
 
 def _instrument(snapshot: object) -> str | None:
     value = getattr(snapshot, "instrument", None) or getattr(snapshot, "symbol", None) or getattr(snapshot, "underlying", None)
+    if value is None:
+        candidate = getattr(snapshot, "candidate", None)
+        value = getattr(candidate, "instrument", None) or getattr(candidate, "symbol", None) or getattr(candidate, "underlying", None)
     if isinstance(value, RuntimeInstrument):
         return value.value
     if isinstance(value, Instrument):
@@ -345,12 +365,24 @@ def _instrument(snapshot: object) -> str | None:
 def _timeframe(snapshot: object) -> str | None:
     value = getattr(snapshot, "timeframe", None)
     if value is None:
+        value = getattr(snapshot, "decision_timeframe", None)
+    if value is None:
+        candidate = getattr(snapshot, "candidate", None)
+        value = getattr(candidate, "timeframe", None) or getattr(candidate, "decision_timeframe", None)
+    if value is None:
         return None
     if hasattr(value, "value"):
         value = value.value
     if isinstance(value, str):
         return value.strip() or None
     return None
+
+
+def _expected_timeframe(context: RuntimeContractContext, object_name: str) -> str:
+    for override_name, timeframe in context.timeframe_overrides:
+        if override_name == object_name:
+            return timeframe
+    return context.timeframe
 
 
 def _session(snapshot: object) -> object | None:
