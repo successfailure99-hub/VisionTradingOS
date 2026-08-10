@@ -201,6 +201,7 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
     setup = snapshot.setup_qualification_context
     option = snapshot.option_confirmation_context
     entry = snapshot.entry_location_context
+    pivot = snapshot.pivot_flight_plan
     values = {
         "Instrument": snapshot.instrument.value,
         "Timeframe": snapshot.timeframe.value,
@@ -270,6 +271,7 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
         "Method Quality": snapshot.quality,
         "Assembly Failures": _assembly_failures(snapshot),
     }
+    values.update(_pivot_values(pivot))
     return values
 
 
@@ -399,6 +401,7 @@ def _status_context_values(status: VisionMethodLiveStatus) -> dict[str, str]:
                 "Option Neutral Factors": formatters.joined(option.neutral_factors),
             }
         )
+    values.update(_pivot_values(status.pivot_flight_plan))
     return values
 
 
@@ -464,6 +467,18 @@ def _diagnostic_values(status: VisionMethodLiveStatus) -> dict[str, str]:
             values.update({"ADR Used": marker, "ADR Remaining": marker, "ADR Zone": marker})
         elif "vwap" in stage:
             values.update({"VWAP Position": marker, "VWAP Distance": marker})
+        elif "pivot" in stage:
+            values.update(
+                {
+                    "CPR Relationship": marker,
+                    "CPR Width State": marker,
+                    "Camarilla Relationship": marker,
+                    "Camarilla Width State": marker,
+                    "Combined Pivot Context": marker,
+                    "Initial Pivot Bias": marker,
+                    "Opening Confirmation Required": failure.validation_message,
+                }
+            )
         elif "candle" in stage:
             values.update(
                 {
@@ -600,6 +615,29 @@ def _vwap_distance(vwap: VisionVWAPContext | None) -> str:
     return f"{vwap.distance_pct:.2f}%"
 
 
+def _pivot_values(plan) -> dict[str, str]:
+    if plan is None:
+        return {}
+    return {
+        "CPR Relationship": plan.cpr_relationship.value,
+        "CPR Width State": plan.cpr_width_state.value,
+        "Camarilla Relationship": plan.camarilla_relationship.value,
+        "Camarilla Width State": plan.camarilla_width_state.value,
+        "Combined Pivot Context": plan.combined_context_state.value,
+        "Initial Pivot Bias": plan.combined_directional_prior.value,
+        "Expansion Tendency": plan.expansion_tendency.value,
+        "Balance Tendency": plan.balance_tendency.value,
+        "Opening Confirmation Required": formatters.yes_no(plan.opening_confirmation_required),
+        "Bullish Action Zones": _pivot_zones(plan.preferred_bullish_action_zones),
+        "Bearish Action Zones": _pivot_zones(plan.preferred_bearish_action_zones),
+        "Pivot Warnings": _joined_or_none((*plan.conflicting_reasons, *plan.warnings)),
+    }
+
+
+def _pivot_zones(zones) -> str:
+    return formatters.joined(tuple(f"{zone.label} ({zone.condition})" for zone in zones)) if zones else "none"
+
+
 def _swing_price(swing) -> str:
     if swing is None:
         return "none"
@@ -655,6 +693,23 @@ _SECTION_FIELDS = (
             "ADR Zone",
             "VWAP Position",
             "VWAP Distance",
+        ),
+    ),
+    (
+        "Pivot Flight Plan",
+        (
+            "CPR Relationship",
+            "CPR Width State",
+            "Camarilla Relationship",
+            "Camarilla Width State",
+            "Combined Pivot Context",
+            "Initial Pivot Bias",
+            "Expansion Tendency",
+            "Balance Tendency",
+            "Opening Confirmation Required",
+            "Bullish Action Zones",
+            "Bearish Action Zones",
+            "Pivot Warnings",
         ),
     ),
     (

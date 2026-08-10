@@ -105,6 +105,7 @@ class _LiveAssembly:
     structure_events: object | None = None
     setup: object | None = None
     option_confirmation: object | None = None
+    pivot_flight_plan: object | None = None
     snapshot: VisionMethodSnapshot | None = None
     report: VisionMethodValidationReport | None = None
     failures: tuple[VisionContextAssemblyFailure, ...] = ()
@@ -203,6 +204,7 @@ class VisionMethodLiveInspectorBridge:
                 if candle.start_time.date() == trading_date and candle.end_time <= timestamp
             )
         failures: list[VisionContextAssemblyFailure] = []
+        pivot_flight_plan = getattr(runtime_snapshot, "pivot_flight_plan", None)
         if not history:
             failures.append(_missing_failure("Candle Engine", "Closed candle history is unavailable."))
             return _LiveAssembly(
@@ -210,6 +212,7 @@ class VisionMethodLiveInspectorBridge:
                 timeframe=timeframe,
                 timestamp=timestamp,
                 trading_date=trading_date,
+                pivot_flight_plan=pivot_flight_plan,
                 failures=tuple(failures),
             )
 
@@ -417,6 +420,7 @@ class VisionMethodLiveInspectorBridge:
                     setup_qualification_context=setup,
                     option_confirmation_context=option_confirmation,
                     current_price=history[-1].close,
+                    pivot_flight_plan=pivot_flight_plan,
                     assembly_failures=tuple(failures),
                 ),
                 instrument=runtime_snapshot.symbol,
@@ -445,6 +449,7 @@ class VisionMethodLiveInspectorBridge:
             structure_events=structure_events,
             setup=setup,
             option_confirmation=option_confirmation,
+            pivot_flight_plan=pivot_flight_plan,
             snapshot=snapshot,
             report=report,
             failures=tuple(failures),
@@ -663,6 +668,7 @@ class VisionMethodLiveInspectorBridge:
                 setup_qualification_context=setup,
                 option_confirmation_context=option_confirmation,
                 current_price=history[-1].close,
+                pivot_flight_plan=getattr(runtime_snapshot, "pivot_flight_plan", None),
                 assembly_failures=tuple(failures),
             ),
             instrument=runtime_snapshot.symbol,
@@ -777,6 +783,7 @@ class VisionMethodLiveInspectorBridge:
             structure_event_context=assembly.structure_events,
             setup_qualification_context=assembly.setup,
             option_confirmation_context=assembly.option_confirmation,
+            pivot_flight_plan=assembly.pivot_flight_plan,
         )
 
     def _status_from_snapshot(
@@ -813,6 +820,7 @@ class VisionMethodLiveInspectorBridge:
             unexpected_error=None,
             updated_at=self._clock(),
             market_data_age_seconds=0.0,
+            pivot_flight_plan=snapshot.pivot_flight_plan,
         )
 
     def _internal_error_status(self, exc: Exception) -> VisionMethodLiveStatus:
@@ -1037,6 +1045,8 @@ def _market_age_seconds(runtime_snapshot, market_timestamp) -> float | None:
 
 def _available_contexts(snapshot: VisionMethodSnapshot) -> tuple[str, ...]:
     contexts = ["Market Data", "Candle Engine", "Level Context"]
+    if snapshot.pivot_flight_plan is not None:
+        contexts.append("Pivot Flight Plan")
     if snapshot.opening_range_context.quality is not VisionLevelQuality.INSUFFICIENT:
         contexts.append("Opening Range")
     if snapshot.structure_context.quality is not VisionLevelQuality.INSUFFICIENT:
@@ -1058,6 +1068,8 @@ def _available_contexts_from_assembly(assembly: _LiveAssembly) -> tuple[str, ...
         contexts.append("Candle Engine")
     if assembly.level is not None:
         contexts.append("Level Context")
+    if assembly.pivot_flight_plan is not None:
+        contexts.append("Pivot Flight Plan")
     if assembly.opening_range is not None and assembly.opening_range.quality is not VisionLevelQuality.INSUFFICIENT:
         contexts.append("Opening Range")
     if assembly.structure is not None and assembly.structure.quality is not VisionLevelQuality.INSUFFICIENT:

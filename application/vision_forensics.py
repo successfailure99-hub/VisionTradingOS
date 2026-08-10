@@ -135,6 +135,7 @@ class VisionForensicTrace:
         setup = snapshot.setup_qualification_context
         option = snapshot.option_confirmation_context
         entry = snapshot.entry_location_context
+        pivot_plan = snapshot.pivot_flight_plan
         risk_decision = getattr(risk_snapshot, "decision", None)
         risk_decision_value = getattr(risk_decision, "value", str(risk_decision or ""))
         approved = risk_decision in {RiskDecisionV2.APPROVED, RiskDecisionV2.APPROVED_REDUCED} or risk_decision_value in {
@@ -170,6 +171,7 @@ class VisionForensicTrace:
                 "adr_remaining": level.adr_context.range_remaining_pct if level.adr_context is not None else None,
                 "vwap_position": level.vwap_context.relation.value if level.vwap_context is not None else "unavailable",
             },
+            "pivot_flight_plan": _pivot_flight_plan_payload(pivot_plan),
             "opening_range": {
                 "state": opening_range.current_location.value,
                 "break": opening_range.break_direction.value,
@@ -311,6 +313,27 @@ def _session_id(instrument: RuntimeInstrument, trading_date: date | None, timefr
 
 def _iso_date(value: date | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+def _pivot_flight_plan_payload(plan: object | None) -> dict[str, Any] | None:
+    if plan is None:
+        return None
+    return {
+        "reference_session_date": _iso_date(getattr(plan, "reference_session_date", None)),
+        "cpr_relationship": getattr(getattr(plan, "cpr_relationship", None), "value", None),
+        "cpr_width_state": getattr(getattr(plan, "cpr_width_state", None), "value", None),
+        "camarilla_relationship": getattr(getattr(plan, "camarilla_relationship", None), "value", None),
+        "camarilla_width_state": getattr(getattr(plan, "camarilla_width_state", None), "value", None),
+        "combined_context": getattr(getattr(plan, "combined_context_state", None), "value", None),
+        "directional_prior": getattr(getattr(plan, "combined_directional_prior", None), "value", None),
+        "expansion_tendency": getattr(getattr(plan, "expansion_tendency", None), "value", None),
+        "balance_tendency": getattr(getattr(plan, "balance_tendency", None), "value", None),
+        "opening_confirmation_required": getattr(plan, "opening_confirmation_required", None),
+        "bullish_zones": tuple(getattr(zone, "label", "") for zone in getattr(plan, "preferred_bullish_action_zones", ())),
+        "bearish_zones": tuple(getattr(zone, "label", "") for zone in getattr(plan, "preferred_bearish_action_zones", ())),
+        "conflicting_reasons": tuple(getattr(plan, "conflicting_reasons", ())),
+        "warnings": tuple(getattr(plan, "warnings", ())),
+    }
 
 
 def _swing_price(value: object | None) -> float | None:

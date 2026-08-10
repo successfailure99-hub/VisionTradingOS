@@ -44,6 +44,7 @@ class VisionMethodLiveStatus:
     structure_event_context: object | None = None
     setup_qualification_context: object | None = None
     option_confirmation_context: object | None = None
+    pivot_flight_plan: object | None = None
 
     def __post_init__(self) -> None:
         for field_name in (

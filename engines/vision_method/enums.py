@@ -264,3 +264,58 @@ class VisionChaseRisk(str, Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+class VisionPivotRelationship(str, Enum):
+    HIGHER_VALUE = "higher_value"
+    OVERLAPPING_HIGHER_VALUE = "overlapping_higher_value"
+    LOWER_VALUE = "lower_value"
+    OVERLAPPING_LOWER_VALUE = "overlapping_lower_value"
+    UNCHANGED_VALUE = "unchanged_value"
+    OUTSIDE_VALUE = "outside_value"
+    INSIDE_VALUE = "inside_value"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class VisionPivotWidthState(str, Enum):
+    NARROW = "narrow"
+    NORMAL = "normal"
+    WIDE = "wide"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class VisionPivotDirectionalPrior(str, Enum):
+    BULLISH = "bullish"
+    MODERATELY_BULLISH = "moderately_bullish"
+    BEARISH = "bearish"
+    MODERATELY_BEARISH = "moderately_bearish"
+    BREAKOUT_UNRESOLVED = "breakout_unresolved"
+    BALANCE_NEUTRAL = "balance_neutral"
+    RANGE_BALANCE = "range_balance"
+    CONFLICTED = "conflicted"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class VisionPivotCombinedContext(str, Enum):
+    BULLISH_ALIGNED = "bullish_aligned"
+    BEARISH_ALIGNED = "bearish_aligned"
+    MODERATELY_BULLISH = "moderately_bullish"
+    MODERATELY_BEARISH = "moderately_bearish"
+    BREAKOUT_POTENTIAL = "breakout_potential"
+    BALANCE_RANGE = "balance_range"
+    CONFLICTED = "conflicted"
+    NEUTRAL = "neutral"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class VisionPivotTendency(str, Enum):
+    HIGH = "high"
+    MODERATE = "moderate"
+    LOW = "low"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class VisionScenarioStatus(str, Enum):
+    PROVISIONAL = "provisional"
+    OPENING_CONFIRMATION_REQUIRED = "opening_confirmation_required"
+    INSUFFICIENT_DATA = "insufficient_data"

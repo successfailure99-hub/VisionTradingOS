@@ -109,7 +109,13 @@ from engines.trade_execution_policy.models import ExecutionRequest, TradeExecuti
 from engines.tradingview_evidence.engine import TradingViewEvidenceMappingEngine
 from engines.tradingview_evidence.models import TradingViewEvidenceRequest
 from engines.trade_journal_v1 import TradeJournalV1Configuration, TradeJournalV1Engine
-from engines.vision_method import VisionMethodSnapshot, VisionMethodValidationReport
+from engines.vision_method import (
+    VisionMethodSnapshot,
+    VisionMethodValidationReport,
+    VisionPivotFlightPlan,
+    VisionPivotFlightPlanRequest,
+    build_pivot_flight_plan,
+)
 from engines.vwap.vwap_engine import VWAPEngine
 
 from application.enums import RuntimeInstrument, RuntimeStatus
@@ -398,6 +404,8 @@ class SymbolRuntime:
         self._last_vision_trade_identity: str | None = None
         self._vision_method_snapshot: VisionMethodSnapshot | None = None
         self._vision_method_validation_report: VisionMethodValidationReport | None = None
+        self._pivot_flight_plan: VisionPivotFlightPlan | None = None
+        self._pivot_flight_plan_identity: tuple | None = None
         self._vision_ai_explanation: str | None = None
         self._option_chain_analytics: OptionChainAnalyticsSnapshot | None = None
         self._option_chain_last_error: str | None = None
@@ -1130,6 +1138,8 @@ class SymbolRuntime:
         self._last_vision_trade_identity = None
         self._vision_method_snapshot = None
         self._vision_method_validation_report = None
+        self._pivot_flight_plan = None
+        self._pivot_flight_plan_identity = None
         self._vision_ai_explanation = None
         self._option_trade_candidate = None
         self._option_paper_risk = None
@@ -1144,6 +1154,7 @@ class SymbolRuntime:
             latest_candle = primary_candle_history[-1] if primary_candle_history else None
         market_timestamp = self._market_timestamp(latest_candle)
         runtime_session = self._runtime_trading_session(market_timestamp)
+        pivot_flight_plan = self._current_pivot_flight_plan(market_timestamp, runtime_session)
         vwap = self.vwap_engine.get_latest(self._core_instrument)
         adr = self.adr_engine.state
         price_action = self.price_action_engine.state
@@ -1219,6 +1230,7 @@ class SymbolRuntime:
             trade_journal_v1=self.trade_journal_v1_engine.snapshot(),
             vision_method_snapshot=self._vision_method_snapshot,
             vision_method_validation_report=self._vision_method_validation_report,
+            pivot_flight_plan=pivot_flight_plan,
             vision_trade_candidate=self._vision_trade_candidate,
             option_trade_candidate=self._option_trade_candidate,
             option_paper_risk=self._option_paper_risk,
@@ -1238,6 +1250,56 @@ class SymbolRuntime:
             confirmation_timeframe=self._confirmation_timeframe.value if self._confirmation_timeframe is not None else None,
             vision_forensic_counters=self._vision_forensic_trace.counters,
         )
+
+    def _current_pivot_flight_plan(
+        self,
+        market_timestamp: datetime | None,
+        runtime_session: RuntimeTradingSession,
+    ) -> VisionPivotFlightPlan | None:
+        trading_date = runtime_session.trading_date
+        reference_date = runtime_session.previous_completed_trading_date
+        cpr = self.cpr
+        camarilla = self.camarilla
+        if (
+            trading_date is None
+            or reference_date is None
+            or cpr is None
+            or camarilla is None
+            or cpr.trading_date != trading_date
+            or camarilla.trading_date != trading_date
+        ):
+            self._pivot_flight_plan = None
+            self._pivot_flight_plan_identity = None
+            return None
+        history = tuple(sorted(self._daily_ohlc_history, key=lambda item: item.trading_date))
+        history_dates = tuple(item.trading_date for item in history)
+        identity = (
+            trading_date,
+            reference_date,
+            cpr,
+            camarilla,
+            history_dates,
+        )
+        if self._pivot_flight_plan is not None and self._pivot_flight_plan_identity == identity:
+            return self._pivot_flight_plan
+        generated_at = market_timestamp or self._canonical_market_timestamp or datetime.combine(trading_date, INTRADAY_SESSION_OPEN, tzinfo=IST)
+        try:
+            self._pivot_flight_plan = build_pivot_flight_plan(
+                VisionPivotFlightPlanRequest(
+                    instrument=self._instrument,
+                    trading_date=trading_date,
+                    reference_session_date=reference_date,
+                    generated_at=generated_at,
+                    current_cpr=cpr,
+                    current_camarilla=camarilla,
+                    historical_daily_ohlc=history,
+                )
+            )
+            self._pivot_flight_plan_identity = identity
+        except (TypeError, ValueError):
+            self._pivot_flight_plan = None
+            self._pivot_flight_plan_identity = None
+        return self._pivot_flight_plan
 
     def _process_paper_tick(self, tick: Tick) -> None:
         if self._option_paper_position is not None and self._option_paper_position.status is OptionPaperPositionStatus.OPEN:

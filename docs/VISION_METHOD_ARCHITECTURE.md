@@ -1162,3 +1162,35 @@ OrchestratorSnapshot -> Dashboard Runtime Health
 ```
 
 The account snapshot is account-wide and owned by `ApplicationOrchestrator`, not by individual symbol runtimes. It may reconcile broker positions with paper positions for observability, but it must not create trades, alter Vision Method state, or mutate broker state.
+
+## VPM-CONTEXT-1 Pivot Flight Plan Boundary
+
+VPM-CONTEXT-1 adds a deterministic pre-market pivot context layer to the Vision
+Method. The layer compares active-session CPR and Camarilla value areas against
+the prior completed session's pivot context and classifies only the morning
+roadmap.
+
+The Pivot Flight Plan consumes:
+
+- active-session `CPRLevels`;
+- active-session `CamarillaLevels`;
+- completed-session `DailyOHLC` history.
+
+It does not consume ticks, live candles, AI, Strategy, Risk, broker state, paper
+trading, or option execution. It does not duplicate CPR or Camarilla formulas;
+historical comparison uses the canonical CPR and Camarilla calculators.
+
+The context classifies CPR relationship, Camarilla H3-L3 relationship, CPR
+width, Camarilla width, combined pivot context, provisional directional prior,
+expansion tendency, balance tendency, and conditional bullish/bearish action
+zones.
+
+H6 and L6 are deliberately excluded from relationship and width intelligence.
+They remain outer reference levels, not the primary two-day value relationship.
+
+All Pivot Flight Plans are provisional. They always carry
+`opening_confirmation_required=True`; opening acceptance, rejection, trigger
+logic, candidate promotion, option-selling selection, Strategy, Risk, and Paper
+Trading remain downstream and unchanged. A flight plan may be displayed in the
+Inspector and forensic trace, but it must never create a `TradeCandidate` by
+itself.

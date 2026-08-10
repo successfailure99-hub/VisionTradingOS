@@ -31,8 +31,13 @@ from engines.vision_method import (
     VisionCandidateState,
     VisionMethodValidationTraceStep,
     VisionOptionConfirmation,
+    build_pivot_flight_plan,
+    VisionPivotFlightPlanRequest,
     validate_vision_method,
 )
+from core.models.daily_ohlc import DailyOHLC
+from engines.cpr.calculator import CPRCalculator
+from engines.camarilla.calculator import CamarillaCalculator
 from engines.vwap.levels import VWAPLevels
 from tests.test_vision_method_validation_v1 import option, setup, snapshot
 
@@ -66,6 +71,36 @@ def test_inspector_renders_snapshot_header_and_method_sections():
     assert panel._labels["Entry Location"].text() == "acceptable"
     assert panel._labels["Direction Quality"].text() == "high"
     assert panel._labels["Chase Risk"].text() == "low"
+
+
+def test_inspector_renders_pivot_flight_plan_context():
+    app()
+    history = tuple(
+        DailyOHLC((NOW.date() - timedelta(days=7)) + timedelta(days=index), 100.0 + index, 102.0 + index, 98.0 + index, 101.0 + index)
+        for index in range(6)
+    )
+    source = DailyOHLC(NOW.date() - timedelta(days=1), 115.0, 120.0, 100.0, 116.0)
+    plan = build_pivot_flight_plan(
+        VisionPivotFlightPlanRequest(
+            instrument=RuntimeInstrument.NIFTY,
+            trading_date=NOW.date(),
+            reference_session_date=NOW.date() - timedelta(days=1),
+            generated_at=NOW,
+            current_cpr=replace(CPRCalculator.calculate(source), trading_date=NOW.date()),
+            current_camarilla=replace(CamarillaCalculator.calculate(source), trading_date=NOW.date()),
+            historical_daily_ohlc=history,
+        )
+    )
+    item = snapshot(pivot_flight_plan=plan)
+    report = validate_vision_method(item)
+    panel = VisionMethodInspector()
+
+    panel.render(item, report)
+
+    assert panel._labels["CPR Relationship"].text() != "-"
+    assert panel._labels["Camarilla Relationship"].text() != "-"
+    assert panel._labels["Opening Confirmation Required"].text() == "Yes"
+    assert "H3_IF_OPEN_ABOVE_H3" in panel._labels["Bullish Action Zones"].text()
 
 
 def test_inspector_renders_validation_metrics_and_trace_in_order():

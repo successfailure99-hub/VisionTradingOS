@@ -37,6 +37,11 @@ from .enums import (
     VisionOpeningLocation,
     VisionOpeningRangeState,
     VisionOrderBlockDirection,
+    VisionPivotCombinedContext,
+    VisionPivotDirectionalPrior,
+    VisionPivotRelationship,
+    VisionPivotTendency,
+    VisionPivotWidthState,
     VisionPreviousDayRelation,
     VisionRangeLocation,
     VisionReversalState,
@@ -51,6 +56,7 @@ from .enums import (
     VisionSwingType,
     VisionVWAPRelation,
 )
+from .pivot_context import VisionPivotFlightPlan
 
 
 @dataclass(frozen=True, slots=True)
@@ -635,6 +641,7 @@ class VisionMethodSnapshot:
     blocking_reasons: tuple[str, ...]
     supporting_reasons: tuple[str, ...]
     quality: str
+    pivot_flight_plan: VisionPivotFlightPlan | None = None
     entry_location_context: VisionEntryLocationContext = field(default_factory=lambda: VisionEntryLocationContext(
         direction="unknown",
         direction_quality=VisionDirectionQuality.INVALID,
@@ -682,6 +689,13 @@ class VisionMethodSnapshot:
             raise TypeError("candidate_state must be VisionCandidateState.")
         if not isinstance(self.entry_location_context, VisionEntryLocationContext):
             raise TypeError("entry_location_context must be VisionEntryLocationContext.")
+        if self.pivot_flight_plan is not None:
+            if not isinstance(self.pivot_flight_plan, VisionPivotFlightPlan):
+                raise TypeError("pivot_flight_plan must be VisionPivotFlightPlan or None.")
+            if self.pivot_flight_plan.instrument is not self.instrument:
+                raise ValueError("pivot_flight_plan instrument mismatch.")
+            if self.pivot_flight_plan.trading_date != self.timestamp.date():
+                raise ValueError("pivot_flight_plan trading date mismatch.")
         object.__setattr__(self, "blocking_reasons", _normalize_text_tuple(self.blocking_reasons, "blocking_reasons"))
         object.__setattr__(self, "supporting_reasons", _normalize_text_tuple(self.supporting_reasons, "supporting_reasons"))
         object.__setattr__(self, "quality", _normalize_text(self.quality, "quality"))

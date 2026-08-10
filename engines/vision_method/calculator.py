@@ -48,6 +48,7 @@ from .models import (
     VisionStructureContext,
     VisionStructureEventContext,
 )
+from .pivot_context import VisionPivotFlightPlan
 from .validator import validate_vision_method_snapshot
 
 
@@ -64,6 +65,7 @@ class VisionMethodCalculationRequest:
     setup_qualification_context: VisionSetupQualificationContext
     option_confirmation_context: VisionOptionConfirmationContext
     current_price: float | None = None
+    pivot_flight_plan: VisionPivotFlightPlan | None = None
     assembly_failures: tuple[VisionContextAssemblyFailure, ...] = ()
 
     def __post_init__(self) -> None:
@@ -88,6 +90,13 @@ class VisionMethodCalculationRequest:
             raise TypeError("option_confirmation_context must be VisionOptionConfirmationContext.")
         if self.current_price is not None:
             object.__setattr__(self, "current_price", _positive_number(self.current_price, "current_price"))
+        if self.pivot_flight_plan is not None:
+            if not isinstance(self.pivot_flight_plan, VisionPivotFlightPlan):
+                raise TypeError("pivot_flight_plan must be VisionPivotFlightPlan or None.")
+            if self.pivot_flight_plan.instrument is not self.instrument:
+                raise ValueError("pivot_flight_plan instrument mismatch.")
+            if self.pivot_flight_plan.trading_date != self.timestamp.date():
+                raise ValueError("pivot_flight_plan trading date mismatch.")
         object.__setattr__(self, "assembly_failures", _normalize_assembly_failures(self.assembly_failures))
 
 
@@ -126,6 +135,7 @@ def calculate_vision_method_snapshot(
         blocking_reasons=blocking_reasons,
         supporting_reasons=supporting_reasons,
         quality=quality,
+        pivot_flight_plan=request.pivot_flight_plan,
         entry_location_context=entry_location,
         assembly_failures=request.assembly_failures,
     )
@@ -312,6 +322,8 @@ def _supporting_reasons(
     entry_location: VisionEntryLocationContext,
 ) -> tuple[str, ...]:
     reasons: list[str] = []
+    if request.pivot_flight_plan is not None:
+        reasons.extend(_pivot_flight_plan_reasons(request.pivot_flight_plan))
     reasons.extend(_level_reasons(request.level_context))
     reasons.extend(_opening_range_reasons(request.opening_range_context))
     reasons.extend(_structure_reasons(request.structure_context))
@@ -324,6 +336,21 @@ def _supporting_reasons(
     reasons.extend(entry_location.location_supporting_reasons)
     reasons.extend(entry_location.location_warning_reasons)
     return _dedupe(reasons)
+
+
+def _pivot_flight_plan_reasons(plan: VisionPivotFlightPlan) -> tuple[str, ...]:
+    reasons = [
+        f"Pivot context {plan.combined_context_state.value}",
+        f"Pivot prior {plan.combined_directional_prior.value}",
+        f"CPR relationship {plan.cpr_relationship.value}",
+        f"CPR width {plan.cpr_width_state.value}",
+        f"Camarilla relationship {plan.camarilla_relationship.value}",
+        f"Camarilla width {plan.camarilla_width_state.value}",
+        "Opening confirmation required",
+    ]
+    reasons.extend(f"Pivot conflict: {item}" for item in plan.conflicting_reasons)
+    reasons.extend(f"Pivot warning: {item}" for item in plan.warnings)
+    return tuple(reasons)
 
 
 def _entry_location_context(request: VisionMethodCalculationRequest) -> VisionEntryLocationContext:
