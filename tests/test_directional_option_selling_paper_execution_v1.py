@@ -38,8 +38,11 @@ from engines.vision_method import (
     VisionRangeLocation,
     VisionStructurePattern,
     VisionStructureTrend,
+    VisionTriggerDirection,
+    VisionTriggerType,
     validate_vision_method,
 )
+from tests.test_vision_method_calculator_v1 import trigger
 from tests.test_vision_method_validation_v1 import NOW, level, opening, setup, snapshot, structure, structure_event
 
 
@@ -152,6 +155,10 @@ def bearish_snapshot():
         structure_context=structure(trend=VisionStructureTrend.BEARISH, pattern=VisionStructurePattern.LL),
         structure_event_context=structure_event(bos=VisionBOS.BEARISH_BOS),
         setup_qualification_context=setup(supporting=("Below CPR", "Below L3", "Bearish BOS")),
+        price_action_trigger_context=trigger(
+            direction=VisionTriggerDirection.BEARISH,
+            trigger_type=VisionTriggerType.BEARISH_INITIATIVE_BREAKOUT,
+        ),
     )
 
 
@@ -419,7 +426,7 @@ def test_symbol_runtime_blocks_fresh_vision_option_paper_candidate_after_market_
     item.start()
 
     post_market = NOW.replace(hour=16, minute=0)
-    method = snapshot(timestamp=post_market)
+    method = snapshot(timestamp=post_market, price_action_trigger_context=trigger(timestamp=post_market))
     report = validate_vision_method(method)
     candidate = item.process_vision_method_paper_trade(method, report)
     view = item.snapshot()

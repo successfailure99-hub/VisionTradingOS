@@ -270,6 +270,12 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
         "Location Supporting Reasons": formatters.joined(entry.location_supporting_reasons),
         "Location Warning Reasons": formatters.joined(entry.location_warning_reasons),
         "Location Blocking Reasons": formatters.joined(entry.location_blocking_reasons),
+        "Final Candidate": snapshot.candidate_state.value,
+        "Final Direction": _reason_suffix(snapshot.supporting_reasons, "Final direction "),
+        "Final Trigger Gate": _reason_suffix(snapshot.supporting_reasons, "Final trigger gate"),
+        "Final Location Gate": _reason_suffix(snapshot.supporting_reasons, "Final location gate"),
+        "Final Option State": _reason_suffix(snapshot.supporting_reasons, "Final option state "),
+        "Final Promotion Reason": _final_promotion_reason(snapshot.supporting_reasons),
         "Method Candidate State": snapshot.candidate_state.value,
         "Method Quality": snapshot.quality,
         "Assembly Failures": _assembly_failures(snapshot),
@@ -279,6 +285,21 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
     values.update(_pivot_confluence_values(confluence))
     values.update(_price_action_trigger_values(trigger))
     return values
+
+
+def _reason_suffix(reasons: tuple[str, ...], prefix: str) -> str:
+    for reason in reasons:
+        if reason.startswith(prefix):
+            suffix = reason[len(prefix) :].strip()
+            return suffix[2:].strip() if suffix.startswith(": ") else suffix or reason
+    return "-"
+
+
+def _final_promotion_reason(reasons: tuple[str, ...]) -> str:
+    for reason in reasons:
+        if reason.startswith("Final promotion reason:") or reason.startswith("Final waiting reason:"):
+            return reason.split(":", 1)[1].strip()
+    return "-"
 
 
 def _report_values(report: VisionMethodValidationReport) -> dict[str, str]:
@@ -956,6 +977,17 @@ _SECTION_FIELDS = (
             "Location Supporting Reasons",
             "Location Warning Reasons",
             "Location Blocking Reasons",
+        ),
+    ),
+    (
+        "Final Reasoning",
+        (
+            "Final Candidate",
+            "Final Direction",
+            "Final Trigger Gate",
+            "Final Location Gate",
+            "Final Option State",
+            "Final Promotion Reason",
         ),
     ),
     (

@@ -33,6 +33,10 @@ from .enums import (
     VisionStructureEventPhase,
     VisionStructurePattern,
     VisionStructureTrend,
+    VisionTriggerDirection,
+    VisionTriggerInteractionState,
+    VisionTriggerQuality,
+    VisionTriggerType,
 )
 from .models import (
     VisionContextAssemblyFailure,
@@ -148,9 +152,9 @@ def calculate_vision_method_snapshot(
     validate_vision_method_calculation_request(request, instrument=instrument, timeframe=timeframe)
     entry_location = _entry_location_context(request)
     blocking_reasons = _blocking_reasons(request)
-    supporting_reasons = _supporting_reasons(request, entry_location)
     candidate_state = _candidate_state(request, blocking_reasons, entry_location)
     quality = _method_quality(request, candidate_state, blocking_reasons, entry_location)
+    supporting_reasons = _supporting_reasons(request, entry_location, candidate_state)
 
     snapshot = VisionMethodSnapshot(
         instrument=request.instrument,
@@ -249,6 +253,44 @@ def _market_regime(request: VisionMethodCalculationRequest) -> VisionMarketRegim
 _MIN_REMAINING_ROOM_FRACTION = 0.25
 _MATURE_ADR_CONSUMED_PCT = 70.0
 _EXTENDED_ADR_CONSUMED_PCT = 90.0
+_ELIGIBLE_OPTION_STATES = (
+    VisionOptionConfirmation.CONFIRMS,
+    VisionOptionConfirmation.NEUTRAL,
+    VisionOptionConfirmation.UNAVAILABLE,
+)
+_PREPARATION_OPTION_STATES = (
+    VisionOptionConfirmation.CONFIRMS,
+    VisionOptionConfirmation.PARTIAL,
+    VisionOptionConfirmation.NEUTRAL,
+    VisionOptionConfirmation.CONTRADICTS,
+    VisionOptionConfirmation.UNAVAILABLE,
+)
+_BULLISH_TRIGGER_TYPES = frozenset(
+    (
+        VisionTriggerType.BULLISH_REJECTION,
+        VisionTriggerType.BULLISH_FAILED_BREAKOUT,
+        VisionTriggerType.BULLISH_INITIATIVE_BREAKOUT,
+        VisionTriggerType.BULLISH_RETEST_HOLD,
+        VisionTriggerType.BULLISH_CONTINUATION,
+    )
+)
+_BEARISH_TRIGGER_TYPES = frozenset(
+    (
+        VisionTriggerType.BEARISH_REJECTION,
+        VisionTriggerType.BEARISH_FAILED_BREAKOUT,
+        VisionTriggerType.BEARISH_INITIATIVE_BREAKOUT,
+        VisionTriggerType.BEARISH_RETEST_HOLD,
+        VisionTriggerType.BEARISH_CONTINUATION,
+    )
+)
+_OBSERVATIONAL_TRIGGER_INTERACTIONS = frozenset(
+    (
+        VisionTriggerInteractionState.APPROACHING,
+        VisionTriggerInteractionState.TESTING,
+        VisionTriggerInteractionState.PENETRATING,
+        VisionTriggerInteractionState.NO_INTERACTION,
+    )
+)
 
 
 def _candidate_state(
@@ -266,35 +308,16 @@ def _candidate_state(
     direction = _setup_direction(request.setup_qualification_context)
     confirmation = request.option_confirmation_context.confirmation_state
     location_allows_entry = _entry_location_allows_action(entry_location)
+    trigger_allows_entry = _price_action_trigger_allows_action(request, direction)
     if direction == "bullish":
-        if (
-            confirmation
-            in (VisionOptionConfirmation.CONFIRMS, VisionOptionConfirmation.NEUTRAL, VisionOptionConfirmation.UNAVAILABLE)
-            and location_allows_entry
-        ):
+        if confirmation in _ELIGIBLE_OPTION_STATES and location_allows_entry and trigger_allows_entry:
             return VisionCandidateState.LONG_ELIGIBLE
-        if confirmation in (
-            VisionOptionConfirmation.CONFIRMS,
-            VisionOptionConfirmation.PARTIAL,
-            VisionOptionConfirmation.NEUTRAL,
-            VisionOptionConfirmation.CONTRADICTS,
-            VisionOptionConfirmation.UNAVAILABLE,
-        ):
+        if confirmation in _PREPARATION_OPTION_STATES:
             return VisionCandidateState.PREPARE_LONG
     if direction == "bearish":
-        if (
-            confirmation
-            in (VisionOptionConfirmation.CONFIRMS, VisionOptionConfirmation.NEUTRAL, VisionOptionConfirmation.UNAVAILABLE)
-            and location_allows_entry
-        ):
+        if confirmation in _ELIGIBLE_OPTION_STATES and location_allows_entry and trigger_allows_entry:
             return VisionCandidateState.SHORT_ELIGIBLE
-        if confirmation in (
-            VisionOptionConfirmation.CONFIRMS,
-            VisionOptionConfirmation.PARTIAL,
-            VisionOptionConfirmation.NEUTRAL,
-            VisionOptionConfirmation.CONTRADICTS,
-            VisionOptionConfirmation.UNAVAILABLE,
-        ):
+        if confirmation in _PREPARATION_OPTION_STATES:
             return VisionCandidateState.PREPARE_SHORT
     if request.setup_qualification_context.eligible_for_option_confirmation:
         return VisionCandidateState.OBSERVE
@@ -313,6 +336,9 @@ def _method_quality(
         return "invalid"
     if entry_location.entry_location_quality is VisionLevelQuality.INSUFFICIENT:
         return "low"
+    direction = _setup_direction(request.setup_qualification_context)
+    trigger_allows_entry = _price_action_trigger_allows_action(request, direction)
+    trigger_quality = _price_action_trigger_quality(request)
     if (
         request.level_context.quality is VisionLevelQuality.FULL
         and request.opening_range_context.quality is VisionLevelQuality.FULL
@@ -322,6 +348,8 @@ def _method_quality(
         and request.option_confirmation_context.quality is VisionLevelQuality.FULL
         and request.setup_qualification_context.setup_quality is VisionSetupQuality.HIGH
         and request.option_confirmation_context.confirmation_state is VisionOptionConfirmation.CONFIRMS
+        and trigger_allows_entry
+        and trigger_quality is VisionTriggerQuality.HIGH
         and entry_location.entry_location_state in (VisionEntryLocationState.FAVORABLE, VisionEntryLocationState.ACCEPTABLE)
     ):
         return "high"
@@ -330,6 +358,8 @@ def _method_quality(
         in (VisionOptionConfirmation.CONTRADICTS,)
         or request.liquidity_context.quality in (VisionLevelQuality.PARTIAL, VisionLevelQuality.INSUFFICIENT)
         or request.option_confirmation_context.quality is VisionLevelQuality.INSUFFICIENT
+        or (direction in {"bullish", "bearish"} and not trigger_allows_entry)
+        or trigger_quality in (VisionTriggerQuality.LOW, VisionTriggerQuality.INVALID)
         or entry_location.chase_risk is VisionChaseRisk.HIGH
         or entry_location.entry_location_state
         in (VisionEntryLocationState.POOR, VisionEntryLocationState.DO_NOT_CHASE, VisionEntryLocationState.WAIT_FOR_RETEST)
@@ -340,6 +370,7 @@ def _method_quality(
         in (VisionOptionConfirmation.PARTIAL, VisionOptionConfirmation.NEUTRAL, VisionOptionConfirmation.UNAVAILABLE)
         or request.setup_qualification_context.setup_quality is VisionSetupQuality.MEDIUM
         or request.level_context.quality is VisionLevelQuality.PARTIAL
+        or trigger_quality is VisionTriggerQuality.MEDIUM
         or entry_location.entry_location_state is VisionEntryLocationState.ACCEPTABLE
     ):
         return "medium"
@@ -362,6 +393,7 @@ def _blocking_reasons(request: VisionMethodCalculationRequest) -> tuple[str, ...
 def _supporting_reasons(
     request: VisionMethodCalculationRequest,
     entry_location: VisionEntryLocationContext,
+    candidate_state: VisionCandidateState,
 ) -> tuple[str, ...]:
     reasons: list[str] = []
     if request.pivot_flight_plan is not None:
@@ -383,6 +415,7 @@ def _supporting_reasons(
     reasons.extend(request.option_confirmation_context.neutral_factors)
     reasons.extend(entry_location.location_supporting_reasons)
     reasons.extend(entry_location.location_warning_reasons)
+    reasons.extend(_final_promotion_reasons(request, entry_location, candidate_state))
     return _dedupe(reasons)
 
 
@@ -439,6 +472,74 @@ def _price_action_trigger_reasons(context: VisionPriceActionTriggerContext) -> t
     reasons.extend(f"Trigger conflict: {item}" for item in trigger.contradicting_reasons)
     reasons.extend(f"Trigger warning: {item}" for item in trigger.warnings)
     return tuple(reasons)
+
+
+def _final_promotion_reasons(
+    request: VisionMethodCalculationRequest,
+    entry_location: VisionEntryLocationContext,
+    candidate_state: VisionCandidateState,
+) -> tuple[str, ...]:
+    direction = _setup_direction(request.setup_qualification_context)
+    reasons = [
+        f"Final candidate {candidate_state.value}",
+        f"Final direction {direction or 'none'}",
+    ]
+    trigger_reason = _price_action_trigger_gate_reason(request, direction)
+    if trigger_reason is None:
+        reasons.append("Final trigger gate passed")
+    else:
+        reasons.append(f"Final trigger gate: {trigger_reason}")
+    if entry_location.entry_location_state in (VisionEntryLocationState.FAVORABLE, VisionEntryLocationState.ACCEPTABLE):
+        reasons.append("Final location gate passed")
+    else:
+        reasons.append(f"Final location gate: {entry_location.entry_location_state.value}")
+    option_state = request.option_confirmation_context.confirmation_state
+    reasons.append(f"Final option state {option_state.value}")
+    if option_state in (VisionOptionConfirmation.NEUTRAL, VisionOptionConfirmation.UNAVAILABLE):
+        reasons.append("Option state is a quality modifier, not a hard veto")
+    if candidate_state in (VisionCandidateState.LONG_ELIGIBLE, VisionCandidateState.SHORT_ELIGIBLE):
+        reasons.append("Final promotion reason: direction, trigger, location, and option state are aligned")
+    elif candidate_state in (VisionCandidateState.PREPARE_LONG, VisionCandidateState.PREPARE_SHORT):
+        reasons.append("Final waiting reason: methodology is directional but not fully promotable")
+    return tuple(reasons)
+
+
+def _price_action_trigger_allows_action(request: VisionMethodCalculationRequest, direction: str | None) -> bool:
+    return _price_action_trigger_gate_reason(request, direction) is None
+
+
+def _price_action_trigger_gate_reason(request: VisionMethodCalculationRequest, direction: str | None) -> str | None:
+    if direction not in {"bullish", "bearish"}:
+        return "direction is unavailable"
+    context = request.price_action_trigger_context
+    if context is None:
+        return "valid 5-minute price-action trigger is unavailable"
+    trigger = context.trigger
+    if context.timestamp != request.timestamp or trigger.decision_timestamp != request.timestamp:
+        return "price-action trigger is stale"
+    if trigger.trigger_type in (VisionTriggerType.NO_TRIGGER, VisionTriggerType.INDECISION):
+        return f"{trigger.trigger_type.value} cannot promote eligibility"
+    if trigger.trigger_quality is VisionTriggerQuality.INVALID:
+        return "price-action trigger quality is invalid"
+    if trigger.interaction_state in _OBSERVATIONAL_TRIGGER_INTERACTIONS:
+        return f"{trigger.interaction_state.value} is observational only"
+    if direction == "bullish":
+        if trigger.trigger_direction is not VisionTriggerDirection.BULLISH:
+            return "price-action trigger direction does not align"
+        if trigger.trigger_type not in _BULLISH_TRIGGER_TYPES:
+            return "price-action trigger type does not align"
+        return None
+    if trigger.trigger_direction is not VisionTriggerDirection.BEARISH:
+        return "price-action trigger direction does not align"
+    if trigger.trigger_type not in _BEARISH_TRIGGER_TYPES:
+        return "price-action trigger type does not align"
+    return None
+
+
+def _price_action_trigger_quality(request: VisionMethodCalculationRequest) -> VisionTriggerQuality:
+    if request.price_action_trigger_context is None:
+        return VisionTriggerQuality.INVALID
+    return request.price_action_trigger_context.trigger.trigger_quality
 
 
 def _entry_location_context(request: VisionMethodCalculationRequest) -> VisionEntryLocationContext:

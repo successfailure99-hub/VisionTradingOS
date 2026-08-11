@@ -272,7 +272,7 @@ def test_runtime_contract_rejects_non_decision_timeframe_vision_snapshots():
     method = vision_snapshot()
 
     for timeframe in (TimeFrame.ONE_MINUTE, TimeFrame.FIFTEEN_MINUTES, TimeFrame.THREE_MINUTES):
-        bad = replace(method, timeframe=timeframe)
+        bad = replace(method, timeframe=timeframe, price_action_trigger_context=None)
         contract = RuntimeContractValidator().validate_many(
             (("VisionMethodSnapshot", bad, "SymbolRuntime", "Vision Method Calculator", "Vision Validation"),),
             _decision_context(method.timestamp),
@@ -380,7 +380,7 @@ def test_symbol_runtime_runtime_contract_rejects_vision_snapshot_that_uses_base_
                 open_interest=0,
             )
         )
-        runtime._vision_method_snapshot = replace(vision_snapshot(), timeframe=timeframe)
+        runtime._vision_method_snapshot = replace(vision_snapshot(), timeframe=timeframe, price_action_trigger_context=None)
 
         contract = runtime.snapshot().runtime_contract_report
 

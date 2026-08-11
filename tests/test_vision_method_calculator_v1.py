@@ -52,7 +52,20 @@ from engines.vision_method import (
     VisionCandidateState,
     VisionDirectionQuality,
     VisionEntryLocationState,
+    VisionCandlestickPattern,
     VisionMoveMaturity,
+    VisionPivotZoneDirectionalRole,
+    VisionPivotZoneQuality,
+    VisionPriceActionTrigger,
+    VisionPriceActionTriggerContext,
+    VisionTriggerAcceptanceState,
+    VisionTriggerAlignment,
+    VisionTriggerBreakState,
+    VisionTriggerDirection,
+    VisionTriggerInteractionState,
+    VisionTriggerQuality,
+    VisionTriggerRetestState,
+    VisionTriggerType,
     calculate_vision_method_snapshot,
 )
 
@@ -240,6 +253,59 @@ def option(
     )
 
 
+def trigger(
+    *,
+    direction: VisionTriggerDirection = VisionTriggerDirection.BULLISH,
+    trigger_type: VisionTriggerType = VisionTriggerType.BULLISH_INITIATIVE_BREAKOUT,
+    quality: VisionTriggerQuality = VisionTriggerQuality.HIGH,
+    interaction: VisionTriggerInteractionState = VisionTriggerInteractionState.ACCEPTED,
+    timestamp: datetime = NOW,
+) -> VisionPriceActionTriggerContext:
+    return VisionPriceActionTriggerContext(
+        instrument=RuntimeInstrument.NIFTY,
+        trading_date=timestamp.date(),
+        timeframe=TimeFrame.FIVE_MINUTES,
+        timestamp=timestamp,
+        trigger=VisionPriceActionTrigger(
+            instrument=RuntimeInstrument.NIFTY,
+            trading_date=timestamp.date(),
+            timeframe=TimeFrame.FIVE_MINUTES,
+            decision_timestamp=timestamp,
+            zone_reference="H3-H4",
+            zone_role=VisionPivotZoneDirectionalRole.BULLISH_SUPPORT
+            if direction is VisionTriggerDirection.BULLISH
+            else VisionPivotZoneDirectionalRole.BEARISH_RESISTANCE,
+            zone_quality=VisionPivotZoneQuality.HIGH,
+            interaction_state=interaction,
+            trigger_type=trigger_type,
+            trigger_direction=direction,
+            trigger_quality=quality,
+            break_state=VisionTriggerBreakState.BROKEN_UP
+            if direction is VisionTriggerDirection.BULLISH
+            else VisionTriggerBreakState.BROKEN_DOWN,
+            acceptance_state=VisionTriggerAcceptanceState.ACCEPTED_UP
+            if direction is VisionTriggerDirection.BULLISH
+            else VisionTriggerAcceptanceState.ACCEPTED_DOWN,
+            retest_state=VisionTriggerRetestState.NONE,
+            candlestick_pattern=VisionCandlestickPattern.NONE,
+            structure_alignment=VisionTriggerAlignment.ALIGNED,
+            liquidity_alignment=VisionTriggerAlignment.SUPPORTING,
+            opening_range_alignment=VisionTriggerAlignment.ALIGNED,
+            scenario_alignment=VisionTriggerAlignment.ALIGNED,
+            supporting_reasons=("Accepted price-action trigger",),
+            contradicting_reasons=(),
+            warnings=(),
+            blocking_reasons=(),
+            source_candle_reference="2026-07-29T10:30:00+05:30",
+            prior_event_reference="none",
+        ),
+        event_history=(),
+        quality=VisionLevelQuality.FULL,
+        status=interaction,
+        warnings=(),
+    )
+
+
 def request(**overrides) -> VisionMethodCalculationRequest:
     values = {
         "instrument": RuntimeInstrument.NIFTY,
@@ -252,6 +318,7 @@ def request(**overrides) -> VisionMethodCalculationRequest:
         "structure_event_context": event(),
         "setup_qualification_context": setup(),
         "option_confirmation_context": option(),
+        "price_action_trigger_context": trigger(),
     }
     values.update(overrides)
     return VisionMethodCalculationRequest(**values)
@@ -281,6 +348,10 @@ def test_complete_bearish_methodology_produces_short_eligible_snapshot():
             structure_event_context=event(bos=VisionBOS.BEARISH_BOS),
             setup_qualification_context=setup(supporting=("Below CPR", "Below L3", "Bearish BOS")),
             option_confirmation_context=option(supporting=("Call writing supports setup",)),
+            price_action_trigger_context=trigger(
+                direction=VisionTriggerDirection.BEARISH,
+                trigger_type=VisionTriggerType.BEARISH_INITIATIVE_BREAKOUT,
+            ),
         )
     )
 
@@ -383,6 +454,11 @@ def test_bearish_retest_with_neutral_options_can_be_short_eligible():
             structure_event_context=event(bos=VisionBOS.BEARISH_BOS),
             setup_qualification_context=setup(supporting=("Below CPR", "Below L3", "Bearish BOS")),
             option_confirmation_context=option(state=VisionOptionConfirmation.NEUTRAL),
+            price_action_trigger_context=trigger(
+                direction=VisionTriggerDirection.BEARISH,
+                trigger_type=VisionTriggerType.BEARISH_RETEST_HOLD,
+                interaction=VisionTriggerInteractionState.HOLDING,
+            ),
         )
     )
 
@@ -403,6 +479,83 @@ def test_duplicate_reasons_are_suppressed_preserving_first_seen_order():
     assert lowered.count("above cpr") == 1
     assert lowered.count("bullish bos") == 1
     assert result.supporting_reasons.index("Above CPR") < result.supporting_reasons.index("Bullish BOS")
+
+
+def test_price_action_trigger_is_required_for_final_eligibility():
+    result = calculate_vision_method_snapshot(request(price_action_trigger_context=None))
+
+    assert result.candidate_state is VisionCandidateState.PREPARE_LONG
+    assert result.quality == "low"
+    assert "Final trigger gate: valid 5-minute price-action trigger is unavailable" in result.supporting_reasons
+    assert result.blocking_reasons == ()
+
+
+def test_no_trigger_and_testing_states_remain_non_actionable():
+    no_trigger = trigger(
+        direction=VisionTriggerDirection.NONE,
+        trigger_type=VisionTriggerType.NO_TRIGGER,
+        quality=VisionTriggerQuality.INVALID,
+        interaction=VisionTriggerInteractionState.NO_INTERACTION,
+    )
+    testing = trigger(
+        trigger_type=VisionTriggerType.BULLISH_REJECTION,
+        quality=VisionTriggerQuality.MEDIUM,
+        interaction=VisionTriggerInteractionState.TESTING,
+    )
+
+    no_trigger_result = calculate_vision_method_snapshot(request(price_action_trigger_context=no_trigger))
+    testing_result = calculate_vision_method_snapshot(request(price_action_trigger_context=testing))
+
+    assert no_trigger_result.candidate_state is VisionCandidateState.PREPARE_LONG
+    assert testing_result.candidate_state is VisionCandidateState.PREPARE_LONG
+    assert "Final trigger gate: no_trigger cannot promote eligibility" in no_trigger_result.supporting_reasons
+    assert "Final trigger gate: testing is observational only" in testing_result.supporting_reasons
+
+
+def test_trigger_direction_must_match_final_direction():
+    bearish_trigger = trigger(
+        direction=VisionTriggerDirection.BEARISH,
+        trigger_type=VisionTriggerType.BEARISH_INITIATIVE_BREAKOUT,
+    )
+
+    result = calculate_vision_method_snapshot(request(price_action_trigger_context=bearish_trigger))
+
+    assert result.candidate_state is VisionCandidateState.PREPARE_LONG
+    assert "Final trigger gate: price-action trigger direction does not align" in result.supporting_reasons
+
+
+def test_stale_trigger_cannot_promote_eligibility():
+    stale_timestamp = NOW - timedelta(minutes=5)
+    stale_trigger = trigger(timestamp=stale_timestamp)
+
+    result = calculate_vision_method_snapshot(request(price_action_trigger_context=stale_trigger))
+
+    assert result.candidate_state is VisionCandidateState.PREPARE_LONG
+    assert "Final trigger gate: price-action trigger is stale" in result.supporting_reasons
+
+
+def test_option_neutral_and_unavailable_remain_modifiers_when_trigger_and_location_are_valid():
+    neutral = calculate_vision_method_snapshot(request(option_confirmation_context=option(state=VisionOptionConfirmation.NEUTRAL)))
+    unavailable = calculate_vision_method_snapshot(request(option_confirmation_context=option(state=VisionOptionConfirmation.UNAVAILABLE)))
+
+    assert neutral.candidate_state is VisionCandidateState.LONG_ELIGIBLE
+    assert unavailable.candidate_state is VisionCandidateState.LONG_ELIGIBLE
+    assert "Option state is a quality modifier, not a hard veto" in neutral.supporting_reasons
+    assert "Option state is a quality modifier, not a hard veto" in unavailable.supporting_reasons
+
+
+def test_wait_for_retest_remains_first_class_non_actionable_state():
+    result = calculate_vision_method_snapshot(
+        request(
+            current_price=103.9,
+            level_context=level(adr_used=88.0),
+            option_confirmation_context=option(state=VisionOptionConfirmation.CONFIRMS),
+        )
+    )
+
+    assert result.candidate_state is VisionCandidateState.PREPARE_LONG
+    assert result.entry_location_context.entry_location_state is VisionEntryLocationState.WAIT_FOR_RETEST
+    assert "Final location gate: wait_for_retest" in result.supporting_reasons
 
 
 def test_snapshot_is_immutable_and_validator_rejects_bad_inputs():

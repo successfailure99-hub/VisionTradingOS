@@ -22,9 +22,12 @@ from engines.vision_method import (
     VisionRangeLocation,
     VisionStructurePattern,
     VisionStructureTrend,
+    VisionTriggerDirection,
+    VisionTriggerType,
     VisionVWAPRelation,
     validate_vision_method,
 )
+from tests.test_vision_method_calculator_v1 import trigger
 from tests.test_vision_method_validation_v1 import level, opening, option, setup, snapshot, structure, structure_event
 
 
@@ -61,6 +64,10 @@ def test_short_eligible_snapshot_creates_short_trade_candidate():
         structure_event_context=structure_event(bos=VisionBOS.BEARISH_BOS),
         setup_qualification_context=setup(supporting=("Below CPR", "Below L3", "Bearish BOS")),
         option_confirmation_context=option(supporting=("Call writing supports setup",)),
+        price_action_trigger_context=trigger(
+            direction=VisionTriggerDirection.BEARISH,
+            trigger_type=VisionTriggerType.BEARISH_INITIATIVE_BREAKOUT,
+        ),
     )
     report = validate_vision_method(item)
 

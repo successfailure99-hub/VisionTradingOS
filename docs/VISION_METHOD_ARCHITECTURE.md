@@ -1370,3 +1370,65 @@ VPM-TRIGGER-1 is trigger intelligence only. It must never create
 requests, risk decisions, paper trades, broker actions, or live orders.
 VM-ENTRY remains the final entry-location authority, and OSE semantics remain
 unchanged.
+
+## VPM-INTEGRATION-1 Final Candidate Promotion Boundary
+
+VPM-INTEGRATION-1 wires the completed Vision Method layers into the canonical
+final-decision flow:
+
+```text
+Context
+        |
+        v
+Opening
+        |
+        v
+Action Zone / Confluence
+        |
+        v
+Price-Action Trigger
+        |
+        v
+Entry Location / Asymmetry
+        |
+        v
+Option Confirmation
+        |
+        v
+Vision Method Calculator
+        |
+        v
+VisionMethodSnapshot.candidate_state
+```
+
+The final decision owner remains `VisionMethodCalculator`. The Runtime Adapter
+continues to translate an already-final `VisionMethodSnapshot` into a
+`TradeCandidate`; it does not promote, recalculate, or reinterpret methodology.
+Strategy, Risk, Paper Trading, OSE, broker mutation, and live execution
+semantics are unchanged.
+
+Final eligibility now requires all of the following:
+
+- a deterministic bullish or bearish setup thesis;
+- acceptable or favorable `VisionEntryLocationContext`;
+- a valid, current-session, five-minute `VisionPriceActionTriggerContext`;
+- trigger direction aligned with the setup direction;
+- option confirmation that is confirming, neutral, or unavailable.
+
+`NO_TRIGGER`, `INDECISION`, and observational trigger states such as testing,
+approaching, penetrating, or no interaction cannot promote
+`LONG_ELIGIBLE` or `SHORT_ELIGIBLE`. They keep the methodology in
+`PREPARE_LONG`, `PREPARE_SHORT`, `OBSERVE`, `WAIT`, or another non-actionable
+state. `WAIT_FOR_RETEST` remains represented through
+`VisionEntryLocationState.WAIT_FOR_RETEST` and maps to a prepare state, not to
+fresh eligibility.
+
+Option Chain confirmation is a modifier, not the origin of a trade. A neutral
+or unavailable option-chain state may reduce quality but does not veto a valid
+price-action trigger and location. Conversely, option confirmation, opening
+alignment, pivot confluence, or hot-zone context can never create eligibility
+without a valid price-action trigger and suitable entry location.
+
+The Vision Method Inspector exposes the final promotion gates read-only from
+the canonical `VisionMethodSnapshot`: final candidate, direction, trigger gate,
+location gate, option state, and final promotion or waiting reason.

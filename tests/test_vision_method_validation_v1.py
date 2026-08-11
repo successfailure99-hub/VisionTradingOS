@@ -48,12 +48,15 @@ from engines.vision_method import (
     VisionSweepDirection,
     VisionSwingPoint,
     VisionSwingType,
+    VisionTriggerDirection,
+    VisionTriggerType,
     VisionVWAPContext,
     VisionVWAPRelation,
     calculate_vision_method_snapshot,
     validate_vision_method,
     validate_vision_method_validation_report,
 )
+from tests.test_vision_method_calculator_v1 import trigger
 
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -247,6 +250,7 @@ def snapshot(**overrides):
         "structure_event_context": structure_event(),
         "setup_qualification_context": setup(),
         "option_confirmation_context": option(),
+        "price_action_trigger_context": trigger(),
     }
     values.update(overrides)
     return calculate_vision_method_snapshot(VisionMethodCalculationRequest(**values))
@@ -281,6 +285,10 @@ def test_valid_bearish_snapshot_records_short_eligible_methodology():
             structure_context=structure(trend=VisionStructureTrend.BEARISH, pattern=VisionStructurePattern.LL),
             structure_event_context=structure_event(bos=VisionBOS.BEARISH_BOS),
             setup_qualification_context=setup(supporting=("Below CPR", "Below L3", "Bearish BOS")),
+            price_action_trigger_context=trigger(
+                direction=VisionTriggerDirection.BEARISH,
+                trigger_type=VisionTriggerType.BEARISH_INITIATIVE_BREAKOUT,
+            ),
         )
     )
 

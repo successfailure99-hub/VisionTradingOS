@@ -85,6 +85,7 @@ from engines.vision_method import (
     build_pivot_confluence_context,
     calculate_vision_method_snapshot,
 )
+from tests.test_vision_method_calculator_v1 import trigger
 from desktop.vision_method.vision_method_inspector import _pivot_confluence_values
 from application.vision_forensics import _pivot_confluence_payload
 
@@ -463,6 +464,7 @@ def method_request(**overrides) -> VisionMethodCalculationRequest:
             quality=VisionLevelQuality.FULL,
             timestamp=NOW,
         ),
+        "price_action_trigger_context": trigger(timestamp=NOW),
         "current_price": 100.0,
     }
     values.update(overrides)

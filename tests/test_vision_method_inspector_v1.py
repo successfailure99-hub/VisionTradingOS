@@ -31,6 +31,8 @@ from engines.vision_method import (
     VisionCandidateState,
     VisionMethodValidationTraceStep,
     VisionOptionConfirmation,
+    VisionTriggerDirection,
+    VisionTriggerType,
     build_pivot_flight_plan,
     VisionPivotFlightPlanRequest,
     validate_vision_method,
@@ -39,6 +41,7 @@ from core.models.daily_ohlc import DailyOHLC
 from engines.cpr.calculator import CPRCalculator
 from engines.camarilla.calculator import CamarillaCalculator
 from engines.vwap.levels import VWAPLevels
+from tests.test_vision_method_calculator_v1 import trigger
 from tests.test_vision_method_validation_v1 import option, setup, snapshot
 
 
@@ -71,6 +74,10 @@ def test_inspector_renders_snapshot_header_and_method_sections():
     assert panel._labels["Entry Location"].text() == "acceptable"
     assert panel._labels["Direction Quality"].text() == "high"
     assert panel._labels["Chase Risk"].text() == "low"
+    assert panel._labels["Final Candidate"].text() == "long_eligible"
+    assert panel._labels["Final Trigger Gate"].text() == "passed"
+    assert panel._labels["Final Location Gate"].text() == "passed"
+    assert panel._labels["Final Promotion Reason"].text() == "direction, trigger, location, and option state are aligned"
 
 
 def test_inspector_renders_pivot_flight_plan_context():
@@ -560,6 +567,14 @@ def test_live_bridge_missing_option_chain_is_safe_and_deterministic():
 def test_live_bridge_option_timezone_failure_is_neutral_without_hard_veto(monkeypatch):
     app()
     lifecycle, _runtime = _live_lifecycle()
+    _runtime.current_snapshot = replace(
+        _runtime.current_snapshot,
+        price_action_trigger_context=trigger(
+            direction=VisionTriggerDirection.BEARISH,
+            trigger_type=VisionTriggerType.BEARISH_INITIATIVE_BREAKOUT,
+            timestamp=NOW,
+        ),
+    )
     panel = VisionMethodInspector()
 
     def qualified_bearish_setup(*_args, **_kwargs):
@@ -804,6 +819,7 @@ def _runtime_snapshot(
     camarilla=_DEFAULT,
     adr=_DEFAULT,
     vwap=_DEFAULT,
+    price_action_trigger_context=_DEFAULT,
 ):
     history = _candles() if history is None else tuple(history)
     return RuntimeSnapshot(
@@ -830,6 +846,7 @@ def _runtime_snapshot(
         latest_analysis_at=timestamp,
         snapshot_created_at=timestamp,
         adr=None if adr is _DEFAULT else adr,
+        price_action_trigger_context=trigger(timestamp=timestamp) if price_action_trigger_context is _DEFAULT else price_action_trigger_context,
     )
 
 
