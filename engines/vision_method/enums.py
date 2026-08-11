@@ -319,3 +319,89 @@ class VisionScenarioStatus(str, Enum):
     PROVISIONAL = "provisional"
     OPENING_CONFIRMATION_REQUIRED = "opening_confirmation_required"
     INSUFFICIENT_DATA = "insufficient_data"
+
+
+class VisionOpeningPriorRangeLocation(str, Enum):
+    ABOVE_PRIOR_HIGH = "above_prior_high"
+    INSIDE_PRIOR_RANGE = "inside_prior_range"
+    BELOW_PRIOR_LOW = "below_prior_low"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class VisionOpeningPivotValueLocation(str, Enum):
+    IN_RANGE_IN_VALUE = "in_range_in_value"
+    IN_RANGE_OUT_OF_VALUE = "in_range_out_of_value"
+    OUT_OF_RANGE_OUT_OF_VALUE = "out_of_range_out_of_value"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class VisionOpeningCPRLocation(str, Enum):
+    ABOVE_CPR = "above_cpr"
+    INSIDE_CPR = "inside_cpr"
+    BELOW_CPR = "below_cpr"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class VisionOpeningCamarillaLocation(str, Enum):
+    ABOVE_H4 = "above_h4"
+    BETWEEN_H3_H4 = "between_h3_h4"
+    BETWEEN_L3_H3 = "between_l3_h3"
+    BETWEEN_L4_L3 = "between_l4_l3"
+    BELOW_L4 = "below_l4"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class VisionOpeningGapState(str, Enum):
+    GAP_UP = "gap_up"
+    GAP_DOWN = "gap_down"
+    NO_MEANINGFUL_GAP = "no_meaningful_gap"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class VisionOpeningAcceptanceState(str, Enum):
+    ACCEPTED = "accepted"
+    PARTIALLY_ACCEPTED = "partially_accepted"
+    UNRESOLVED = "unresolved"
+    REJECTED = "rejected"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class VisionOpeningScenario(str, Enum):
+    BULLISH_CONTINUATION = "bullish_continuation"
+    BEARISH_CONTINUATION = "bearish_continuation"
+    BULLISH_BREAKOUT_WATCH = "bullish_breakout_watch"
+    BEARISH_BREAKOUT_WATCH = "bearish_breakout_watch"
+    BALANCE_RANGE = "balance_range"
+    RESPONSIVE_REVERSAL_WATCH = "responsive_reversal_watch"
+    CONFLICTED = "conflicted"
+    UNRESOLVED = "unresolved"
+    NO_ACTIVE_SCENARIO = "no_active_scenario"
+
+
+class VisionOpeningScenarioDirection(str, Enum):
+    BULLISH = "bullish"
+    BEARISH = "bearish"
+    NEUTRAL = "neutral"
+    CONFLICTED = "conflicted"
+    NONE = "none"
+
+
+class VisionOpeningScenarioStrength(str, Enum):
+    STRONG = "strong"
+    MODERATE = "moderate"
+    WEAK = "weak"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class VisionOpeningActionZoneState(str, Enum):
+    ACTIVE = "active"
+    DEACTIVATED = "deactivated"
+
+
+class VisionOpeningActionZoneId(str, Enum):
+    H3_PULLBACK_LONG_ZONE = "h3_pullback_long_zone"
+    L3_RESPONSIVE_LONG_ZONE = "l3_responsive_long_zone"
+    L3_PULLBACK_SHORT_ZONE = "l3_pullback_short_zone"
+    H3_RESPONSIVE_SHORT_ZONE = "h3_responsive_short_zone"
+    H4_BULLISH_BREAKOUT_WATCH_ZONE = "h4_bullish_breakout_watch_zone"
+    L4_BEARISH_BREAKOUT_WATCH_ZONE = "l4_bearish_breakout_watch_zone"

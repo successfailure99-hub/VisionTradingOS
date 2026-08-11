@@ -136,6 +136,7 @@ class VisionForensicTrace:
         option = snapshot.option_confirmation_context
         entry = snapshot.entry_location_context
         pivot_plan = snapshot.pivot_flight_plan
+        pivot_opening_assessment = snapshot.pivot_opening_assessment
         risk_decision = getattr(risk_snapshot, "decision", None)
         risk_decision_value = getattr(risk_decision, "value", str(risk_decision or ""))
         approved = risk_decision in {RiskDecisionV2.APPROVED, RiskDecisionV2.APPROVED_REDUCED} or risk_decision_value in {
@@ -172,6 +173,7 @@ class VisionForensicTrace:
                 "vwap_position": level.vwap_context.relation.value if level.vwap_context is not None else "unavailable",
             },
             "pivot_flight_plan": _pivot_flight_plan_payload(pivot_plan),
+            "pivot_opening_assessment": _pivot_opening_assessment_payload(pivot_opening_assessment),
             "opening_range": {
                 "state": opening_range.current_location.value,
                 "break": opening_range.break_direction.value,
@@ -334,6 +336,37 @@ def _pivot_flight_plan_payload(plan: object | None) -> dict[str, Any] | None:
         "conflicting_reasons": tuple(getattr(plan, "conflicting_reasons", ())),
         "warnings": tuple(getattr(plan, "warnings", ())),
     }
+
+
+def _pivot_opening_assessment_payload(assessment: object | None) -> dict[str, Any] | None:
+    if assessment is None:
+        return None
+    return {
+        "opening_price": getattr(assessment, "opening_price", None),
+        "opening_timestamp": _iso_datetime(getattr(assessment, "opening_timestamp", None)),
+        "prior_range_location": getattr(getattr(assessment, "prior_range_location", None), "value", None),
+        "pivot_value_location": getattr(getattr(assessment, "pivot_value_location", None), "value", None),
+        "cpr_location": getattr(getattr(assessment, "cpr_location", None), "value", None),
+        "camarilla_location": getattr(getattr(assessment, "camarilla_location", None), "value", None),
+        "gap_state": getattr(getattr(assessment, "gap_state", None), "value", None),
+        "opening_acceptance_state": getattr(getattr(assessment, "opening_acceptance_state", None), "value", None),
+        "active_scenario": getattr(getattr(assessment, "active_scenario", None), "value", None),
+        "scenario_direction": getattr(getattr(assessment, "scenario_direction", None), "value", None),
+        "scenario_strength": getattr(getattr(assessment, "scenario_strength", None), "value", None),
+        "activated_action_zones": tuple(
+            getattr(getattr(zone, "zone_id", None), "value", "") for zone in getattr(assessment, "activated_action_zones", ())
+        ),
+        "deactivated_action_zones": tuple(
+            getattr(getattr(zone, "zone_id", None), "value", "") for zone in getattr(assessment, "deactivated_action_zones", ())
+        ),
+        "supporting_reasons": tuple(getattr(assessment, "supporting_reasons", ())),
+        "contradicting_reasons": tuple(getattr(assessment, "contradicting_reasons", ())),
+        "warnings": tuple(getattr(assessment, "warnings", ())),
+    }
+
+
+def _iso_datetime(value: datetime | None) -> str | None:
+    return value.isoformat() if isinstance(value, datetime) else None
 
 
 def _swing_price(value: object | None) -> float | None:

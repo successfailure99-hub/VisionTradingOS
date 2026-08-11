@@ -202,6 +202,7 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
     option = snapshot.option_confirmation_context
     entry = snapshot.entry_location_context
     pivot = snapshot.pivot_flight_plan
+    opening_assessment = snapshot.pivot_opening_assessment
     values = {
         "Instrument": snapshot.instrument.value,
         "Timeframe": snapshot.timeframe.value,
@@ -272,6 +273,7 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
         "Assembly Failures": _assembly_failures(snapshot),
     }
     values.update(_pivot_values(pivot))
+    values.update(_opening_assessment_values(opening_assessment))
     return values
 
 
@@ -402,6 +404,7 @@ def _status_context_values(status: VisionMethodLiveStatus) -> dict[str, str]:
             }
         )
     values.update(_pivot_values(status.pivot_flight_plan))
+    values.update(_opening_assessment_values(status.pivot_opening_assessment))
     return values
 
 
@@ -638,6 +641,37 @@ def _pivot_zones(zones) -> str:
     return formatters.joined(tuple(f"{zone.label} ({zone.condition})" for zone in zones)) if zones else "none"
 
 
+def _opening_assessment_values(assessment) -> dict[str, str]:
+    if assessment is None:
+        return {}
+    return {
+        "Opening Pre-Market Context": assessment.pre_market_context,
+        "Opening Initial Bias": assessment.pre_market_directional_prior,
+        "Canonical Opening Price": formatters.price(assessment.opening_price),
+        "Canonical Opening Time": formatters.timestamp(assessment.opening_timestamp),
+        "Opening Gap": assessment.gap_state.value,
+        "Open Prior Range": assessment.prior_range_location.value,
+        "Open CPR": assessment.cpr_location.value,
+        "Open Camarilla": assessment.camarilla_location.value,
+        "Open Value Location": assessment.pivot_value_location.value,
+        "Plan Acceptance": assessment.opening_acceptance_state.value,
+        "Active Opening Scenario": assessment.active_scenario.value,
+        "Scenario Direction": assessment.scenario_direction.value,
+        "Scenario Strength": assessment.scenario_strength.value,
+        "Active Opening Zones": _opening_zones(assessment.activated_action_zones),
+        "Rejected Opening Zones": _opening_zones(assessment.deactivated_action_zones),
+        "Opening Supporting Reasons": _joined_or_none(assessment.supporting_reasons),
+        "Opening Contradicting Reasons": _joined_or_none(assessment.contradicting_reasons),
+        "Opening Warnings": _joined_or_none(assessment.warnings),
+    }
+
+
+def _opening_zones(zones) -> str:
+    if not zones:
+        return "none"
+    return formatters.joined(tuple(f"{zone.zone_id.value}: {zone.reason}" for zone in zones))
+
+
 def _swing_price(swing) -> str:
     if swing is None:
         return "none"
@@ -710,6 +744,29 @@ _SECTION_FIELDS = (
             "Bullish Action Zones",
             "Bearish Action Zones",
             "Pivot Warnings",
+        ),
+    ),
+    (
+        "Opening Assessment",
+        (
+            "Opening Pre-Market Context",
+            "Opening Initial Bias",
+            "Canonical Opening Price",
+            "Canonical Opening Time",
+            "Opening Gap",
+            "Open Prior Range",
+            "Open CPR",
+            "Open Camarilla",
+            "Open Value Location",
+            "Plan Acceptance",
+            "Active Opening Scenario",
+            "Scenario Direction",
+            "Scenario Strength",
+            "Active Opening Zones",
+            "Rejected Opening Zones",
+            "Opening Supporting Reasons",
+            "Opening Contradicting Reasons",
+            "Opening Warnings",
         ),
     ),
     (

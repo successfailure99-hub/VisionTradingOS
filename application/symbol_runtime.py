@@ -112,8 +112,13 @@ from engines.trade_journal_v1 import TradeJournalV1Configuration, TradeJournalV1
 from engines.vision_method import (
     VisionMethodSnapshot,
     VisionMethodValidationReport,
+    VisionLevelContextRequest,
     VisionPivotFlightPlan,
     VisionPivotFlightPlanRequest,
+    VisionPivotOpeningAssessment,
+    VisionPivotOpeningAssessmentRequest,
+    assemble_vision_level_context,
+    assess_pivot_opening,
     build_pivot_flight_plan,
 )
 from engines.vwap.vwap_engine import VWAPEngine
@@ -406,6 +411,11 @@ class SymbolRuntime:
         self._vision_method_validation_report: VisionMethodValidationReport | None = None
         self._pivot_flight_plan: VisionPivotFlightPlan | None = None
         self._pivot_flight_plan_identity: tuple | None = None
+        self._pivot_opening_assessment: VisionPivotOpeningAssessment | None = None
+        self._pivot_opening_assessment_identity: tuple | None = None
+        self._session_opening_price: float | None = None
+        self._session_opening_timestamp: datetime | None = None
+        self._session_opening_trading_date: date | None = None
         self._vision_ai_explanation: str | None = None
         self._option_chain_analytics: OptionChainAnalyticsSnapshot | None = None
         self._option_chain_last_error: str | None = None
@@ -495,6 +505,7 @@ class SymbolRuntime:
         self._require_running()
         if tick.symbol is not self._core_instrument:
             raise ValueError("Tick instrument does not match SymbolRuntime.")
+        self._capture_session_open_from_tick(tick)
         for engine in self.candle_engines.values():
             engine.on_tick(tick)
         if not self._ready_futures_proxy():
@@ -696,6 +707,7 @@ class SymbolRuntime:
                 self._last_processed_history_counts[timeframe] = len(candle_engine.get_history(self._core_instrument))
         if accepted:
             latest = accepted[-1]
+            self._restore_session_open_from_history(self._exchange_session_date(latest.end_time))
             self._refresh_adr(latest.end_time, latest.close)
             self._observe_market_timestamp(latest.end_time)
         return accepted
@@ -1140,6 +1152,11 @@ class SymbolRuntime:
         self._vision_method_validation_report = None
         self._pivot_flight_plan = None
         self._pivot_flight_plan_identity = None
+        self._pivot_opening_assessment = None
+        self._pivot_opening_assessment_identity = None
+        self._session_opening_price = None
+        self._session_opening_timestamp = None
+        self._session_opening_trading_date = None
         self._vision_ai_explanation = None
         self._option_trade_candidate = None
         self._option_paper_risk = None
@@ -1155,6 +1172,7 @@ class SymbolRuntime:
         market_timestamp = self._market_timestamp(latest_candle)
         runtime_session = self._runtime_trading_session(market_timestamp)
         pivot_flight_plan = self._current_pivot_flight_plan(market_timestamp, runtime_session)
+        pivot_opening_assessment = self._current_pivot_opening_assessment(market_timestamp, runtime_session, pivot_flight_plan)
         vwap = self.vwap_engine.get_latest(self._core_instrument)
         adr = self.adr_engine.state
         price_action = self.price_action_engine.state
@@ -1231,6 +1249,7 @@ class SymbolRuntime:
             vision_method_snapshot=self._vision_method_snapshot,
             vision_method_validation_report=self._vision_method_validation_report,
             pivot_flight_plan=pivot_flight_plan,
+            pivot_opening_assessment=pivot_opening_assessment,
             vision_trade_candidate=self._vision_trade_candidate,
             option_trade_candidate=self._option_trade_candidate,
             option_paper_risk=self._option_paper_risk,
@@ -1300,6 +1319,124 @@ class SymbolRuntime:
             self._pivot_flight_plan = None
             self._pivot_flight_plan_identity = None
         return self._pivot_flight_plan
+
+    def _capture_session_open_from_tick(self, tick: Tick) -> None:
+        if tick.timestamp.tzinfo is None or tick.timestamp.utcoffset() is None:
+            return
+        session = self._exchange_calendar.resolve_active_session(tick.timestamp, tick.exchange)
+        trading_date = session.trading_date
+        if trading_date is None or not session.is_open:
+            return
+        if self._session_opening_trading_date != trading_date:
+            self._session_opening_price = None
+            self._session_opening_timestamp = None
+            self._session_opening_trading_date = trading_date
+            self._pivot_opening_assessment = None
+            self._pivot_opening_assessment_identity = None
+        if self._session_opening_price is not None:
+            return
+        if session.session_open is not None and tick.timestamp.astimezone(IST) < session.session_open:
+            return
+        self._session_opening_price = float(tick.last_price)
+        self._session_opening_timestamp = tick.timestamp
+        self._session_opening_trading_date = trading_date
+
+    def _restore_session_open_from_history(self, trading_date: date | None) -> None:
+        if trading_date is None:
+            return
+        if self._session_opening_trading_date == trading_date and self._session_opening_price is not None:
+            return
+        candidates = tuple(
+            sorted(
+                (
+                    candle
+                    for candle in self.candle_engine.get_history(self._core_instrument)
+                    if candle.start_time.date() == trading_date
+                    and candle.timeframe == self._primary_timeframe.value
+                    and candle.start_time.time() >= INTRADAY_SESSION_OPEN
+                ),
+                key=lambda candle: (candle.start_time, candle.end_time),
+            )
+        )
+        if not candidates:
+            return
+        first = candidates[0]
+        self._session_opening_price = float(first.open)
+        self._session_opening_timestamp = first.start_time
+        self._session_opening_trading_date = trading_date
+        self._pivot_opening_assessment = None
+        self._pivot_opening_assessment_identity = None
+
+    def _current_pivot_opening_assessment(
+        self,
+        market_timestamp: datetime | None,
+        runtime_session: RuntimeTradingSession,
+        flight_plan: VisionPivotFlightPlan | None,
+    ) -> VisionPivotOpeningAssessment | None:
+        trading_date = runtime_session.trading_date
+        if trading_date is None or flight_plan is None:
+            self._pivot_opening_assessment = None
+            self._pivot_opening_assessment_identity = None
+            return None
+        self._restore_session_open_from_history(trading_date)
+        if (
+            self._session_opening_price is None
+            or self._session_opening_timestamp is None
+            or self._session_opening_trading_date != trading_date
+        ):
+            return None
+        previous_day = next(
+            (item for item in self._daily_ohlc_history if item.trading_date == flight_plan.reference_session_date),
+            None,
+        )
+        if previous_day is None or self.cpr is None or self.camarilla is None:
+            return None
+        identity = (
+            trading_date,
+            self._session_opening_price,
+            self._session_opening_timestamp,
+            flight_plan,
+            previous_day,
+            self.cpr,
+            self.camarilla,
+        )
+        if self._pivot_opening_assessment is not None and self._pivot_opening_assessment_identity == identity:
+            return self._pivot_opening_assessment
+        timestamp = market_timestamp or self._session_opening_timestamp
+        try:
+            level_context = assemble_vision_level_context(
+                VisionLevelContextRequest(
+                    instrument=self._instrument,
+                    timeframe=self._vision_decision_timeframe,
+                    trading_date=trading_date,
+                    timestamp=timestamp,
+                    latest_price=self._session_opening_price,
+                    opening_price=self._session_opening_price,
+                    previous_day=previous_day,
+                    cpr=self.cpr,
+                    camarilla=self.camarilla,
+                    adr=self.adr_engine.state,
+                    vwap=self.vwap_engine.get_latest(self._core_instrument),
+                ),
+                instrument=self._instrument,
+                timeframe=self._vision_decision_timeframe,
+                max_snapshot_age=timedelta(days=1),
+            )
+            self._pivot_opening_assessment = assess_pivot_opening(
+                VisionPivotOpeningAssessmentRequest(
+                    instrument=self._instrument,
+                    trading_date=trading_date,
+                    opening_price=self._session_opening_price,
+                    opening_timestamp=self._session_opening_timestamp,
+                    flight_plan=flight_plan,
+                    level_context=level_context,
+                )
+            )
+            self._pivot_opening_assessment_identity = identity
+        except (TypeError, ValueError):
+            self._pivot_opening_assessment = None
+            self._pivot_opening_assessment_identity = None
+        return self._pivot_opening_assessment
 
     def _process_paper_tick(self, tick: Tick) -> None:
         if self._option_paper_position is not None and self._option_paper_position.status is OptionPaperPositionStatus.OPEN:

@@ -1194,3 +1194,64 @@ logic, candidate promotion, option-selling selection, Strategy, Risk, and Paper
 Trading remain downstream and unchanged. A flight plan may be displayed in the
 Inspector and forensic trace, but it must never create a `TradeCandidate` by
 itself.
+
+## VPM-OPENING-1 Opening Acceptance Boundary
+
+VPM-OPENING-1 adds deterministic opening acceptance/rejection on top of the
+provisional Pivot Flight Plan. It captures the canonical opening price once per
+active exchange session from the first valid market observation. During a
+same-session restart, the opening price may be reconstructed from trusted
+same-session candle history. Restart-time price must never become the session
+open.
+
+The Opening Assessment consumes only:
+
+- `VisionPivotFlightPlan`;
+- `VisionLevelContext`;
+- the canonical opening price and opening timestamp owned by `SymbolRuntime`.
+
+It classifies:
+
+- open relative to prior high/low;
+- open relative to CPR;
+- open relative to Camarilla H4/H3/L3/L4;
+- in-range/in-value, in-range/out-of-value, or out-of-range/out-of-value;
+- gap state;
+- opening acceptance state;
+- active opening scenario;
+- scenario direction and strength;
+- active/deactivated context zones.
+
+Supported scenario outputs are `BULLISH_CONTINUATION`,
+`BEARISH_CONTINUATION`, `BULLISH_BREAKOUT_WATCH`,
+`BEARISH_BREAKOUT_WATCH`, `BALANCE_RANGE`,
+`RESPONSIVE_REVERSAL_WATCH`, `CONFLICTED`, `UNRESOLVED`, and
+`NO_ACTIVE_SCENARIO`.
+
+Opening Assessment is context only. It does not calculate CPR, Camarilla,
+Opening Range, structure, liquidity, setup qualification, option confirmation,
+AI, Strategy, Risk, OSE, Paper Trading, or broker actions. Accepted opening
+context and active action zones are not entry triggers and cannot create a
+`TradeCandidate` by themselves.
+
+The canonical runtime flow is:
+
+```text
+ExchangeTradingCalendar
+        |
+        v
+SymbolRuntime canonical session open
+        |
+        v
+Pivot Flight Plan + Level Context
+        |
+        v
+Pivot Opening Assessment
+        |
+        v
+RuntimeSnapshot -> Inspector / Forensics / VisionMethodSnapshot
+```
+
+Normal methodology states such as `REJECTED`, `UNRESOLVED`,
+`PARTIALLY_ACCEPTED`, and `INSUFFICIENT_DATA` are operational context states.
+They must not mark the runtime as `FAILED`.

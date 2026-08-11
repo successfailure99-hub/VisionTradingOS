@@ -48,6 +48,7 @@ from .models import (
     VisionStructureContext,
     VisionStructureEventContext,
 )
+from .opening_assessment import VisionPivotOpeningAssessment
 from .pivot_context import VisionPivotFlightPlan
 from .validator import validate_vision_method_snapshot
 
@@ -66,6 +67,7 @@ class VisionMethodCalculationRequest:
     option_confirmation_context: VisionOptionConfirmationContext
     current_price: float | None = None
     pivot_flight_plan: VisionPivotFlightPlan | None = None
+    pivot_opening_assessment: VisionPivotOpeningAssessment | None = None
     assembly_failures: tuple[VisionContextAssemblyFailure, ...] = ()
 
     def __post_init__(self) -> None:
@@ -97,6 +99,13 @@ class VisionMethodCalculationRequest:
                 raise ValueError("pivot_flight_plan instrument mismatch.")
             if self.pivot_flight_plan.trading_date != self.timestamp.date():
                 raise ValueError("pivot_flight_plan trading date mismatch.")
+        if self.pivot_opening_assessment is not None:
+            if not isinstance(self.pivot_opening_assessment, VisionPivotOpeningAssessment):
+                raise TypeError("pivot_opening_assessment must be VisionPivotOpeningAssessment or None.")
+            if self.pivot_opening_assessment.instrument is not self.instrument:
+                raise ValueError("pivot_opening_assessment instrument mismatch.")
+            if self.pivot_opening_assessment.trading_date != self.timestamp.date():
+                raise ValueError("pivot_opening_assessment trading date mismatch.")
         object.__setattr__(self, "assembly_failures", _normalize_assembly_failures(self.assembly_failures))
 
 
@@ -136,6 +145,7 @@ def calculate_vision_method_snapshot(
         supporting_reasons=supporting_reasons,
         quality=quality,
         pivot_flight_plan=request.pivot_flight_plan,
+        pivot_opening_assessment=request.pivot_opening_assessment,
         entry_location_context=entry_location,
         assembly_failures=request.assembly_failures,
     )
@@ -324,6 +334,8 @@ def _supporting_reasons(
     reasons: list[str] = []
     if request.pivot_flight_plan is not None:
         reasons.extend(_pivot_flight_plan_reasons(request.pivot_flight_plan))
+    if request.pivot_opening_assessment is not None:
+        reasons.extend(_pivot_opening_assessment_reasons(request.pivot_opening_assessment))
     reasons.extend(_level_reasons(request.level_context))
     reasons.extend(_opening_range_reasons(request.opening_range_context))
     reasons.extend(_structure_reasons(request.structure_context))
@@ -350,6 +362,18 @@ def _pivot_flight_plan_reasons(plan: VisionPivotFlightPlan) -> tuple[str, ...]:
     ]
     reasons.extend(f"Pivot conflict: {item}" for item in plan.conflicting_reasons)
     reasons.extend(f"Pivot warning: {item}" for item in plan.warnings)
+    return tuple(reasons)
+
+
+def _pivot_opening_assessment_reasons(assessment: VisionPivotOpeningAssessment) -> tuple[str, ...]:
+    reasons = [
+        f"Opening assessment {assessment.opening_acceptance_state.value}",
+        f"Opening scenario {assessment.active_scenario.value}",
+        f"Opening direction {assessment.scenario_direction.value}",
+    ]
+    reasons.extend(f"Opening support: {item}" for item in assessment.supporting_reasons)
+    reasons.extend(f"Opening conflict: {item}" for item in assessment.contradicting_reasons)
+    reasons.extend(f"Opening warning: {item}" for item in assessment.warnings)
     return tuple(reasons)
 
 

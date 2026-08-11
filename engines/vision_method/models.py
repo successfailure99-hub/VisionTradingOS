@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from application.enums import RuntimeInstrument
 from core.enums.timeframe import TimeFrame
@@ -57,6 +58,9 @@ from .enums import (
     VisionVWAPRelation,
 )
 from .pivot_context import VisionPivotFlightPlan
+
+if TYPE_CHECKING:
+    from .opening_assessment import VisionPivotOpeningAssessment
 
 
 @dataclass(frozen=True, slots=True)
@@ -642,6 +646,7 @@ class VisionMethodSnapshot:
     supporting_reasons: tuple[str, ...]
     quality: str
     pivot_flight_plan: VisionPivotFlightPlan | None = None
+    pivot_opening_assessment: "VisionPivotOpeningAssessment | None" = None
     entry_location_context: VisionEntryLocationContext = field(default_factory=lambda: VisionEntryLocationContext(
         direction="unknown",
         direction_quality=VisionDirectionQuality.INVALID,
@@ -696,6 +701,15 @@ class VisionMethodSnapshot:
                 raise ValueError("pivot_flight_plan instrument mismatch.")
             if self.pivot_flight_plan.trading_date != self.timestamp.date():
                 raise ValueError("pivot_flight_plan trading date mismatch.")
+        if self.pivot_opening_assessment is not None:
+            from .opening_assessment import VisionPivotOpeningAssessment
+
+            if not isinstance(self.pivot_opening_assessment, VisionPivotOpeningAssessment):
+                raise TypeError("pivot_opening_assessment must be VisionPivotOpeningAssessment or None.")
+            if self.pivot_opening_assessment.instrument is not self.instrument:
+                raise ValueError("pivot_opening_assessment instrument mismatch.")
+            if self.pivot_opening_assessment.trading_date != self.timestamp.date():
+                raise ValueError("pivot_opening_assessment trading date mismatch.")
         object.__setattr__(self, "blocking_reasons", _normalize_text_tuple(self.blocking_reasons, "blocking_reasons"))
         object.__setattr__(self, "supporting_reasons", _normalize_text_tuple(self.supporting_reasons, "supporting_reasons"))
         object.__setattr__(self, "quality", _normalize_text(self.quality, "quality"))

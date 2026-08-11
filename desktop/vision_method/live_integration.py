@@ -106,6 +106,7 @@ class _LiveAssembly:
     setup: object | None = None
     option_confirmation: object | None = None
     pivot_flight_plan: object | None = None
+    pivot_opening_assessment: object | None = None
     snapshot: VisionMethodSnapshot | None = None
     report: VisionMethodValidationReport | None = None
     failures: tuple[VisionContextAssemblyFailure, ...] = ()
@@ -205,6 +206,7 @@ class VisionMethodLiveInspectorBridge:
             )
         failures: list[VisionContextAssemblyFailure] = []
         pivot_flight_plan = getattr(runtime_snapshot, "pivot_flight_plan", None)
+        pivot_opening_assessment = getattr(runtime_snapshot, "pivot_opening_assessment", None)
         if not history:
             failures.append(_missing_failure("Candle Engine", "Closed candle history is unavailable."))
             return _LiveAssembly(
@@ -213,6 +215,7 @@ class VisionMethodLiveInspectorBridge:
                 timestamp=timestamp,
                 trading_date=trading_date,
                 pivot_flight_plan=pivot_flight_plan,
+                pivot_opening_assessment=pivot_opening_assessment,
                 failures=tuple(failures),
             )
 
@@ -421,6 +424,7 @@ class VisionMethodLiveInspectorBridge:
                     option_confirmation_context=option_confirmation,
                     current_price=history[-1].close,
                     pivot_flight_plan=pivot_flight_plan,
+                    pivot_opening_assessment=pivot_opening_assessment,
                     assembly_failures=tuple(failures),
                 ),
                 instrument=runtime_snapshot.symbol,
@@ -450,6 +454,7 @@ class VisionMethodLiveInspectorBridge:
             setup=setup,
             option_confirmation=option_confirmation,
             pivot_flight_plan=pivot_flight_plan,
+            pivot_opening_assessment=pivot_opening_assessment,
             snapshot=snapshot,
             report=report,
             failures=tuple(failures),
@@ -669,6 +674,7 @@ class VisionMethodLiveInspectorBridge:
                 option_confirmation_context=option_confirmation,
                 current_price=history[-1].close,
                 pivot_flight_plan=getattr(runtime_snapshot, "pivot_flight_plan", None),
+                pivot_opening_assessment=getattr(runtime_snapshot, "pivot_opening_assessment", None),
                 assembly_failures=tuple(failures),
             ),
             instrument=runtime_snapshot.symbol,
@@ -784,6 +790,7 @@ class VisionMethodLiveInspectorBridge:
             setup_qualification_context=assembly.setup,
             option_confirmation_context=assembly.option_confirmation,
             pivot_flight_plan=assembly.pivot_flight_plan,
+            pivot_opening_assessment=assembly.pivot_opening_assessment,
         )
 
     def _status_from_snapshot(
@@ -821,6 +828,7 @@ class VisionMethodLiveInspectorBridge:
             updated_at=self._clock(),
             market_data_age_seconds=0.0,
             pivot_flight_plan=snapshot.pivot_flight_plan,
+            pivot_opening_assessment=snapshot.pivot_opening_assessment,
         )
 
     def _internal_error_status(self, exc: Exception) -> VisionMethodLiveStatus:
@@ -1047,6 +1055,8 @@ def _available_contexts(snapshot: VisionMethodSnapshot) -> tuple[str, ...]:
     contexts = ["Market Data", "Candle Engine", "Level Context"]
     if snapshot.pivot_flight_plan is not None:
         contexts.append("Pivot Flight Plan")
+    if snapshot.pivot_opening_assessment is not None:
+        contexts.append("Opening Assessment")
     if snapshot.opening_range_context.quality is not VisionLevelQuality.INSUFFICIENT:
         contexts.append("Opening Range")
     if snapshot.structure_context.quality is not VisionLevelQuality.INSUFFICIENT:
@@ -1070,6 +1080,8 @@ def _available_contexts_from_assembly(assembly: _LiveAssembly) -> tuple[str, ...
         contexts.append("Level Context")
     if assembly.pivot_flight_plan is not None:
         contexts.append("Pivot Flight Plan")
+    if assembly.pivot_opening_assessment is not None:
+        contexts.append("Opening Assessment")
     if assembly.opening_range is not None and assembly.opening_range.quality is not VisionLevelQuality.INSUFFICIENT:
         contexts.append("Opening Range")
     if assembly.structure is not None and assembly.structure.quality is not VisionLevelQuality.INSUFFICIENT:
