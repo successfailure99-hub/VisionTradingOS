@@ -49,6 +49,7 @@ from .models import (
     VisionStructureEventContext,
 )
 from .opening_assessment import VisionPivotOpeningAssessment
+from .pivot_confluence import VisionPivotConfluenceContext
 from .pivot_context import VisionPivotFlightPlan
 from .validator import validate_vision_method_snapshot
 
@@ -68,6 +69,7 @@ class VisionMethodCalculationRequest:
     current_price: float | None = None
     pivot_flight_plan: VisionPivotFlightPlan | None = None
     pivot_opening_assessment: VisionPivotOpeningAssessment | None = None
+    pivot_confluence_context: VisionPivotConfluenceContext | None = None
     assembly_failures: tuple[VisionContextAssemblyFailure, ...] = ()
 
     def __post_init__(self) -> None:
@@ -106,6 +108,17 @@ class VisionMethodCalculationRequest:
                 raise ValueError("pivot_opening_assessment instrument mismatch.")
             if self.pivot_opening_assessment.trading_date != self.timestamp.date():
                 raise ValueError("pivot_opening_assessment trading date mismatch.")
+        if self.pivot_confluence_context is not None:
+            if not isinstance(self.pivot_confluence_context, VisionPivotConfluenceContext):
+                raise TypeError("pivot_confluence_context must be VisionPivotConfluenceContext or None.")
+            if self.pivot_confluence_context.instrument is not self.instrument:
+                raise ValueError("pivot_confluence_context instrument mismatch.")
+            if self.pivot_confluence_context.timeframe is not self.timeframe:
+                raise ValueError("pivot_confluence_context timeframe mismatch.")
+            if self.pivot_confluence_context.trading_date != self.timestamp.date():
+                raise ValueError("pivot_confluence_context trading date mismatch.")
+            if self.pivot_confluence_context.timestamp > self.timestamp:
+                raise ValueError("pivot_confluence_context timestamp inconsistency.")
         object.__setattr__(self, "assembly_failures", _normalize_assembly_failures(self.assembly_failures))
 
 
@@ -146,6 +159,7 @@ def calculate_vision_method_snapshot(
         quality=quality,
         pivot_flight_plan=request.pivot_flight_plan,
         pivot_opening_assessment=request.pivot_opening_assessment,
+        pivot_confluence_context=request.pivot_confluence_context,
         entry_location_context=entry_location,
         assembly_failures=request.assembly_failures,
     )
@@ -169,6 +183,8 @@ def validate_vision_method_calculation_request(
     if request.opening_range_context.opening_end_time > request.timestamp:
         raise ValueError("timestamp inconsistency.")
     if request.option_confirmation_context.timestamp > request.timestamp:
+        raise ValueError("timestamp inconsistency.")
+    if request.pivot_confluence_context is not None and request.pivot_confluence_context.timestamp > request.timestamp:
         raise ValueError("timestamp inconsistency.")
     if request.timestamp.utcoffset() != request.opening_range_context.opening_start_time.utcoffset():
         raise ValueError("timezone mismatch.")
@@ -336,6 +352,8 @@ def _supporting_reasons(
         reasons.extend(_pivot_flight_plan_reasons(request.pivot_flight_plan))
     if request.pivot_opening_assessment is not None:
         reasons.extend(_pivot_opening_assessment_reasons(request.pivot_opening_assessment))
+    if request.pivot_confluence_context is not None:
+        reasons.extend(_pivot_confluence_reasons(request.pivot_confluence_context))
     reasons.extend(_level_reasons(request.level_context))
     reasons.extend(_opening_range_reasons(request.opening_range_context))
     reasons.extend(_structure_reasons(request.structure_context))
@@ -374,6 +392,19 @@ def _pivot_opening_assessment_reasons(assessment: VisionPivotOpeningAssessment) 
     reasons.extend(f"Opening support: {item}" for item in assessment.supporting_reasons)
     reasons.extend(f"Opening conflict: {item}" for item in assessment.contradicting_reasons)
     reasons.extend(f"Opening warning: {item}" for item in assessment.warnings)
+    return tuple(reasons)
+
+
+def _pivot_confluence_reasons(context: VisionPivotConfluenceContext) -> tuple[str, ...]:
+    if not context.hot_zones:
+        return ("Pivot confluence unavailable",)
+    reasons = [
+        f"Pivot confluence {context.quality.value}",
+        f"Pivot hot zones {len(context.hot_zones)}",
+    ]
+    top = context.hot_zones[0]
+    reasons.append(f"Top pivot zone {top.directional_role.value} {top.zone_low:.2f}-{top.zone_high:.2f}")
+    reasons.extend(f"Pivot zone warning: {item}" for item in context.warnings)
     return tuple(reasons)
 
 

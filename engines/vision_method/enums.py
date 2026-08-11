@@ -405,3 +405,95 @@ class VisionOpeningActionZoneId(str, Enum):
     H3_RESPONSIVE_SHORT_ZONE = "h3_responsive_short_zone"
     H4_BULLISH_BREAKOUT_WATCH_ZONE = "h4_bullish_breakout_watch_zone"
     L4_BEARISH_BREAKOUT_WATCH_ZONE = "l4_bearish_breakout_watch_zone"
+
+
+class VisionPivotReferenceFamily(str, Enum):
+    CPR = "cpr"
+    CAMARILLA = "camarilla"
+    PRIOR_SESSION = "prior_session"
+    VWAP = "vwap"
+    OPENING_RANGE = "opening_range"
+    STRUCTURE = "structure"
+    LIQUIDITY = "liquidity"
+
+
+class VisionPivotReferenceKind(str, Enum):
+    CPR_BC = "cpr_bc"
+    CPR_TC = "cpr_tc"
+    CPR_PIVOT = "cpr_pivot"
+    CAMARILLA_H3 = "camarilla_h3"
+    CAMARILLA_H4 = "camarilla_h4"
+    CAMARILLA_H5 = "camarilla_h5"
+    CAMARILLA_H6 = "camarilla_h6"
+    CAMARILLA_L3 = "camarilla_l3"
+    CAMARILLA_L4 = "camarilla_l4"
+    CAMARILLA_L5 = "camarilla_l5"
+    CAMARILLA_L6 = "camarilla_l6"
+    PRIOR_HIGH = "prior_high"
+    PRIOR_LOW = "prior_low"
+    PRIOR_CLOSE = "prior_close"
+    VWAP = "vwap"
+    OPENING_RANGE_HIGH = "opening_range_high"
+    OPENING_RANGE_LOW = "opening_range_low"
+    SWING_HIGH = "swing_high"
+    SWING_LOW = "swing_low"
+    EQUAL_HIGH = "equal_high"
+    EQUAL_LOW = "equal_low"
+    FAIR_VALUE_GAP = "fair_value_gap"
+    ORDER_BLOCK = "order_block"
+
+
+class VisionPivotZoneType(str, Enum):
+    SUPPORT_HOT_ZONE = "support_hot_zone"
+    RESISTANCE_HOT_ZONE = "resistance_hot_zone"
+    BREAKOUT_DECISION_ZONE = "breakout_decision_zone"
+    REVERSAL_DECISION_ZONE = "reversal_decision_zone"
+    TARGET_MAGNET_ZONE = "target_magnet_zone"
+    CONFLICT_ZONE = "conflict_zone"
+    NEUTRAL_HOT_ZONE = "neutral_hot_zone"
+
+
+class VisionPivotZoneDirectionalRole(str, Enum):
+    BULLISH_SUPPORT = "bullish_support"
+    BEARISH_RESISTANCE = "bearish_resistance"
+    BREAKOUT_UPSIDE = "breakout_upside"
+    BREAKDOWN_DOWNSIDE = "breakdown_downside"
+    TARGET_MAGNET = "target_magnet"
+    NEUTRAL = "neutral"
+    CONFLICT = "conflict"
+
+
+class VisionPivotZoneQuality(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    VERY_HIGH = "very_high"
+
+
+class VisionPivotZoneStrength(str, Enum):
+    WEAK = "weak"
+    MODERATE = "moderate"
+    STRONG = "strong"
+    VERY_STRONG = "very_strong"
+
+
+class VisionPivotZoneStatus(str, Enum):
+    ACTIVE = "active"
+    CONSUMED = "consumed"
+    STALE = "stale"
+    INVALIDATED = "invalidated"
+
+
+class VisionPivotZoneAlignment(str, Enum):
+    ALIGNED = "aligned"
+    PARTIAL = "partial"
+    OPPOSED = "opposed"
+    NEUTRAL = "neutral"
+    UNRESOLVED = "unresolved"
+
+
+class VisionPivotPriceRelation(str, Enum):
+    BELOW = "below"
+    INSIDE = "inside"
+    ABOVE = "above"
+    APPROACHING = "approaching"

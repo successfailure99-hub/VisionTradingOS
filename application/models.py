@@ -79,7 +79,13 @@ from engines.execution_reconciliation.models import ExecutionReconciliationSnaps
 from engines.shadow_trading_session.models import ShadowTradingSessionSnapshot
 from engines.vwap.levels import VWAPLevels
 from engines.tradingview_evidence.models import TradingViewEvidenceEngineSnapshot
-from engines.vision_method import VisionMethodSnapshot, VisionMethodValidationReport, VisionPivotFlightPlan, VisionPivotOpeningAssessment
+from engines.vision_method import (
+    VisionMethodSnapshot,
+    VisionMethodValidationReport,
+    VisionPivotConfluenceContext,
+    VisionPivotFlightPlan,
+    VisionPivotOpeningAssessment,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -712,6 +718,7 @@ class RuntimeSnapshot:
     vision_forensic_counters: VisionForensicCounters | None = None
     pivot_flight_plan: VisionPivotFlightPlan | None = None
     pivot_opening_assessment: VisionPivotOpeningAssessment | None = None
+    pivot_confluence_context: VisionPivotConfluenceContext | None = None
 
     def __post_init__(self) -> None:
         if self.runtime_session is not None and not isinstance(self.runtime_session, RuntimeTradingSession):
@@ -749,6 +756,8 @@ class RuntimeSnapshot:
             raise TypeError("pivot_flight_plan must be VisionPivotFlightPlan or None")
         if self.pivot_opening_assessment is not None and not isinstance(self.pivot_opening_assessment, VisionPivotOpeningAssessment):
             raise TypeError("pivot_opening_assessment must be VisionPivotOpeningAssessment or None")
+        if self.pivot_confluence_context is not None and not isinstance(self.pivot_confluence_context, VisionPivotConfluenceContext):
+            raise TypeError("pivot_confluence_context must be VisionPivotConfluenceContext or None")
         if self.option_trade_candidate is not None and not isinstance(self.option_trade_candidate, OptionTradeCandidate):
             raise TypeError("option_trade_candidate must be OptionTradeCandidate or None")
         if self.option_paper_risk is not None and not isinstance(self.option_paper_risk, OptionPaperRiskSnapshot):

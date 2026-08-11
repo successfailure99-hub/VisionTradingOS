@@ -203,6 +203,7 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
     entry = snapshot.entry_location_context
     pivot = snapshot.pivot_flight_plan
     opening_assessment = snapshot.pivot_opening_assessment
+    confluence = snapshot.pivot_confluence_context
     values = {
         "Instrument": snapshot.instrument.value,
         "Timeframe": snapshot.timeframe.value,
@@ -274,6 +275,7 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
     }
     values.update(_pivot_values(pivot))
     values.update(_opening_assessment_values(opening_assessment))
+    values.update(_pivot_confluence_values(confluence))
     return values
 
 
@@ -405,6 +407,7 @@ def _status_context_values(status: VisionMethodLiveStatus) -> dict[str, str]:
         )
     values.update(_pivot_values(status.pivot_flight_plan))
     values.update(_opening_assessment_values(status.pivot_opening_assessment))
+    values.update(_pivot_confluence_values(status.pivot_confluence_context))
     return values
 
 
@@ -480,6 +483,16 @@ def _diagnostic_values(status: VisionMethodLiveStatus) -> dict[str, str]:
                     "Combined Pivot Context": marker,
                     "Initial Pivot Bias": marker,
                     "Opening Confirmation Required": failure.validation_message,
+                    "Top Hot Zone": marker,
+                    "Hot Zone Band": marker,
+                    "Hot Zone Role": marker,
+                    "Hot Zone Quality": marker,
+                    "Hot Zone Members": marker,
+                    "Hot Zone Families": marker,
+                    "Hot Zone Alignment": marker,
+                    "Hot Zone Price Relation": marker,
+                    "Hot Zone Status": marker,
+                    "Hot Zone Reason": failure.validation_message,
                 }
             )
         elif "candle" in stage:
@@ -672,6 +685,37 @@ def _opening_zones(zones) -> str:
     return formatters.joined(tuple(f"{zone.zone_id.value}: {zone.reason}" for zone in zones))
 
 
+def _pivot_confluence_values(context) -> dict[str, str]:
+    if context is None:
+        return {}
+    if not context.hot_zones:
+        return {
+            "Top Hot Zone": "none",
+            "Hot Zone Band": "none",
+            "Hot Zone Role": "none",
+            "Hot Zone Quality": context.quality.value,
+            "Hot Zone Members": "none",
+            "Hot Zone Families": "none",
+            "Hot Zone Alignment": "none",
+            "Hot Zone Price Relation": "none",
+            "Hot Zone Status": context.status.value,
+            "Hot Zone Reason": _joined_or_none(context.warnings),
+        }
+    zone = context.hot_zones[0]
+    return {
+        "Top Hot Zone": f"{zone.zone_type.value}",
+        "Hot Zone Band": f"{formatters.price(zone.zone_low)} - {formatters.price(zone.zone_high)}",
+        "Hot Zone Role": zone.directional_role.value,
+        "Hot Zone Quality": f"{zone.quality.value} / {zone.strength.value}",
+        "Hot Zone Members": formatters.joined(tuple(member.label for member in zone.member_references)),
+        "Hot Zone Families": formatters.joined(tuple(family.value for family in zone.reference_families)),
+        "Hot Zone Alignment": f"{zone.active_scenario_alignment.value}; opening {zone.opening_assessment_alignment.value}",
+        "Hot Zone Price Relation": zone.current_price_relation.value,
+        "Hot Zone Status": zone.status.value,
+        "Hot Zone Reason": _joined_or_none((*zone.supporting_reasons, *zone.conflicting_reasons, *zone.warnings)),
+    }
+
+
 def _swing_price(swing) -> str:
     if swing is None:
         return "none"
@@ -767,6 +811,21 @@ _SECTION_FIELDS = (
             "Opening Supporting Reasons",
             "Opening Contradicting Reasons",
             "Opening Warnings",
+        ),
+    ),
+    (
+        "Pivot Confluence",
+        (
+            "Top Hot Zone",
+            "Hot Zone Band",
+            "Hot Zone Role",
+            "Hot Zone Quality",
+            "Hot Zone Members",
+            "Hot Zone Families",
+            "Hot Zone Alignment",
+            "Hot Zone Price Relation",
+            "Hot Zone Status",
+            "Hot Zone Reason",
         ),
     ),
     (

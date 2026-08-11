@@ -137,6 +137,7 @@ class VisionForensicTrace:
         entry = snapshot.entry_location_context
         pivot_plan = snapshot.pivot_flight_plan
         pivot_opening_assessment = snapshot.pivot_opening_assessment
+        pivot_confluence = snapshot.pivot_confluence_context
         risk_decision = getattr(risk_snapshot, "decision", None)
         risk_decision_value = getattr(risk_decision, "value", str(risk_decision or ""))
         approved = risk_decision in {RiskDecisionV2.APPROVED, RiskDecisionV2.APPROVED_REDUCED} or risk_decision_value in {
@@ -174,6 +175,7 @@ class VisionForensicTrace:
             },
             "pivot_flight_plan": _pivot_flight_plan_payload(pivot_plan),
             "pivot_opening_assessment": _pivot_opening_assessment_payload(pivot_opening_assessment),
+            "pivot_confluence": _pivot_confluence_payload(pivot_confluence),
             "opening_range": {
                 "state": opening_range.current_location.value,
                 "break": opening_range.break_direction.value,
@@ -362,6 +364,48 @@ def _pivot_opening_assessment_payload(assessment: object | None) -> dict[str, An
         "supporting_reasons": tuple(getattr(assessment, "supporting_reasons", ())),
         "contradicting_reasons": tuple(getattr(assessment, "contradicting_reasons", ())),
         "warnings": tuple(getattr(assessment, "warnings", ())),
+    }
+
+
+def _pivot_confluence_payload(context: object | None) -> dict[str, Any] | None:
+    if context is None:
+        return None
+    return {
+        "quality": getattr(getattr(context, "quality", None), "value", None),
+        "status": getattr(getattr(context, "status", None), "value", None),
+        "warnings": tuple(getattr(context, "warnings", ())),
+        "zones": tuple(_pivot_hot_zone_payload(zone) for zone in getattr(context, "hot_zones", ())),
+    }
+
+
+def _pivot_hot_zone_payload(zone: object) -> dict[str, Any]:
+    return {
+        "zone_low": getattr(zone, "zone_low", None),
+        "zone_high": getattr(zone, "zone_high", None),
+        "zone_center": getattr(zone, "zone_center", None),
+        "member_references": tuple(
+            {
+                "family": getattr(getattr(member, "family", None), "value", None),
+                "kind": getattr(getattr(member, "kind", None), "value", None),
+                "label": getattr(member, "label", None),
+                "price": getattr(member, "price", None),
+                "status": getattr(getattr(member, "status", None), "value", None),
+            }
+            for member in getattr(zone, "member_references", ())
+        ),
+        "reference_families": tuple(getattr(family, "value", None) for family in getattr(zone, "reference_families", ())),
+        "independent_family_count": getattr(zone, "independent_family_count", None),
+        "zone_type": getattr(getattr(zone, "zone_type", None), "value", None),
+        "directional_role": getattr(getattr(zone, "directional_role", None), "value", None),
+        "quality": getattr(getattr(zone, "quality", None), "value", None),
+        "strength": getattr(getattr(zone, "strength", None), "value", None),
+        "active_scenario_alignment": getattr(getattr(zone, "active_scenario_alignment", None), "value", None),
+        "opening_assessment_alignment": getattr(getattr(zone, "opening_assessment_alignment", None), "value", None),
+        "status": getattr(getattr(zone, "status", None), "value", None),
+        "current_price_relation": getattr(getattr(zone, "current_price_relation", None), "value", None),
+        "supporting_reasons": tuple(getattr(zone, "supporting_reasons", ())),
+        "conflicting_reasons": tuple(getattr(zone, "conflicting_reasons", ())),
+        "warnings": tuple(getattr(zone, "warnings", ())),
     }
 
 

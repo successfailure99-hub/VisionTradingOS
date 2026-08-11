@@ -113,12 +113,15 @@ from engines.vision_method import (
     VisionMethodSnapshot,
     VisionMethodValidationReport,
     VisionLevelContextRequest,
+    VisionPivotConfluenceContext,
+    VisionPivotConfluenceRequest,
     VisionPivotFlightPlan,
     VisionPivotFlightPlanRequest,
     VisionPivotOpeningAssessment,
     VisionPivotOpeningAssessmentRequest,
     assemble_vision_level_context,
     assess_pivot_opening,
+    build_pivot_confluence_context,
     build_pivot_flight_plan,
 )
 from engines.vwap.vwap_engine import VWAPEngine
@@ -413,6 +416,8 @@ class SymbolRuntime:
         self._pivot_flight_plan_identity: tuple | None = None
         self._pivot_opening_assessment: VisionPivotOpeningAssessment | None = None
         self._pivot_opening_assessment_identity: tuple | None = None
+        self._pivot_confluence_context: VisionPivotConfluenceContext | None = None
+        self._pivot_confluence_identity: tuple | None = None
         self._session_opening_price: float | None = None
         self._session_opening_timestamp: datetime | None = None
         self._session_opening_trading_date: date | None = None
@@ -1154,6 +1159,8 @@ class SymbolRuntime:
         self._pivot_flight_plan_identity = None
         self._pivot_opening_assessment = None
         self._pivot_opening_assessment_identity = None
+        self._pivot_confluence_context = None
+        self._pivot_confluence_identity = None
         self._session_opening_price = None
         self._session_opening_timestamp = None
         self._session_opening_trading_date = None
@@ -1173,6 +1180,13 @@ class SymbolRuntime:
         runtime_session = self._runtime_trading_session(market_timestamp)
         pivot_flight_plan = self._current_pivot_flight_plan(market_timestamp, runtime_session)
         pivot_opening_assessment = self._current_pivot_opening_assessment(market_timestamp, runtime_session, pivot_flight_plan)
+        pivot_confluence_context = self._current_pivot_confluence_context(
+            market_timestamp,
+            runtime_session,
+            latest_candle,
+            pivot_flight_plan,
+            pivot_opening_assessment,
+        )
         vwap = self.vwap_engine.get_latest(self._core_instrument)
         adr = self.adr_engine.state
         price_action = self.price_action_engine.state
@@ -1250,6 +1264,7 @@ class SymbolRuntime:
             vision_method_validation_report=self._vision_method_validation_report,
             pivot_flight_plan=pivot_flight_plan,
             pivot_opening_assessment=pivot_opening_assessment,
+            pivot_confluence_context=pivot_confluence_context,
             vision_trade_candidate=self._vision_trade_candidate,
             option_trade_candidate=self._option_trade_candidate,
             option_paper_risk=self._option_paper_risk,
@@ -1333,6 +1348,8 @@ class SymbolRuntime:
             self._session_opening_trading_date = trading_date
             self._pivot_opening_assessment = None
             self._pivot_opening_assessment_identity = None
+            self._pivot_confluence_context = None
+            self._pivot_confluence_identity = None
         if self._session_opening_price is not None:
             return
         if session.session_open is not None and tick.timestamp.astimezone(IST) < session.session_open:
@@ -1366,6 +1383,8 @@ class SymbolRuntime:
         self._session_opening_trading_date = trading_date
         self._pivot_opening_assessment = None
         self._pivot_opening_assessment_identity = None
+        self._pivot_confluence_context = None
+        self._pivot_confluence_identity = None
 
     def _current_pivot_opening_assessment(
         self,
@@ -1437,6 +1456,87 @@ class SymbolRuntime:
             self._pivot_opening_assessment = None
             self._pivot_opening_assessment_identity = None
         return self._pivot_opening_assessment
+
+    def _current_pivot_confluence_context(
+        self,
+        market_timestamp: datetime | None,
+        runtime_session: RuntimeTradingSession,
+        latest_candle: Candle | None,
+        flight_plan: VisionPivotFlightPlan | None,
+        opening_assessment: VisionPivotOpeningAssessment | None,
+    ) -> VisionPivotConfluenceContext | None:
+        trading_date = runtime_session.trading_date
+        if trading_date is None or latest_candle is None:
+            self._pivot_confluence_context = None
+            self._pivot_confluence_identity = None
+            return None
+        previous_day = next(
+            (item for item in self._daily_ohlc_history if item.trading_date == runtime_session.previous_completed_trading_date),
+            None,
+        )
+        if previous_day is None or self.cpr is None or self.camarilla is None:
+            self._pivot_confluence_context = None
+            self._pivot_confluence_identity = None
+            return None
+        current_price = float(latest_candle.close)
+        timestamp = market_timestamp or latest_candle.end_time
+        source_snapshot = self._vision_method_snapshot if self._vision_method_snapshot is not None and self._vision_method_snapshot.timestamp.date() == trading_date else None
+        identity = (
+            trading_date,
+            timestamp,
+            current_price,
+            self.cpr,
+            self.camarilla,
+            previous_day,
+            self.adr_engine.state,
+            self.vwap_engine.get_latest(self._core_instrument),
+            getattr(source_snapshot, "opening_range_context", None),
+            getattr(source_snapshot, "structure_context", None),
+            getattr(source_snapshot, "liquidity_context", None),
+            flight_plan,
+            opening_assessment,
+        )
+        if self._pivot_confluence_context is not None and self._pivot_confluence_identity == identity:
+            return self._pivot_confluence_context
+        try:
+            level_context = source_snapshot.level_context if source_snapshot is not None else assemble_vision_level_context(
+                VisionLevelContextRequest(
+                    instrument=self._instrument,
+                    timeframe=self._vision_decision_timeframe,
+                    trading_date=trading_date,
+                    timestamp=timestamp,
+                    latest_price=current_price,
+                    opening_price=self._session_opening_price or float(latest_candle.open),
+                    previous_day=previous_day,
+                    cpr=self.cpr,
+                    camarilla=self.camarilla,
+                    adr=self.adr_engine.state,
+                    vwap=self.vwap_engine.get_latest(self._core_instrument),
+                ),
+                instrument=self._instrument,
+                timeframe=self._vision_decision_timeframe,
+                max_snapshot_age=timedelta(days=1),
+            )
+            self._pivot_confluence_context = build_pivot_confluence_context(
+                VisionPivotConfluenceRequest(
+                    instrument=self._instrument,
+                    timeframe=self._vision_decision_timeframe,
+                    trading_date=trading_date,
+                    timestamp=timestamp,
+                    current_price=current_price,
+                    level_context=level_context,
+                    opening_range_context=getattr(source_snapshot, "opening_range_context", None),
+                    structure_context=getattr(source_snapshot, "structure_context", None),
+                    liquidity_context=getattr(source_snapshot, "liquidity_context", None),
+                    pivot_flight_plan=flight_plan,
+                    pivot_opening_assessment=opening_assessment,
+                )
+            )
+            self._pivot_confluence_identity = identity
+        except (TypeError, ValueError):
+            self._pivot_confluence_context = None
+            self._pivot_confluence_identity = None
+        return self._pivot_confluence_context
 
     def _process_paper_tick(self, tick: Tick) -> None:
         if self._option_paper_position is not None and self._option_paper_position.status is OptionPaperPositionStatus.OPEN:

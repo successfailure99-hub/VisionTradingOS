@@ -1255,3 +1255,70 @@ RuntimeSnapshot -> Inspector / Forensics / VisionMethodSnapshot
 Normal methodology states such as `REJECTED`, `UNRESOLVED`,
 `PARTIALLY_ACCEPTED`, and `INSUFFICIENT_DATA` are operational context states.
 They must not mark the runtime as `FAILED`.
+
+## VPM-CONFLUENCE-1 Pivot Hot-Zone Boundary
+
+VPM-CONFLUENCE-1 adds deterministic Pivot Hot Zone and Action-Zone
+intelligence. It answers only:
+
+```text
+Where are the strongest market-interest zones?
+```
+
+It does not answer whether to enter, exit, buy, sell, size, hedge, or route an
+order. It does not create `TradeCandidate`, OSE requests, Risk decisions, Paper
+Trading actions, or broker mutations.
+
+The confluence layer consumes only existing immutable Vision Method contexts:
+
+- `VisionLevelContext` for CPR, Camarilla, previous day, ADR, and VWAP context;
+- `VisionOpeningRangeContext`;
+- `VisionStructureContext`;
+- `VisionLiquidityContext`;
+- `VisionPivotFlightPlan`;
+- `VisionPivotOpeningAssessment`.
+
+It never recalculates CPR, Camarilla, ADR, VWAP, Opening Range, structure, or
+liquidity. It clusters canonical reference prices using a configurable
+percentage/basis-point proximity policy. A hot zone requires at least two
+independent reference families; multiple references from the same family do not
+inflate the confluence count.
+
+Canonical reference families are:
+
+```text
+CPR
+Camarilla
+Prior Session
+VWAP
+Opening Range
+Structure
+Liquidity
+```
+
+The output is immutable `VisionPivotConfluenceContext`, containing bounded,
+ranked `VisionPivotHotZone` records. Each zone carries the price band, member
+references, independent family count, role, quality, strength, opening/scenario
+alignment, current-price relation, status, supporting reasons, conflicts, and
+warnings.
+
+Examples of deterministic zones include:
+
+- CPR + H3 bearish resistance hot zone;
+- CPR + L3 bullish support hot zone;
+- Camarilla + previous high/low;
+- pivot + VWAP;
+- pivot + Opening Range;
+- pivot + Structure;
+- pivot + Liquidity;
+- three-or-more-family confluence.
+
+Scenario alignment may strengthen or weaken a zone, but it cannot create an
+entry. If Opening Assessment rejects the Flight Plan, Opening Assessment takes
+precedence. Consumed liquidity may remain visible but is marked as consumed and
+cannot improperly boost zone quality. Overlapping opposing roles become conflict
+zones rather than false certainty.
+
+`SymbolRuntime` owns the canonical runtime confluence context. The dashboard
+Inspector and forensic trace display it read-only from `RuntimeSnapshot` or
+`VisionMethodSnapshot`; they must not perform their own confluence calculations.

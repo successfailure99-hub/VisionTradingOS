@@ -107,6 +107,7 @@ class _LiveAssembly:
     option_confirmation: object | None = None
     pivot_flight_plan: object | None = None
     pivot_opening_assessment: object | None = None
+    pivot_confluence_context: object | None = None
     snapshot: VisionMethodSnapshot | None = None
     report: VisionMethodValidationReport | None = None
     failures: tuple[VisionContextAssemblyFailure, ...] = ()
@@ -207,6 +208,7 @@ class VisionMethodLiveInspectorBridge:
         failures: list[VisionContextAssemblyFailure] = []
         pivot_flight_plan = getattr(runtime_snapshot, "pivot_flight_plan", None)
         pivot_opening_assessment = getattr(runtime_snapshot, "pivot_opening_assessment", None)
+        pivot_confluence_context = getattr(runtime_snapshot, "pivot_confluence_context", None)
         if not history:
             failures.append(_missing_failure("Candle Engine", "Closed candle history is unavailable."))
             return _LiveAssembly(
@@ -216,6 +218,7 @@ class VisionMethodLiveInspectorBridge:
                 trading_date=trading_date,
                 pivot_flight_plan=pivot_flight_plan,
                 pivot_opening_assessment=pivot_opening_assessment,
+                pivot_confluence_context=pivot_confluence_context,
                 failures=tuple(failures),
             )
 
@@ -425,6 +428,7 @@ class VisionMethodLiveInspectorBridge:
                     current_price=history[-1].close,
                     pivot_flight_plan=pivot_flight_plan,
                     pivot_opening_assessment=pivot_opening_assessment,
+                    pivot_confluence_context=pivot_confluence_context,
                     assembly_failures=tuple(failures),
                 ),
                 instrument=runtime_snapshot.symbol,
@@ -455,6 +459,7 @@ class VisionMethodLiveInspectorBridge:
             option_confirmation=option_confirmation,
             pivot_flight_plan=pivot_flight_plan,
             pivot_opening_assessment=pivot_opening_assessment,
+            pivot_confluence_context=pivot_confluence_context,
             snapshot=snapshot,
             report=report,
             failures=tuple(failures),
@@ -675,6 +680,7 @@ class VisionMethodLiveInspectorBridge:
                 current_price=history[-1].close,
                 pivot_flight_plan=getattr(runtime_snapshot, "pivot_flight_plan", None),
                 pivot_opening_assessment=getattr(runtime_snapshot, "pivot_opening_assessment", None),
+                pivot_confluence_context=getattr(runtime_snapshot, "pivot_confluence_context", None),
                 assembly_failures=tuple(failures),
             ),
             instrument=runtime_snapshot.symbol,
@@ -791,6 +797,7 @@ class VisionMethodLiveInspectorBridge:
             option_confirmation_context=assembly.option_confirmation,
             pivot_flight_plan=assembly.pivot_flight_plan,
             pivot_opening_assessment=assembly.pivot_opening_assessment,
+            pivot_confluence_context=assembly.pivot_confluence_context,
         )
 
     def _status_from_snapshot(
@@ -829,6 +836,7 @@ class VisionMethodLiveInspectorBridge:
             market_data_age_seconds=0.0,
             pivot_flight_plan=snapshot.pivot_flight_plan,
             pivot_opening_assessment=snapshot.pivot_opening_assessment,
+            pivot_confluence_context=snapshot.pivot_confluence_context,
         )
 
     def _internal_error_status(self, exc: Exception) -> VisionMethodLiveStatus:

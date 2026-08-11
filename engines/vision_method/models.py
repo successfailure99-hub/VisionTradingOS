@@ -61,6 +61,7 @@ from .pivot_context import VisionPivotFlightPlan
 
 if TYPE_CHECKING:
     from .opening_assessment import VisionPivotOpeningAssessment
+    from .pivot_confluence import VisionPivotConfluenceContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -647,6 +648,7 @@ class VisionMethodSnapshot:
     quality: str
     pivot_flight_plan: VisionPivotFlightPlan | None = None
     pivot_opening_assessment: "VisionPivotOpeningAssessment | None" = None
+    pivot_confluence_context: "VisionPivotConfluenceContext | None" = None
     entry_location_context: VisionEntryLocationContext = field(default_factory=lambda: VisionEntryLocationContext(
         direction="unknown",
         direction_quality=VisionDirectionQuality.INVALID,
@@ -710,6 +712,19 @@ class VisionMethodSnapshot:
                 raise ValueError("pivot_opening_assessment instrument mismatch.")
             if self.pivot_opening_assessment.trading_date != self.timestamp.date():
                 raise ValueError("pivot_opening_assessment trading date mismatch.")
+        if self.pivot_confluence_context is not None:
+            from .pivot_confluence import VisionPivotConfluenceContext
+
+            if not isinstance(self.pivot_confluence_context, VisionPivotConfluenceContext):
+                raise TypeError("pivot_confluence_context must be VisionPivotConfluenceContext or None.")
+            if self.pivot_confluence_context.instrument is not self.instrument:
+                raise ValueError("pivot_confluence_context instrument mismatch.")
+            if self.pivot_confluence_context.timeframe is not self.timeframe:
+                raise ValueError("pivot_confluence_context timeframe mismatch.")
+            if self.pivot_confluence_context.trading_date != self.timestamp.date():
+                raise ValueError("pivot_confluence_context trading date mismatch.")
+            if self.pivot_confluence_context.timestamp > self.timestamp:
+                raise ValueError("pivot_confluence_context timestamp cannot be after snapshot timestamp.")
         object.__setattr__(self, "blocking_reasons", _normalize_text_tuple(self.blocking_reasons, "blocking_reasons"))
         object.__setattr__(self, "supporting_reasons", _normalize_text_tuple(self.supporting_reasons, "supporting_reasons"))
         object.__setattr__(self, "quality", _normalize_text(self.quality, "quality"))
