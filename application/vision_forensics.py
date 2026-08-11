@@ -138,6 +138,7 @@ class VisionForensicTrace:
         pivot_plan = snapshot.pivot_flight_plan
         pivot_opening_assessment = snapshot.pivot_opening_assessment
         pivot_confluence = snapshot.pivot_confluence_context
+        price_action_trigger = snapshot.price_action_trigger_context
         risk_decision = getattr(risk_snapshot, "decision", None)
         risk_decision_value = getattr(risk_decision, "value", str(risk_decision or ""))
         approved = risk_decision in {RiskDecisionV2.APPROVED, RiskDecisionV2.APPROVED_REDUCED} or risk_decision_value in {
@@ -176,6 +177,7 @@ class VisionForensicTrace:
             "pivot_flight_plan": _pivot_flight_plan_payload(pivot_plan),
             "pivot_opening_assessment": _pivot_opening_assessment_payload(pivot_opening_assessment),
             "pivot_confluence": _pivot_confluence_payload(pivot_confluence),
+            "price_action_trigger": _price_action_trigger_payload(price_action_trigger),
             "opening_range": {
                 "state": opening_range.current_location.value,
                 "break": opening_range.break_direction.value,
@@ -406,6 +408,38 @@ def _pivot_hot_zone_payload(zone: object) -> dict[str, Any]:
         "supporting_reasons": tuple(getattr(zone, "supporting_reasons", ())),
         "conflicting_reasons": tuple(getattr(zone, "conflicting_reasons", ())),
         "warnings": tuple(getattr(zone, "warnings", ())),
+    }
+
+
+def _price_action_trigger_payload(context: object | None) -> dict[str, Any] | None:
+    if context is None:
+        return None
+    trigger = getattr(context, "trigger", None)
+    if trigger is None:
+        return None
+    return {
+        "zone_reference": getattr(trigger, "zone_reference", None),
+        "zone_role": getattr(getattr(trigger, "zone_role", None), "value", None),
+        "zone_quality": getattr(getattr(trigger, "zone_quality", None), "value", None),
+        "interaction_state": getattr(getattr(trigger, "interaction_state", None), "value", None),
+        "trigger_type": getattr(getattr(trigger, "trigger_type", None), "value", None),
+        "trigger_direction": getattr(getattr(trigger, "trigger_direction", None), "value", None),
+        "trigger_quality": getattr(getattr(trigger, "trigger_quality", None), "value", None),
+        "break_state": getattr(getattr(trigger, "break_state", None), "value", None),
+        "acceptance_state": getattr(getattr(trigger, "acceptance_state", None), "value", None),
+        "retest_state": getattr(getattr(trigger, "retest_state", None), "value", None),
+        "candlestick_pattern": getattr(getattr(trigger, "candlestick_pattern", None), "value", None),
+        "structure_alignment": getattr(getattr(trigger, "structure_alignment", None), "value", None),
+        "liquidity_alignment": getattr(getattr(trigger, "liquidity_alignment", None), "value", None),
+        "opening_range_alignment": getattr(getattr(trigger, "opening_range_alignment", None), "value", None),
+        "scenario_alignment": getattr(getattr(trigger, "scenario_alignment", None), "value", None),
+        "supporting_reasons": tuple(getattr(trigger, "supporting_reasons", ())),
+        "contradicting_reasons": tuple(getattr(trigger, "contradicting_reasons", ())),
+        "warnings": tuple(getattr(trigger, "warnings", ())),
+        "blocking_reasons": tuple(getattr(trigger, "blocking_reasons", ())),
+        "source_candle_reference": getattr(trigger, "source_candle_reference", None),
+        "prior_event_reference": getattr(trigger, "prior_event_reference", None),
+        "event_history_count": len(tuple(getattr(context, "event_history", ()))),
     }
 
 

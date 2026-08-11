@@ -1322,3 +1322,51 @@ zones rather than false certainty.
 `SymbolRuntime` owns the canonical runtime confluence context. The dashboard
 Inspector and forensic trace display it read-only from `RuntimeSnapshot` or
 `VisionMethodSnapshot`; they must not perform their own confluence calculations.
+
+## VPM-TRIGGER-1 Price-Action Trigger Boundary
+
+VPM-TRIGGER-1 adds deterministic, location-aware price-action trigger
+intelligence on top of the Pivot Hot-Zone layer. It answers only:
+
+```text
+What did price do at a meaningful Vision Method zone?
+```
+
+The trigger layer consumes:
+
+- closed canonical 5-minute `Candle` history;
+- `VisionPivotConfluenceContext`;
+- optional existing Vision Method contexts for opening range, structure,
+  liquidity, structure events, and pivot opening assessment.
+
+It does not consume AI, Strategy, Risk, Paper Trading, broker state, raw
+indicators, raw option-chain data, or OSE execution state. It does not
+recalculate CPR, Camarilla, ADR, VWAP, Opening Range, Structure, Liquidity,
+Option Chain, or Pivot Hot Zones.
+
+The trigger layer requires a meaningful location. Candlestick shape away from
+an active hot zone or action zone is informational only and cannot become a
+valid trigger. First touch and penetration are observation states, not entry
+signals.
+
+The output is immutable `VisionPriceActionTriggerContext`. It classifies:
+
+- interaction state: approaching, testing, penetrating, rejecting, broken,
+  accepted, retesting, holding, failing, consumed, or no interaction;
+- trigger type: rejection, failed breakout, initiative breakout, retest hold,
+  continuation, indecision, or no trigger;
+- trigger direction: bullish, bearish, or none;
+- break, acceptance, and retest state;
+- deterministic candlestick pattern context;
+- structure, liquidity, opening-range, and scenario alignment;
+- bounded event history.
+
+Accepted breakout and failed breakout are separate states. A retest requires a
+prior accepted breakout or breakdown. Doji is classified as indecision only.
+Responsive H3/L3 behavior remains distinct from initiative H4/L4 behavior.
+
+VPM-TRIGGER-1 is trigger intelligence only. It must never create
+`LONG_ELIGIBLE`, `SHORT_ELIGIBLE`, `TradeCandidate`, option-selling execution
+requests, risk decisions, paper trades, broker actions, or live orders.
+VM-ENTRY remains the final entry-location authority, and OSE semantics remain
+unchanged.

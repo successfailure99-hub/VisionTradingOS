@@ -497,3 +497,86 @@ class VisionPivotPriceRelation(str, Enum):
     INSIDE = "inside"
     ABOVE = "above"
     APPROACHING = "approaching"
+
+
+class VisionTriggerInteractionState(str, Enum):
+    APPROACHING = "approaching"
+    TESTING = "testing"
+    PENETRATING = "penetrating"
+    REJECTING = "rejecting"
+    BROKEN = "broken"
+    ACCEPTED = "accepted"
+    RETESTING = "retesting"
+    HOLDING = "holding"
+    FAILING = "failing"
+    CONSUMED = "consumed"
+    NO_INTERACTION = "no_interaction"
+
+
+class VisionTriggerType(str, Enum):
+    NO_TRIGGER = "no_trigger"
+    BULLISH_REJECTION = "bullish_rejection"
+    BEARISH_REJECTION = "bearish_rejection"
+    BULLISH_FAILED_BREAKOUT = "bullish_failed_breakout"
+    BEARISH_FAILED_BREAKOUT = "bearish_failed_breakout"
+    BULLISH_INITIATIVE_BREAKOUT = "bullish_initiative_breakout"
+    BEARISH_INITIATIVE_BREAKOUT = "bearish_initiative_breakout"
+    BULLISH_RETEST_HOLD = "bullish_retest_hold"
+    BEARISH_RETEST_HOLD = "bearish_retest_hold"
+    BULLISH_CONTINUATION = "bullish_continuation"
+    BEARISH_CONTINUATION = "bearish_continuation"
+    INDECISION = "indecision"
+
+
+class VisionTriggerDirection(str, Enum):
+    BULLISH = "bullish"
+    BEARISH = "bearish"
+    NONE = "none"
+
+
+class VisionTriggerQuality(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    INVALID = "invalid"
+
+
+class VisionTriggerBreakState(str, Enum):
+    NONE = "none"
+    BROKEN_UP = "broken_up"
+    BROKEN_DOWN = "broken_down"
+
+
+class VisionTriggerAcceptanceState(str, Enum):
+    NONE = "none"
+    WAITING_FOR_ACCEPTANCE = "waiting_for_acceptance"
+    ACCEPTED_UP = "accepted_up"
+    ACCEPTED_DOWN = "accepted_down"
+    FAILED_UP = "failed_up"
+    FAILED_DOWN = "failed_down"
+
+
+class VisionTriggerRetestState(str, Enum):
+    NONE = "none"
+    RETESTING = "retesting"
+    RETEST_HOLD = "retest_hold"
+    RETEST_FAILURE = "retest_failure"
+
+
+class VisionCandlestickPattern(str, Enum):
+    NONE = "none"
+    BULLISH_WICK_REVERSAL = "bullish_wick_reversal"
+    BEARISH_WICK_REVERSAL = "bearish_wick_reversal"
+    BULLISH_OUTSIDE_REVERSAL = "bullish_outside_reversal"
+    BEARISH_OUTSIDE_REVERSAL = "bearish_outside_reversal"
+    BULLISH_EXTREME_REVERSAL = "bullish_extreme_reversal"
+    BEARISH_EXTREME_REVERSAL = "bearish_extreme_reversal"
+    DOJI = "doji"
+
+
+class VisionTriggerAlignment(str, Enum):
+    ALIGNED = "aligned"
+    SUPPORTING = "supporting"
+    CONTRADICTING = "contradicting"
+    NEUTRAL = "neutral"
+    UNAVAILABLE = "unavailable"

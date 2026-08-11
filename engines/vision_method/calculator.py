@@ -51,6 +51,7 @@ from .models import (
 from .opening_assessment import VisionPivotOpeningAssessment
 from .pivot_confluence import VisionPivotConfluenceContext
 from .pivot_context import VisionPivotFlightPlan
+from .price_action_trigger import VisionPriceActionTriggerContext
 from .validator import validate_vision_method_snapshot
 
 
@@ -70,6 +71,7 @@ class VisionMethodCalculationRequest:
     pivot_flight_plan: VisionPivotFlightPlan | None = None
     pivot_opening_assessment: VisionPivotOpeningAssessment | None = None
     pivot_confluence_context: VisionPivotConfluenceContext | None = None
+    price_action_trigger_context: VisionPriceActionTriggerContext | None = None
     assembly_failures: tuple[VisionContextAssemblyFailure, ...] = ()
 
     def __post_init__(self) -> None:
@@ -119,6 +121,17 @@ class VisionMethodCalculationRequest:
                 raise ValueError("pivot_confluence_context trading date mismatch.")
             if self.pivot_confluence_context.timestamp > self.timestamp:
                 raise ValueError("pivot_confluence_context timestamp inconsistency.")
+        if self.price_action_trigger_context is not None:
+            if not isinstance(self.price_action_trigger_context, VisionPriceActionTriggerContext):
+                raise TypeError("price_action_trigger_context must be VisionPriceActionTriggerContext or None.")
+            if self.price_action_trigger_context.instrument is not self.instrument:
+                raise ValueError("price_action_trigger_context instrument mismatch.")
+            if self.price_action_trigger_context.timeframe is not self.timeframe:
+                raise ValueError("price_action_trigger_context timeframe mismatch.")
+            if self.price_action_trigger_context.trading_date != self.timestamp.date():
+                raise ValueError("price_action_trigger_context trading date mismatch.")
+            if self.price_action_trigger_context.timestamp > self.timestamp:
+                raise ValueError("price_action_trigger_context timestamp inconsistency.")
         object.__setattr__(self, "assembly_failures", _normalize_assembly_failures(self.assembly_failures))
 
 
@@ -160,6 +173,7 @@ def calculate_vision_method_snapshot(
         pivot_flight_plan=request.pivot_flight_plan,
         pivot_opening_assessment=request.pivot_opening_assessment,
         pivot_confluence_context=request.pivot_confluence_context,
+        price_action_trigger_context=request.price_action_trigger_context,
         entry_location_context=entry_location,
         assembly_failures=request.assembly_failures,
     )
@@ -185,6 +199,8 @@ def validate_vision_method_calculation_request(
     if request.option_confirmation_context.timestamp > request.timestamp:
         raise ValueError("timestamp inconsistency.")
     if request.pivot_confluence_context is not None and request.pivot_confluence_context.timestamp > request.timestamp:
+        raise ValueError("timestamp inconsistency.")
+    if request.price_action_trigger_context is not None and request.price_action_trigger_context.timestamp > request.timestamp:
         raise ValueError("timestamp inconsistency.")
     if request.timestamp.utcoffset() != request.opening_range_context.opening_start_time.utcoffset():
         raise ValueError("timezone mismatch.")
@@ -354,6 +370,8 @@ def _supporting_reasons(
         reasons.extend(_pivot_opening_assessment_reasons(request.pivot_opening_assessment))
     if request.pivot_confluence_context is not None:
         reasons.extend(_pivot_confluence_reasons(request.pivot_confluence_context))
+    if request.price_action_trigger_context is not None:
+        reasons.extend(_price_action_trigger_reasons(request.price_action_trigger_context))
     reasons.extend(_level_reasons(request.level_context))
     reasons.extend(_opening_range_reasons(request.opening_range_context))
     reasons.extend(_structure_reasons(request.structure_context))
@@ -405,6 +423,21 @@ def _pivot_confluence_reasons(context: VisionPivotConfluenceContext) -> tuple[st
     top = context.hot_zones[0]
     reasons.append(f"Top pivot zone {top.directional_role.value} {top.zone_low:.2f}-{top.zone_high:.2f}")
     reasons.extend(f"Pivot zone warning: {item}" for item in context.warnings)
+    return tuple(reasons)
+
+
+def _price_action_trigger_reasons(context: VisionPriceActionTriggerContext) -> tuple[str, ...]:
+    trigger = context.trigger
+    reasons = [
+        f"Price action trigger {trigger.trigger_type.value}",
+        f"Trigger interaction {trigger.interaction_state.value}",
+        f"Trigger quality {trigger.trigger_quality.value}",
+    ]
+    if trigger.trigger_direction.value != "none":
+        reasons.append(f"Trigger direction {trigger.trigger_direction.value}")
+    reasons.extend(f"Trigger support: {item}" for item in trigger.supporting_reasons)
+    reasons.extend(f"Trigger conflict: {item}" for item in trigger.contradicting_reasons)
+    reasons.extend(f"Trigger warning: {item}" for item in trigger.warnings)
     return tuple(reasons)
 
 

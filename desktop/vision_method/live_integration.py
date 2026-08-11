@@ -108,6 +108,7 @@ class _LiveAssembly:
     pivot_flight_plan: object | None = None
     pivot_opening_assessment: object | None = None
     pivot_confluence_context: object | None = None
+    price_action_trigger_context: object | None = None
     snapshot: VisionMethodSnapshot | None = None
     report: VisionMethodValidationReport | None = None
     failures: tuple[VisionContextAssemblyFailure, ...] = ()
@@ -209,6 +210,7 @@ class VisionMethodLiveInspectorBridge:
         pivot_flight_plan = getattr(runtime_snapshot, "pivot_flight_plan", None)
         pivot_opening_assessment = getattr(runtime_snapshot, "pivot_opening_assessment", None)
         pivot_confluence_context = getattr(runtime_snapshot, "pivot_confluence_context", None)
+        price_action_trigger_context = getattr(runtime_snapshot, "price_action_trigger_context", None)
         if not history:
             failures.append(_missing_failure("Candle Engine", "Closed candle history is unavailable."))
             return _LiveAssembly(
@@ -219,6 +221,7 @@ class VisionMethodLiveInspectorBridge:
                 pivot_flight_plan=pivot_flight_plan,
                 pivot_opening_assessment=pivot_opening_assessment,
                 pivot_confluence_context=pivot_confluence_context,
+                price_action_trigger_context=price_action_trigger_context,
                 failures=tuple(failures),
             )
 
@@ -429,6 +432,7 @@ class VisionMethodLiveInspectorBridge:
                     pivot_flight_plan=pivot_flight_plan,
                     pivot_opening_assessment=pivot_opening_assessment,
                     pivot_confluence_context=pivot_confluence_context,
+                    price_action_trigger_context=price_action_trigger_context,
                     assembly_failures=tuple(failures),
                 ),
                 instrument=runtime_snapshot.symbol,
@@ -460,6 +464,7 @@ class VisionMethodLiveInspectorBridge:
             pivot_flight_plan=pivot_flight_plan,
             pivot_opening_assessment=pivot_opening_assessment,
             pivot_confluence_context=pivot_confluence_context,
+            price_action_trigger_context=price_action_trigger_context,
             snapshot=snapshot,
             report=report,
             failures=tuple(failures),
@@ -681,6 +686,7 @@ class VisionMethodLiveInspectorBridge:
                 pivot_flight_plan=getattr(runtime_snapshot, "pivot_flight_plan", None),
                 pivot_opening_assessment=getattr(runtime_snapshot, "pivot_opening_assessment", None),
                 pivot_confluence_context=getattr(runtime_snapshot, "pivot_confluence_context", None),
+                price_action_trigger_context=getattr(runtime_snapshot, "price_action_trigger_context", None),
                 assembly_failures=tuple(failures),
             ),
             instrument=runtime_snapshot.symbol,
@@ -798,6 +804,7 @@ class VisionMethodLiveInspectorBridge:
             pivot_flight_plan=assembly.pivot_flight_plan,
             pivot_opening_assessment=assembly.pivot_opening_assessment,
             pivot_confluence_context=assembly.pivot_confluence_context,
+            price_action_trigger_context=assembly.price_action_trigger_context,
         )
 
     def _status_from_snapshot(
@@ -837,6 +844,7 @@ class VisionMethodLiveInspectorBridge:
             pivot_flight_plan=snapshot.pivot_flight_plan,
             pivot_opening_assessment=snapshot.pivot_opening_assessment,
             pivot_confluence_context=snapshot.pivot_confluence_context,
+            price_action_trigger_context=snapshot.price_action_trigger_context,
         )
 
     def _internal_error_status(self, exc: Exception) -> VisionMethodLiveStatus:

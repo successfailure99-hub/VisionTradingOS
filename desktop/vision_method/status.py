@@ -47,6 +47,7 @@ class VisionMethodLiveStatus:
     pivot_flight_plan: object | None = None
     pivot_opening_assessment: object | None = None
     pivot_confluence_context: object | None = None
+    price_action_trigger_context: object | None = None
 
     def __post_init__(self) -> None:
         for field_name in (

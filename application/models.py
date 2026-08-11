@@ -82,6 +82,7 @@ from engines.tradingview_evidence.models import TradingViewEvidenceEngineSnapsho
 from engines.vision_method import (
     VisionMethodSnapshot,
     VisionMethodValidationReport,
+    VisionPriceActionTriggerContext,
     VisionPivotConfluenceContext,
     VisionPivotFlightPlan,
     VisionPivotOpeningAssessment,
@@ -719,6 +720,7 @@ class RuntimeSnapshot:
     pivot_flight_plan: VisionPivotFlightPlan | None = None
     pivot_opening_assessment: VisionPivotOpeningAssessment | None = None
     pivot_confluence_context: VisionPivotConfluenceContext | None = None
+    price_action_trigger_context: VisionPriceActionTriggerContext | None = None
 
     def __post_init__(self) -> None:
         if self.runtime_session is not None and not isinstance(self.runtime_session, RuntimeTradingSession):
@@ -758,6 +760,8 @@ class RuntimeSnapshot:
             raise TypeError("pivot_opening_assessment must be VisionPivotOpeningAssessment or None")
         if self.pivot_confluence_context is not None and not isinstance(self.pivot_confluence_context, VisionPivotConfluenceContext):
             raise TypeError("pivot_confluence_context must be VisionPivotConfluenceContext or None")
+        if self.price_action_trigger_context is not None and not isinstance(self.price_action_trigger_context, VisionPriceActionTriggerContext):
+            raise TypeError("price_action_trigger_context must be VisionPriceActionTriggerContext or None")
         if self.option_trade_candidate is not None and not isinstance(self.option_trade_candidate, OptionTradeCandidate):
             raise TypeError("option_trade_candidate must be OptionTradeCandidate or None")
         if self.option_paper_risk is not None and not isinstance(self.option_paper_risk, OptionPaperRiskSnapshot):

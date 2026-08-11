@@ -204,6 +204,7 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
     pivot = snapshot.pivot_flight_plan
     opening_assessment = snapshot.pivot_opening_assessment
     confluence = snapshot.pivot_confluence_context
+    trigger = snapshot.price_action_trigger_context
     values = {
         "Instrument": snapshot.instrument.value,
         "Timeframe": snapshot.timeframe.value,
@@ -276,6 +277,7 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
     values.update(_pivot_values(pivot))
     values.update(_opening_assessment_values(opening_assessment))
     values.update(_pivot_confluence_values(confluence))
+    values.update(_price_action_trigger_values(trigger))
     return values
 
 
@@ -408,6 +410,7 @@ def _status_context_values(status: VisionMethodLiveStatus) -> dict[str, str]:
     values.update(_pivot_values(status.pivot_flight_plan))
     values.update(_opening_assessment_values(status.pivot_opening_assessment))
     values.update(_pivot_confluence_values(status.pivot_confluence_context))
+    values.update(_price_action_trigger_values(status.price_action_trigger_context))
     return values
 
 
@@ -716,6 +719,35 @@ def _pivot_confluence_values(context) -> dict[str, str]:
     }
 
 
+def _price_action_trigger_values(context) -> dict[str, str]:
+    if context is None:
+        return {}
+    trigger = context.trigger
+    return {
+        "Trigger Zone": trigger.zone_reference,
+        "Trigger Interaction": trigger.interaction_state.value,
+        "Trigger Type": trigger.trigger_type.value,
+        "Trigger Direction": trigger.trigger_direction.value,
+        "Trigger Quality": trigger.trigger_quality.value,
+        "Trigger Pattern": trigger.candlestick_pattern.value,
+        "Trigger Break": trigger.break_state.value,
+        "Trigger Acceptance": trigger.acceptance_state.value,
+        "Trigger Retest": trigger.retest_state.value,
+        "Trigger Structure Alignment": trigger.structure_alignment.value,
+        "Trigger Liquidity Alignment": trigger.liquidity_alignment.value,
+        "Trigger Opening Range Alignment": trigger.opening_range_alignment.value,
+        "Trigger Scenario Alignment": trigger.scenario_alignment.value,
+        "Trigger Reason": _joined_or_none(
+            (
+                *trigger.supporting_reasons,
+                *trigger.contradicting_reasons,
+                *trigger.warnings,
+                *trigger.blocking_reasons,
+            )
+        ),
+    }
+
+
 def _swing_price(swing) -> str:
     if swing is None:
         return "none"
@@ -826,6 +858,25 @@ _SECTION_FIELDS = (
             "Hot Zone Price Relation",
             "Hot Zone Status",
             "Hot Zone Reason",
+        ),
+    ),
+    (
+        "Price-Action Trigger",
+        (
+            "Trigger Zone",
+            "Trigger Interaction",
+            "Trigger Type",
+            "Trigger Direction",
+            "Trigger Quality",
+            "Trigger Pattern",
+            "Trigger Break",
+            "Trigger Acceptance",
+            "Trigger Retest",
+            "Trigger Structure Alignment",
+            "Trigger Liquidity Alignment",
+            "Trigger Opening Range Alignment",
+            "Trigger Scenario Alignment",
+            "Trigger Reason",
         ),
     ),
     (
