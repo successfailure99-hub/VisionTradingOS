@@ -24,6 +24,8 @@ _REQUIRED_STAGES = (
     "RuntimeIntegrity",
     "Market Data",
     "Candle Engine",
+    "Vision Decision History",
+    "Liquidity Input History",
     "Daily Context",
     "Vision Method",
     "Validation",
@@ -227,7 +229,9 @@ def _checks_for_runtime(snapshot: RuntimeSnapshot) -> tuple[RuntimeSupervisorChe
 
 def _ensure_inferred_rows(snapshot: RuntimeSnapshot, rows: dict[str, RuntimeSupervisorCheck]) -> None:
     rows.setdefault("Market Data", _ready_row("Market Data", snapshot.latest_tick is not None, "MarketDataEngine", "Tick", "Candle Engine"))
-    rows.setdefault("Candle Engine", _ready_row("Candle Engine", snapshot.candle_history_count > 0, "CandleEngine", "Closed Candle", "Vision Method"))
+    rows.setdefault("Candle Engine", _dependency_row(getattr(snapshot, "base_candle_readiness", None), "Candle Engine", "CandleEngine", "Closed Candle", "Vision Method"))
+    rows.setdefault("Vision Decision History", _dependency_row(getattr(snapshot, "vision_decision_history_readiness", None), "Vision Decision History", "CandleEngine", "5m Closed Candle", "Vision Method"))
+    rows.setdefault("Liquidity Input History", _dependency_row(getattr(snapshot, "liquidity_input_readiness", None), "Liquidity Input History", "Vision Liquidity", "Closed Candle History", "Vision Structure Events"))
     rows.setdefault("Daily Context", _ready_row("Daily Context", snapshot.cpr is not None and snapshot.camarilla is not None, "SymbolRuntime", "Daily Context Runtime", "Vision Method"))
     rows.setdefault("Vision Method", _ready_row("Vision Method", snapshot.vision_method_snapshot is not None, "SymbolRuntime", "Vision Method Calculator", "Validation"))
     rows.setdefault("Validation", _ready_row("Validation", snapshot.vision_method_validation_report is not None, "SymbolRuntime", "Vision Validation", "Runtime Adapter"))
@@ -252,6 +256,30 @@ def _ready_row(stage: str, ready: bool, owner: str, producer: str, consumer: str
         consumer,
         "READY" if ready else "RECOVERING",
         "-" if ready else f"{stage} is not available from the canonical RuntimeSnapshot.",
+        _recovery_action_for_stage(stage),
+    )
+
+
+def _dependency_row(readiness, stage: str, owner: str, producer: str, consumer: str) -> RuntimeSupervisorCheck:
+    if readiness is None:
+        return _ready_row(stage, False, owner, producer, consumer)
+    status = getattr(readiness, "status", "NOT_READY")
+    if status in {"INSUFFICIENT", "INVALID", "STALE"} and getattr(readiness, "criticality", "") == "SUPPORTING":
+        supervisor_status = "DEGRADED"
+    elif status == "READY":
+        supervisor_status = "READY"
+    elif status in {"FAILED", "INVALID"}:
+        supervisor_status = "FAILED"
+    else:
+        supervisor_status = "RECOVERING"
+    detail = getattr(readiness, "reason", "-")
+    return RuntimeSupervisorCheck(
+        stage,
+        getattr(readiness, "owner", owner),
+        getattr(readiness, "producer", producer),
+        getattr(readiness, "consumer", consumer),
+        supervisor_status,
+        "-" if supervisor_status == "READY" else detail,
         _recovery_action_for_stage(stage),
     )
 

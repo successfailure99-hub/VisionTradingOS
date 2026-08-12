@@ -605,6 +605,64 @@ class RuntimeADRStatus:
             value = getattr(self, field_name)
             if value is not None and (isinstance(value, datetime) or not isinstance(value, date)):
                 raise TypeError(f"{field_name} must be date or None")
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeDependencyReadiness:
+    component: str
+    criticality: str
+    status: str
+    reason: str
+    owner: str
+    producer: str
+    consumer: str
+    dependency: str
+    instrument: RuntimeInstrument
+    timeframe: str
+    trading_date: date | None
+    timestamp: datetime | None
+    history_count: int = 0
+    minimum_required_count: int = 0
+    latest_candle_timestamp: datetime | None = None
+    exception_class: str = "-"
+    exception_message: str = "-"
+    snapshot_generation: str = "-"
+    recovery_state: str = "-"
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "component",
+            "criticality",
+            "status",
+            "reason",
+            "owner",
+            "producer",
+            "consumer",
+            "dependency",
+            "timeframe",
+            "exception_class",
+            "exception_message",
+            "snapshot_generation",
+            "recovery_state",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise TypeError(f"{field_name} must be text")
+            object.__setattr__(self, field_name, value.strip() or "-")
+        if not isinstance(self.instrument, RuntimeInstrument):
+            raise TypeError("instrument must be RuntimeInstrument")
+        if self.trading_date is not None and (isinstance(self.trading_date, datetime) or not isinstance(self.trading_date, date)):
+            raise TypeError("trading_date must be date or None")
+        for field_name in ("timestamp", "latest_candle_timestamp"):
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(value, datetime):
+                raise TypeError(f"{field_name} must be datetime or None")
+        for field_name in ("history_count", "minimum_required_count"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeJournalPersistenceSnapshot:
     persistence_status: str
@@ -717,6 +775,9 @@ class RuntimeSnapshot:
     base_timeframe: str = "1m"
     vision_decision_timeframe: str = "5m"
     confirmation_timeframe: str | None = "15m"
+    base_candle_readiness: RuntimeDependencyReadiness | None = None
+    vision_decision_history_readiness: RuntimeDependencyReadiness | None = None
+    liquidity_input_readiness: RuntimeDependencyReadiness | None = None
     vision_forensic_counters: VisionForensicCounters | None = None
     pivot_flight_plan: VisionPivotFlightPlan | None = None
     pivot_opening_assessment: VisionPivotOpeningAssessment | None = None
@@ -750,6 +811,10 @@ class RuntimeSnapshot:
         object.__setattr__(self, "vision_decision_timeframe", _normalize_vision_forensic_text(self.vision_decision_timeframe, "vision_decision_timeframe"))
         if self.confirmation_timeframe is not None:
             object.__setattr__(self, "confirmation_timeframe", _normalize_vision_forensic_text(self.confirmation_timeframe, "confirmation_timeframe"))
+        for field_name in ("base_candle_readiness", "vision_decision_history_readiness", "liquidity_input_readiness"):
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(value, RuntimeDependencyReadiness):
+                raise TypeError(f"{field_name} must be RuntimeDependencyReadiness or None")
         if self.vision_forensic_counters is not None and not isinstance(self.vision_forensic_counters, VisionForensicCounters):
             raise TypeError("vision_forensic_counters must be VisionForensicCounters or None")
         if self.vision_method_snapshot is not None and not isinstance(self.vision_method_snapshot, VisionMethodSnapshot):

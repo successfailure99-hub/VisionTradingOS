@@ -311,6 +311,7 @@ def _runtime_component_health(orchestrator) -> tuple[DashboardRuntimeComponentHe
 
     return (
         _runtime_contract_health_row(snapshots),
+        *_dependency_readiness_rows(snapshots),
         ready_row("Candle", any_snapshot("latest_candle")),
         ready_row("Market Data", bool(getattr(orchestrator, "shared_market_data_ready", False))),
         ready_row("CPR", any_snapshot("cpr")),
@@ -409,6 +410,15 @@ _RUNTIME_EXPECTED_OPERATIONAL_STATUSES = {
     "WAITING_FOR_OPTION_TICKS",
     "WAITING_FOR_TICK",
 }
+_RUNTIME_SUPPORTING_COMPONENTS = {
+    "Liquidity",
+    "Liquidity Input History",
+    "Option Chain",
+    "Option Confirmation",
+    "ADR",
+    "VWAP",
+    "Entry Location",
+}
 _RUNTIME_FAILURE_PRIORITY = (
     "Runtime Contract",
     "Runtime Integrity",
@@ -438,6 +448,60 @@ _RUNTIME_FAILURE_PRIORITY = (
 )
 
 
+def _dependency_readiness_rows(snapshots) -> tuple[DashboardRuntimeComponentHealthView, ...]:
+    rows = []
+    fields = (
+        ("base_candle_readiness", "Base Candle Engine"),
+        ("vision_decision_history_readiness", "Vision 5m Decision History"),
+        ("liquidity_input_readiness", "Liquidity Input History"),
+    )
+    for field_name, fallback_name in fields:
+        readiness = next((getattr(snapshot, field_name, None) for snapshot in snapshots if getattr(snapshot, field_name, None) is not None), None)
+        if readiness is None:
+            continue
+        status = _dependency_dashboard_status(readiness)
+        detail = _dependency_readiness_detail(readiness)
+        rows.append(
+            DashboardRuntimeComponentHealthView(
+                _plain_text(getattr(readiness, "component", fallback_name)),
+                status,
+                detail,
+                owner=_plain_text(getattr(readiness, "owner", None)),
+                producer=_plain_text(getattr(readiness, "producer", None)),
+                consumer=_plain_text(getattr(readiness, "consumer", None)),
+                timestamp=getattr(readiness, "timestamp", None),
+            )
+        )
+    return tuple(rows)
+
+
+def _dependency_dashboard_status(readiness) -> str:
+    status = _status_key(getattr(readiness, "status", "-"))
+    criticality = _status_key(getattr(readiness, "criticality", "-"))
+    if status == "READY":
+        return "READY"
+    if criticality == "SUPPORTING" and status in {"INSUFFICIENT", "INVALID", "STALE", "FAILED"}:
+        return "DEGRADED"
+    if status in {"FAILED", "INVALID"}:
+        return "FAILED"
+    return status
+
+
+def _dependency_readiness_detail(readiness) -> str:
+    latest = getattr(readiness, "latest_candle_timestamp", None)
+    parts = (
+        f"Status={_plain_text(getattr(readiness, 'status', None))}",
+        f"Criticality={_plain_text(getattr(readiness, 'criticality', None))}",
+        f"Reason={_plain_text(getattr(readiness, 'reason', None))}",
+        f"History={getattr(readiness, 'history_count', 0)}/{getattr(readiness, 'minimum_required_count', 0)}",
+        f"LatestCandle={_enum_text(latest)}",
+        f"Dependency={_plain_text(getattr(readiness, 'dependency', None))}",
+        f"Exception={_plain_text(getattr(readiness, 'exception_class', None))}: {_plain_text(getattr(readiness, 'exception_message', None))}",
+        f"Recovery={_plain_text(getattr(readiness, 'recovery_state', None))}",
+    )
+    return " | ".join(parts)
+
+
 def _runtime_health_summary(
     rows: tuple[DashboardRuntimeComponentHealthView, ...],
     *,
@@ -445,7 +509,12 @@ def _runtime_health_summary(
     primary_blocker: str,
     runtime_snapshots: tuple[RuntimeSnapshot, ...],
 ) -> DashboardRuntimeHealthSummary:
-    failures = tuple(row for row in rows if _status_key(row.status) in _RUNTIME_FAILURE_STATUSES)
+    failures = tuple(
+        row
+        for row in rows
+        if _status_key(row.status) in _RUNTIME_FAILURE_STATUSES
+        and not _is_supporting_component(row)
+    )
     failures = tuple(sorted(failures, key=_runtime_failure_rank))
     degraded = tuple(row for row in rows if _is_runtime_degraded(row))
     updated_at = _runtime_health_updated_at(failures, rows, runtime_snapshots)
@@ -523,6 +592,8 @@ def _status_key(value) -> str:
 
 def _is_runtime_degraded(row: DashboardRuntimeComponentHealthView) -> bool:
     status = _status_key(row.status)
+    if _is_supporting_component(row) and status in _RUNTIME_FAILURE_STATUSES:
+        return True
     if status in _RUNTIME_DEGRADED_STATUSES:
         return True
     if status in _RUNTIME_EXPECTED_OPERATIONAL_STATUSES:
@@ -536,6 +607,13 @@ def _is_runtime_degraded(row: DashboardRuntimeComponentHealthView) -> bool:
             or "no actionable vision candidate" in detail
         )
     return False
+
+
+def _is_supporting_component(row: DashboardRuntimeComponentHealthView) -> bool:
+    name = str(row.name)
+    detail = str(row.detail)
+    criticality_supporting = "Criticality=SUPPORTING" in detail
+    return criticality_supporting or any(name == item or name.endswith(f" {item}") for item in _RUNTIME_SUPPORTING_COMPONENTS)
 
 
 def _runtime_failure_rank(row: DashboardRuntimeComponentHealthView) -> tuple[int, str]:

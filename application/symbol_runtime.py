@@ -137,6 +137,7 @@ from application.enums import RuntimeInstrument, RuntimeStatus
 from application.exchange_calendar import DEFAULT_EXCHANGE_CALENDAR, ExchangeSessionPhase, ExchangeTradingCalendar
 from application.models import (
     OperationalReadinessSnapshot,
+    RuntimeDependencyReadiness,
     RuntimeADRStatus,
     RuntimeConfiguration,
     RuntimeDecisionAudit,
@@ -153,6 +154,7 @@ from application.runtime_contract import RuntimeContractContext, RuntimeContract
 from application.vision_forensics import VisionForensicTrace
 _OPTION_CHAIN_MAX_AGE_SECONDS = 180.0
 _OPTION_CHAIN_TIMESTAMP_TOLERANCE = timedelta(seconds=1)
+_VISION_LIQUIDITY_MIN_CANDLES = 3
 IST = ZoneInfo("Asia/Kolkata")
 
 from application.tradingview_evidence_assembly import (
@@ -1191,6 +1193,11 @@ class SymbolRuntime:
             latest_candle = primary_candle_history[-1] if primary_candle_history else None
         market_timestamp = self._market_timestamp(latest_candle)
         runtime_session = self._runtime_trading_session(market_timestamp)
+        vision_decision_history = self._vision_decision_history(market_timestamp, runtime_session.trading_date)
+        recovery_state = self._runtime_recovery_state()
+        base_candle_readiness = self._base_candle_readiness(primary_candle_history, latest_candle, market_timestamp, runtime_session, recovery_state)
+        vision_history_readiness = self._vision_decision_history_readiness(vision_decision_history, market_timestamp, runtime_session, recovery_state)
+        liquidity_input_readiness = self._liquidity_input_readiness(vision_decision_history, market_timestamp, runtime_session, recovery_state)
         pivot_flight_plan = self._current_pivot_flight_plan(market_timestamp, runtime_session)
         pivot_opening_assessment = self._current_pivot_opening_assessment(market_timestamp, runtime_session, pivot_flight_plan)
         pivot_confluence_context = self._current_pivot_confluence_context(
@@ -1303,6 +1310,9 @@ class SymbolRuntime:
             base_timeframe=self._base_timeframe.value,
             vision_decision_timeframe=self._vision_decision_timeframe.value,
             confirmation_timeframe=self._confirmation_timeframe.value if self._confirmation_timeframe is not None else None,
+            base_candle_readiness=base_candle_readiness,
+            vision_decision_history_readiness=vision_history_readiness,
+            liquidity_input_readiness=liquidity_input_readiness,
             vision_forensic_counters=self._vision_forensic_trace.counters,
         )
 
@@ -2333,6 +2343,161 @@ class SymbolRuntime:
             blocking_reason=reason,
         )
 
+    def _runtime_recovery_state(self) -> str:
+        if self.trade_journal_v1_engine.checkpoint_exists:
+            return "CHECKPOINT_ACTIVE"
+        recovery = self._paper_recovery
+        state = getattr(getattr(recovery, "status", None), "value", "NO_POSITION")
+        return str(state).upper()
+
+    def _vision_decision_history(
+        self,
+        market_timestamp: datetime | None,
+        trading_date: date | None,
+    ) -> tuple[Candle, ...]:
+        if trading_date is None:
+            return ()
+        return tuple(
+            candle
+            for candle in self.get_candle_history(self._vision_decision_timeframe)
+            if _market_date(candle.start_time) == trading_date
+            and (market_timestamp is None or candle.end_time <= market_timestamp)
+        )
+
+    def _base_candle_readiness(
+        self,
+        primary_history: tuple[Candle, ...],
+        latest_candle,
+        market_timestamp: datetime | None,
+        runtime_session: RuntimeTradingSession,
+        recovery_state: str,
+    ) -> RuntimeDependencyReadiness:
+        latest_closed = primary_history[-1].end_time if primary_history else None
+        ready = bool(primary_history or latest_candle is not None)
+        return RuntimeDependencyReadiness(
+            component="Base Candle Engine",
+            criticality="MANDATORY",
+            status="READY" if ready else "NOT_READY",
+            reason="Base candle history is available." if ready else "Base candle history is unavailable.",
+            owner="SymbolRuntime",
+            producer="CandleEngine",
+            consumer="RuntimeSnapshot",
+            dependency="Market Data",
+            instrument=self._instrument,
+            timeframe=self._primary_timeframe.value,
+            trading_date=runtime_session.trading_date,
+            timestamp=market_timestamp,
+            history_count=len(primary_history),
+            minimum_required_count=1,
+            latest_candle_timestamp=latest_closed,
+            recovery_state=recovery_state,
+        )
+
+    def _vision_decision_history_readiness(
+        self,
+        history: tuple[Candle, ...],
+        market_timestamp: datetime | None,
+        runtime_session: RuntimeTradingSession,
+        recovery_state: str,
+    ) -> RuntimeDependencyReadiness:
+        status = "READY"
+        reason = "Vision decision timeframe closed candle history is available."
+        latest = history[-1].end_time if history else None
+        if not history:
+            status = "INSUFFICIENT"
+            reason = "Vision decision timeframe closed candle history is unavailable."
+        else:
+            invalid_reason = self._invalid_candle_history_reason(history, runtime_session.trading_date, market_timestamp)
+            if invalid_reason is not None:
+                status = "INVALID"
+                reason = invalid_reason
+        return RuntimeDependencyReadiness(
+            component="Vision Decision History",
+            criticality="MANDATORY",
+            status=status,
+            reason=reason,
+            owner="SymbolRuntime",
+            producer="CandleEngine",
+            consumer="Vision Method",
+            dependency="Base Candle Engine",
+            instrument=self._instrument,
+            timeframe=self._vision_decision_timeframe.value,
+            trading_date=runtime_session.trading_date,
+            timestamp=market_timestamp,
+            history_count=len(history),
+            minimum_required_count=1,
+            latest_candle_timestamp=latest,
+            recovery_state=recovery_state,
+        )
+
+    def _liquidity_input_readiness(
+        self,
+        history: tuple[Candle, ...],
+        market_timestamp: datetime | None,
+        runtime_session: RuntimeTradingSession,
+        recovery_state: str,
+    ) -> RuntimeDependencyReadiness:
+        status = "READY"
+        reason = "Liquidity input candle history is available."
+        latest = history[-1].end_time if history else None
+        exception_class = "-"
+        exception_message = "-"
+        if len(history) < _VISION_LIQUIDITY_MIN_CANDLES:
+            status = "INSUFFICIENT"
+            reason = "insufficient candles for liquidity context"
+            exception_class = "ValueError"
+            exception_message = reason
+        else:
+            invalid_reason = self._invalid_candle_history_reason(history, runtime_session.trading_date, market_timestamp)
+            if invalid_reason is not None:
+                status = "INVALID"
+                reason = invalid_reason
+                exception_class = "ValueError"
+                exception_message = invalid_reason
+        return RuntimeDependencyReadiness(
+            component="Liquidity Input History",
+            criticality="SUPPORTING",
+            status=status,
+            reason=reason,
+            owner="SymbolRuntime",
+            producer="Vision Liquidity",
+            consumer="Vision Structure Events",
+            dependency="Vision Decision History",
+            instrument=self._instrument,
+            timeframe=self._vision_decision_timeframe.value,
+            trading_date=runtime_session.trading_date,
+            timestamp=market_timestamp,
+            history_count=len(history),
+            minimum_required_count=_VISION_LIQUIDITY_MIN_CANDLES,
+            latest_candle_timestamp=latest,
+            exception_class=exception_class,
+            exception_message=exception_message,
+            snapshot_generation=_trigger_snapshot_generation(self._instrument, self._vision_decision_timeframe, market_timestamp),
+            recovery_state=recovery_state,
+        )
+
+    def _invalid_candle_history_reason(
+        self,
+        history: tuple[Candle, ...],
+        trading_date: date | None,
+        market_timestamp: datetime | None,
+    ) -> str | None:
+        previous: Candle | None = None
+        seen: set[tuple[datetime, datetime]] = set()
+        for candle in sorted(history, key=lambda item: (item.start_time, item.end_time)):
+            if _market_date(candle.start_time) != trading_date:
+                return "candle trading date mismatch"
+            if market_timestamp is not None and candle.end_time > market_timestamp:
+                return "future candle timestamp"
+            key = (candle.start_time, candle.end_time)
+            if key in seen:
+                return "duplicate candle"
+            seen.add(key)
+            if previous is not None and candle.start_time < previous.end_time:
+                return "invalid candle sequence"
+            previous = candle
+        return None
+
     def _validate_option_chain_snapshot(self, snapshot: OptionChainSnapshot, market_timestamp: datetime) -> None:
         if not isinstance(snapshot, OptionChainSnapshot):
             raise TypeError("snapshot must be OptionChainSnapshot")
@@ -3148,12 +3313,40 @@ class SymbolRuntime:
         mandatory_blockers = []
         optional_degradations = []
         disabled = ["Broker mutation disabled"]
-        candle_ready = bool(self.candle_engine.get_history(self._core_instrument) or self.candle_engine.get_current(self._core_instrument))
+        base_readiness = self._base_candle_readiness(
+            tuple(self.candle_engine.get_history(self._core_instrument)),
+            self.candle_engine.get_current(self._core_instrument),
+            market_timestamp,
+            runtime_session,
+            self._runtime_recovery_state(),
+        )
+        vision_history = self._vision_decision_history(market_timestamp, runtime_session.trading_date)
+        vision_history_readiness = self._vision_decision_history_readiness(
+            vision_history,
+            market_timestamp,
+            runtime_session,
+            base_readiness.recovery_state,
+        )
+        liquidity_readiness = self._liquidity_input_readiness(
+            vision_history,
+            market_timestamp,
+            runtime_session,
+            base_readiness.recovery_state,
+        )
+        candle_ready = base_readiness.status == "READY"
+        vision_history_ready = vision_history_readiness.status == "READY"
         daily_ready = runtime_session.status == "READY"
+        session_blocked = runtime_session.status == "MARKET_CLOSED"
         if not candle_ready:
-            mandatory_blockers.append("Candle warmup unavailable")
-        if not daily_ready:
+            mandatory_blockers.append(base_readiness.reason)
+        if not vision_history_ready:
+            mandatory_blockers.append(f"Vision 5m history {vision_history_readiness.status}: {vision_history_readiness.reason}")
+        if not daily_ready and not session_blocked:
             mandatory_blockers.append(runtime_session.blocking_reason)
+        if session_blocked:
+            optional_degradations.append(f"Session Blocker MARKET_CLOSED: {runtime_session.blocking_reason}")
+        if liquidity_readiness.status != "READY":
+            optional_degradations.append(f"Vision Liquidity {liquidity_readiness.status}: {liquidity_readiness.reason}")
         if adr_status.state != "READY":
             optional_degradations.append(f"ADR {adr_status.state}: {adr_status.blocking_reason}")
         if not vwap_source.ready:
@@ -3163,7 +3356,7 @@ class SymbolRuntime:
         journal_ready = journal.operational_state in {"READY_EMPTY", "READY_WITH_RECORDS"}
         if not journal_ready:
             mandatory_blockers.append(journal.operational_message)
-        live_analysis_ready = candle_ready and daily_ready
+        live_analysis_ready = candle_ready and vision_history_ready and (daily_ready or session_blocked)
         vision_ready = self._vision_method_snapshot is not None or live_analysis_ready
         paper_ready = journal_ready and self.trade_lifecycle_v1.snapshot().running
         broker_ready = False
@@ -3171,7 +3364,7 @@ class SymbolRuntime:
             overall = "BLOCKED"
         elif runtime_session.trading_date is None:
             overall = "STARTING"
-        elif optional_degradations:
+        elif session_blocked or optional_degradations:
             overall = "DEGRADED"
         elif self._vision_trade_candidate is not None:
             overall = "READY_FOR_PAPER"
@@ -3216,6 +3409,19 @@ class SymbolRuntime:
             getattr(failure, "stage", "").casefold(): failure
             for failure in tuple(getattr(method_snapshot, "assembly_failures", ()) or ())
         }
+        supporting_stages = {
+            "adr",
+            "vwap",
+            "liquidity",
+            "option confirmation",
+            "option chain",
+            "momentum",
+            "volume",
+            "entry location",
+        }
+        vision_history = self._vision_decision_history(market_timestamp, runtime_session.trading_date)
+        recovery_state_value = self._runtime_recovery_state()
+        liquidity_readiness = self._liquidity_input_readiness(vision_history, market_timestamp, runtime_session, recovery_state_value)
 
         def context_ready(name: str, attr: str) -> bool:
             return method_snapshot is not None and getattr(method_snapshot, attr, None) is not None and name.casefold() not in context_failures
@@ -3224,7 +3430,19 @@ class SymbolRuntime:
             failure = context_failures.get(name.casefold())
             if failure is None:
                 return default
-            return f"{failure.status.value}: {failure.failure_reason}"
+            detail = getattr(failure, "validation_message", "-")
+            if name == "Liquidity":
+                return " | ".join(
+                    (
+                        f"{failure.status.value}: {failure.failure_reason}",
+                        f"Message={detail}",
+                        f"History={liquidity_readiness.history_count}/{liquidity_readiness.minimum_required_count}",
+                        f"LatestCandle={liquidity_readiness.latest_candle_timestamp.isoformat() if liquidity_readiness.latest_candle_timestamp is not None else '-'}",
+                        f"Timeframe={liquidity_readiness.timeframe}",
+                        f"Criticality={liquidity_readiness.criticality}",
+                    )
+                )
+            return f"{failure.status.value}: {failure.failure_reason} | Message={detail}"
 
         def status_for(stage: str, ready: bool, detail: str) -> str:
             if detail.startswith("NO_ACTIONABLE_CANDIDATE"):
@@ -3235,6 +3453,8 @@ class SymbolRuntime:
                 return "READY"
             failure = context_failures.get(stage.casefold())
             if failure is not None and getattr(getattr(failure, "status", None), "value", "") == "failed":
+                if stage.casefold() in supporting_stages:
+                    return "DEGRADED"
                 return "FAILED"
             if audit is not None and audit.rejected_at == stage:
                 return "BLOCKED"
@@ -3250,13 +3470,6 @@ class SymbolRuntime:
             if market_aware != stage_aware:
                 return None
             return max(0.0, (market_timestamp - stage_timestamp).total_seconds() * 1000.0)
-
-        def recovery_state() -> str:
-            recovery = self._paper_recovery
-            state = getattr(getattr(recovery, "status", None), "value", "NO_POSITION")
-            if self.trade_journal_v1_engine.checkpoint_exists:
-                return "CHECKPOINT_ACTIVE"
-            return str(state).upper()
 
         def stage_contract(stage: str) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
             contracts = {
@@ -3331,7 +3544,7 @@ class SymbolRuntime:
             ("Journal", "SymbolRuntime", "TradeJournalV1", "Dashboard", journal_ready, getattr(journal, "timestamp", None), "No journal entry."),
             ("AI Explanation", "SymbolRuntime", "Vision Method Explanation", "Dashboard AI", bool(self._vision_ai_explanation), candidate_timestamp, "Vision explanation unavailable."),
         )
-        state = recovery_state()
+        state = recovery_state_value
         return tuple(
             RuntimeVerificationStage(
                 stage=stage,

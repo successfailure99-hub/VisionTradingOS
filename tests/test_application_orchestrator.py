@@ -276,6 +276,14 @@ def test_process_tick_returns_immutable_runtime_snapshot_with_dashboard_state():
     assert snapshot.latest_candle is not None
     assert snapshot.vwap is not None
     assert snapshot.updated_at == TS + timedelta(minutes=1)
+    assert snapshot.base_candle_readiness is not None
+    assert snapshot.base_candle_readiness.status == "READY"
+    assert snapshot.vision_decision_history_readiness is not None
+    assert snapshot.vision_decision_history_readiness.timeframe == snapshot.vision_decision_timeframe
+    if snapshot.vision_decision_timeframe != snapshot.base_timeframe:
+        assert snapshot.vision_decision_history_readiness.status == "INSUFFICIENT"
+    assert snapshot.liquidity_input_readiness is not None
+    assert snapshot.liquidity_input_readiness.criticality == "SUPPORTING"
     assert snapshot.cpr is None
     assert snapshot.market_context is not None
     assert snapshot.market_context.current_price == 101.0

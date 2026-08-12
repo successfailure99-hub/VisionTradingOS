@@ -10,6 +10,8 @@ from application.enums import ExecutionSafetyMode, RuntimeInstrument, RuntimeSta
 from application.lifecycle_manager import LifecycleSnapshot
 from application.models import (
     OrchestratorSnapshot,
+    OperationalReadinessSnapshot,
+    RuntimeDependencyReadiness,
     RuntimeDiagnostics,
     RuntimeSnapshot,
     RuntimeTradingSession,
@@ -377,10 +379,93 @@ def test_runtime_health_summary_recovers_when_canonical_rows_recover():
         runtime_snapshots=(),
     )
 
-    assert failed.overall_status == "FAILED"
+    assert failed.overall_status == "DEGRADED"
     assert recovered.overall_status == "READY"
     assert recovered.primary_failure == "none"
     assert recovered.failed_component_count == 0
+
+
+def test_supporting_liquidity_degradation_does_not_make_runtime_failed():
+    rows = (
+        DashboardRuntimeComponentHealthView(
+            "Liquidity Input History",
+            "DEGRADED",
+            "Criticality=SUPPORTING | Reason=insufficient candles for liquidity context | Exception=ValueError: insufficient candles for liquidity context",
+            owner="SymbolRuntime",
+            producer="Vision Liquidity",
+            consumer="Vision Structure Events",
+        ),
+    )
+
+    summary = _runtime_health_summary(rows, application_status="Running", primary_blocker="Exchange Session Is Closed For The Day", runtime_snapshots=())
+
+    assert summary.overall_status == "DEGRADED"
+    assert summary.primary_failure == "Primary Blocker"
+    assert summary.failed_component_count == 0
+    assert "Exchange Session Is Closed For The Day" in summary.failure_reason
+
+
+def test_runtime_view_renders_split_candle_and_liquidity_readiness():
+    session = RuntimeTradingSession(
+        instrument=RuntimeInstrument.NIFTY,
+        exchange="NSE",
+        market_timestamp=TS,
+        trading_date=TS.date(),
+        previous_completed_trading_date=TS.date(),
+        cpr_trading_date=TS.date(),
+        camarilla_trading_date=TS.date(),
+        adr_trading_date=TS.date(),
+        vwap_trading_date=TS.date(),
+        status="MARKET_CLOSED",
+        blocking_reason="Exchange Session Is Closed For The Day",
+    )
+    liquidity = RuntimeDependencyReadiness(
+        component="Liquidity Input History",
+        criticality="SUPPORTING",
+        status="INSUFFICIENT",
+        reason="insufficient candles for liquidity context",
+        owner="SymbolRuntime",
+        producer="Vision Liquidity",
+        consumer="Vision Structure Events",
+        dependency="Vision Decision History",
+        instrument=RuntimeInstrument.NIFTY,
+        timeframe="5m",
+        trading_date=TS.date(),
+        timestamp=TS,
+        history_count=2,
+        minimum_required_count=3,
+        latest_candle_timestamp=TS,
+        exception_class="ValueError",
+        exception_message="insufficient candles for liquidity context",
+        recovery_state="CHECKPOINT_ACTIVE",
+    )
+    runtime = replace(
+        empty_runtime(),
+        runtime_session=session,
+        operational_readiness=OperationalReadinessSnapshot(
+            overall_state="DEGRADED",
+            live_analysis_ready=True,
+            vision_evaluation_ready=True,
+            paper_trading_ready=True,
+            journal_ready=True,
+            broker_read_only_ready=False,
+            mandatory_blockers=(),
+            optional_degradations=("Vision Liquidity INSUFFICIENT: insufficient candles for liquidity context",),
+            intentional_disabled_features=("Broker mutation disabled",),
+            timestamp=TS,
+            session=session,
+            primary_blocker="Exchange Session Is Closed For The Day",
+        ),
+        liquidity_input_readiness=liquidity,
+    )
+    view = build_runtime_view(lifecycle(runtime))
+    rows = {item.name: item for item in view.component_health}
+
+    assert view.runtime_health_summary.overall_status == "DEGRADED"
+    assert view.runtime_health_summary.failed_component_count == 0
+    assert rows["Liquidity Input History"].status == "DEGRADED"
+    assert "ValueError: insufficient candles for liquidity context" in rows["Liquidity Input History"].detail
+    assert "History=2/3" in rows["Liquidity Input History"].detail
 
 
 def test_runtime_view_exposes_vision_pipeline_health_and_reasons():
