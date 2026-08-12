@@ -54,6 +54,7 @@ from .enums import (
     VisionPivotZoneStatus,
     VisionPivotZoneStrength,
     VisionPivotZoneType,
+    VisionPriceActionTriggerStageStatus,
     VisionScenarioStatus,
     VisionPreviousDayRelation,
     VisionRangeLocation,
@@ -108,12 +109,16 @@ from .pivot_confluence import (
     validate_pivot_confluence_request,
 )
 from .price_action_trigger import (
+    VisionPriceActionTriggerStageResult,
     VisionPriceActionTrigger,
     VisionPriceActionTriggerConfiguration,
     VisionPriceActionTriggerContext,
     VisionPriceActionTriggerRequest,
     VisionTriggerZoneEvent,
     build_price_action_trigger_context,
+    failed_price_action_trigger_stage_result,
+    insufficient_price_action_trigger_stage_result,
+    price_action_trigger_stage_result_from_context,
     validate_price_action_trigger_request,
 )
 from .level_context import (
@@ -318,6 +323,8 @@ __all__ = [
     "VisionPriceActionTriggerConfiguration",
     "VisionPriceActionTriggerContext",
     "VisionPriceActionTriggerRequest",
+    "VisionPriceActionTriggerStageResult",
+    "VisionPriceActionTriggerStageStatus",
     "assemble_vision_level_context",
     "assemble_vision_liquidity_context",
     "assemble_vision_opening_range_context",
@@ -331,6 +338,9 @@ __all__ = [
     "build_pivot_flight_plan",
     "build_pivot_confluence_context",
     "build_price_action_trigger_context",
+    "failed_price_action_trigger_stage_result",
+    "insufficient_price_action_trigger_stage_result",
+    "price_action_trigger_stage_result_from_context",
     "classify_pivot_relationship",
     "classify_width",
     "classify_open_vs_camarilla",

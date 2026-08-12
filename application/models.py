@@ -83,6 +83,7 @@ from engines.vision_method import (
     VisionMethodSnapshot,
     VisionMethodValidationReport,
     VisionPriceActionTriggerContext,
+    VisionPriceActionTriggerStageResult,
     VisionPivotConfluenceContext,
     VisionPivotFlightPlan,
     VisionPivotOpeningAssessment,
@@ -721,6 +722,7 @@ class RuntimeSnapshot:
     pivot_opening_assessment: VisionPivotOpeningAssessment | None = None
     pivot_confluence_context: VisionPivotConfluenceContext | None = None
     price_action_trigger_context: VisionPriceActionTriggerContext | None = None
+    price_action_trigger_stage_result: VisionPriceActionTriggerStageResult | None = None
 
     def __post_init__(self) -> None:
         if self.runtime_session is not None and not isinstance(self.runtime_session, RuntimeTradingSession):
@@ -762,6 +764,10 @@ class RuntimeSnapshot:
             raise TypeError("pivot_confluence_context must be VisionPivotConfluenceContext or None")
         if self.price_action_trigger_context is not None and not isinstance(self.price_action_trigger_context, VisionPriceActionTriggerContext):
             raise TypeError("price_action_trigger_context must be VisionPriceActionTriggerContext or None")
+        if self.price_action_trigger_stage_result is not None and not isinstance(
+            self.price_action_trigger_stage_result, VisionPriceActionTriggerStageResult
+        ):
+            raise TypeError("price_action_trigger_stage_result must be VisionPriceActionTriggerStageResult or None")
         if self.option_trade_candidate is not None and not isinstance(self.option_trade_candidate, OptionTradeCandidate):
             raise TypeError("option_trade_candidate must be OptionTradeCandidate or None")
         if self.option_paper_risk is not None and not isinstance(self.option_paper_risk, OptionPaperRiskSnapshot):

@@ -31,9 +31,11 @@ from engines.vision_method import (
     VisionCandidateState,
     VisionMethodValidationTraceStep,
     VisionOptionConfirmation,
+    VisionPriceActionTriggerStageStatus,
     VisionTriggerDirection,
     VisionTriggerType,
     build_pivot_flight_plan,
+    failed_price_action_trigger_stage_result,
     VisionPivotFlightPlanRequest,
     validate_vision_method,
 )
@@ -603,6 +605,34 @@ def test_live_bridge_option_timezone_failure_is_neutral_without_hard_veto(monkey
     assert "timezone-aligned runtime data" not in panel._labels["Assembly Failures"].text()
 
 
+def test_live_bridge_surfaces_trigger_technical_failure_without_trade_candidate():
+    app()
+    lifecycle, runtime = _live_lifecycle()
+    stage = failed_price_action_trigger_stage_result(
+        exc=ValueError("candle timeframe mismatch."),
+        decision_timestamp=NOW,
+        source_candle_reference="candle:NIFTY:1m:bad",
+        trigger_zone_reference="hot_zone:bad",
+        snapshot_generation=f"NIFTY:5m:{NOW.isoformat()}",
+    )
+    runtime.current_snapshot = replace(
+        runtime.current_snapshot,
+        price_action_trigger_context=None,
+        price_action_trigger_stage_result=stage,
+    )
+    panel = VisionMethodInspector()
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, panel).refresh()
+
+    assert result.snapshot is not None
+    assert result.snapshot.price_action_trigger_stage_result is stage
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.DEGRADED
+    assert panel._labels["Trigger Type"].text() == VisionPriceActionTriggerStageStatus.TRIGGER_ASSEMBLY_FAILED.value
+    assert panel._labels["Trigger Reason"].text() == "candle timeframe mismatch."
+    assert result.snapshot.candidate_state is not VisionCandidateState.LONG_ELIGIBLE
+    assert result.snapshot.candidate_state is not VisionCandidateState.SHORT_ELIGIBLE
+
+
 def test_live_bridge_status_transitions_are_rendered(monkeypatch):
     app()
     lifecycle = ApplicationBootstrap().create_application()
@@ -820,6 +850,7 @@ def _runtime_snapshot(
     adr=_DEFAULT,
     vwap=_DEFAULT,
     price_action_trigger_context=_DEFAULT,
+    price_action_trigger_stage_result=None,
 ):
     history = _candles() if history is None else tuple(history)
     return RuntimeSnapshot(
@@ -847,6 +878,7 @@ def _runtime_snapshot(
         snapshot_created_at=timestamp,
         adr=None if adr is _DEFAULT else adr,
         price_action_trigger_context=trigger(timestamp=timestamp) if price_action_trigger_context is _DEFAULT else price_action_trigger_context,
+        price_action_trigger_stage_result=price_action_trigger_stage_result,
     )
 
 

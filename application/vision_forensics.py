@@ -139,6 +139,7 @@ class VisionForensicTrace:
         pivot_opening_assessment = snapshot.pivot_opening_assessment
         pivot_confluence = snapshot.pivot_confluence_context
         price_action_trigger = snapshot.price_action_trigger_context
+        trigger_stage = snapshot.price_action_trigger_stage_result
         risk_decision = getattr(risk_snapshot, "decision", None)
         risk_decision_value = getattr(risk_decision, "value", str(risk_decision or ""))
         approved = risk_decision in {RiskDecisionV2.APPROVED, RiskDecisionV2.APPROVED_REDUCED} or risk_decision_value in {
@@ -178,6 +179,14 @@ class VisionForensicTrace:
             "pivot_opening_assessment": _pivot_opening_assessment_payload(pivot_opening_assessment),
             "pivot_confluence": _pivot_confluence_payload(pivot_confluence),
             "price_action_trigger": _price_action_trigger_payload(price_action_trigger),
+            "price_action_trigger_stage": _price_action_trigger_stage_payload(trigger_stage),
+            "trigger_stage_status": getattr(getattr(trigger_stage, "status", None), "value", None),
+            "trigger_failure_type": getattr(trigger_stage, "failure_type", None),
+            "trigger_failure_reason": getattr(trigger_stage, "failure_reason", None),
+            "trigger_source_candle": getattr(trigger_stage, "source_candle_reference", None),
+            "trigger_zone_reference": getattr(trigger_stage, "trigger_zone_reference", None),
+            "trigger_decision_timestamp": _iso_datetime(getattr(trigger_stage, "decision_timestamp", None)),
+            "snapshot_generation": getattr(trigger_stage, "snapshot_generation", None),
             "opening_range": {
                 "state": opening_range.current_location.value,
                 "break": opening_range.break_direction.value,
@@ -440,6 +449,22 @@ def _price_action_trigger_payload(context: object | None) -> dict[str, Any] | No
         "source_candle_reference": getattr(trigger, "source_candle_reference", None),
         "prior_event_reference": getattr(trigger, "prior_event_reference", None),
         "event_history_count": len(tuple(getattr(context, "event_history", ()))),
+    }
+
+
+def _price_action_trigger_stage_payload(stage: object | None) -> dict[str, Any] | None:
+    if stage is None:
+        return None
+    return {
+        "status": getattr(getattr(stage, "status", None), "value", None),
+        "failure_type": getattr(stage, "failure_type", None),
+        "failure_reason": getattr(stage, "failure_reason", None),
+        "source_candle_reference": getattr(stage, "source_candle_reference", None),
+        "trigger_zone_reference": getattr(stage, "trigger_zone_reference", None),
+        "decision_timestamp": _iso_datetime(getattr(stage, "decision_timestamp", None)),
+        "snapshot_generation": getattr(stage, "snapshot_generation", None),
+        "producer": getattr(stage, "producer", None),
+        "consumer": getattr(stage, "consumer", None),
     }
 
 

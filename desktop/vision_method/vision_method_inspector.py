@@ -205,6 +205,7 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
     opening_assessment = snapshot.pivot_opening_assessment
     confluence = snapshot.pivot_confluence_context
     trigger = snapshot.price_action_trigger_context
+    trigger_stage = snapshot.price_action_trigger_stage_result
     values = {
         "Instrument": snapshot.instrument.value,
         "Timeframe": snapshot.timeframe.value,
@@ -285,7 +286,7 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
     values.update(_pivot_values(pivot))
     values.update(_opening_assessment_values(opening_assessment))
     values.update(_pivot_confluence_values(confluence))
-    values.update(_price_action_trigger_values(trigger))
+    values.update(_price_action_trigger_values(trigger, trigger_stage))
     return values
 
 
@@ -439,7 +440,7 @@ def _status_context_values(status: VisionMethodLiveStatus) -> dict[str, str]:
     values.update(_pivot_values(status.pivot_flight_plan))
     values.update(_opening_assessment_values(status.pivot_opening_assessment))
     values.update(_pivot_confluence_values(status.pivot_confluence_context))
-    values.update(_price_action_trigger_values(status.price_action_trigger_context))
+    values.update(_price_action_trigger_values(status.price_action_trigger_context, status.price_action_trigger_stage_result))
     return values
 
 
@@ -750,10 +751,32 @@ def _pivot_confluence_values(context) -> dict[str, str]:
     }
 
 
-def _price_action_trigger_values(context) -> dict[str, str]:
+def _price_action_trigger_values(context, stage_result=None) -> dict[str, str]:
     if context is None:
-        return {}
+        if stage_result is None:
+            return {}
+        status = getattr(getattr(stage_result, "status", None), "value", None) or "not_evaluated"
+        reason = getattr(stage_result, "failure_reason", None) or status
+        return {
+            "Trigger Zone": getattr(stage_result, "trigger_zone_reference", "none"),
+            "Trigger Interaction": status,
+            "Trigger Type": status,
+            "Trigger Direction": "none",
+            "Trigger Quality": "invalid" if status in {"trigger_assembly_failed", "insufficient_data"} else "low",
+            "Trigger Pattern": "none",
+            "Trigger Break": "none",
+            "Trigger Acceptance": "none",
+            "Trigger Retest": "none",
+            "Trigger Structure Alignment": "unavailable",
+            "Trigger Liquidity Alignment": "unavailable",
+            "Trigger Opening Range Alignment": "unavailable",
+            "Trigger Scenario Alignment": "unavailable",
+            "Trigger Reason": reason,
+        }
     trigger = context.trigger
+    status_reason = ""
+    if stage_result is not None:
+        status_reason = getattr(getattr(stage_result, "status", None), "value", "")
     return {
         "Trigger Zone": trigger.zone_reference,
         "Trigger Interaction": trigger.interaction_state.value,
@@ -770,6 +793,7 @@ def _price_action_trigger_values(context) -> dict[str, str]:
         "Trigger Scenario Alignment": trigger.scenario_alignment.value,
         "Trigger Reason": _joined_or_none(
             (
+                status_reason,
                 *trigger.supporting_reasons,
                 *trigger.contradicting_reasons,
                 *trigger.warnings,

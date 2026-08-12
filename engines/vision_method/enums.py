@@ -122,6 +122,15 @@ class VisionContextAssemblyStatus(str, Enum):
     NOT_EVALUATED = "not_evaluated"
 
 
+class VisionPriceActionTriggerStageStatus(str, Enum):
+    EVALUATED_NO_TRIGGER = "evaluated_no_trigger"
+    EVALUATED_NO_INTERACTION = "evaluated_no_interaction"
+    EVALUATED_INDECISION = "evaluated_indecision"
+    EVALUATED_TRIGGER = "evaluated_trigger"
+    INSUFFICIENT_DATA = "insufficient_data"
+    TRIGGER_ASSEMBLY_FAILED = "trigger_assembly_failed"
+
+
 class VisionOpeningRangeState(str, Enum):
     WAITING = "waiting"
     INSIDE_RANGE = "inside_range"

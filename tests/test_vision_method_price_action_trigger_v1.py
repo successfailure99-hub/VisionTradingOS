@@ -29,6 +29,7 @@ from engines.vision_method import (
     VisionPivotZoneStatus,
     VisionPivotZoneStrength,
     VisionPivotZoneType,
+    VisionPriceActionTriggerStageStatus,
     VisionPriceActionTriggerConfiguration,
     VisionPriceActionTriggerRequest,
     VisionReversalState,
@@ -43,6 +44,8 @@ from engines.vision_method import (
     VisionTriggerType,
     VisionTriggerZoneEvent,
     build_price_action_trigger_context,
+    failed_price_action_trigger_stage_result,
+    price_action_trigger_stage_result_from_context,
 )
 
 
@@ -154,6 +157,54 @@ def request(
 
 def build(candles: tuple[Candle, ...], hot_zone: VisionPivotHotZone, **kwargs):
     return build_price_action_trigger_context(request(candles, hot_zone, **kwargs))
+
+
+def test_stage_result_classifies_no_trigger_without_technical_failure():
+    item = zone(VisionPivotZoneDirectionalRole.BEARISH_RESISTANCE, VisionPivotZoneType.RESISTANCE_HOT_ZONE)
+    context = build((candle(0, 99.8, 100.1, 99.7, 100.0),), item)
+
+    result = price_action_trigger_stage_result_from_context(context, snapshot_generation="NIFTY:5m:2026-07-29T09:20:00+05:30")
+
+    assert result.status in {
+        VisionPriceActionTriggerStageStatus.EVALUATED_NO_TRIGGER,
+        VisionPriceActionTriggerStageStatus.EVALUATED_INDECISION,
+    }
+    assert result.trigger_context is context
+    assert result.failure_type is None
+    assert result.failure_reason is None
+    assert result.source_candle_reference.startswith("candle:NIFTY:5m:")
+
+
+def test_stage_result_preserves_typeerror_failure_details():
+    exc = TypeError("candles must contain Candle objects.")
+    result = failed_price_action_trigger_stage_result(
+        exc=exc,
+        decision_timestamp=START + timedelta(minutes=5),
+        source_candle_reference="candle:NIFTY:5m:bad",
+        trigger_zone_reference="hot_zone:bad",
+        snapshot_generation="NIFTY:5m:2026-07-29T09:20:00+05:30",
+    )
+
+    assert result.status is VisionPriceActionTriggerStageStatus.TRIGGER_ASSEMBLY_FAILED
+    assert result.trigger_context is None
+    assert result.failure_type == "TypeError"
+    assert result.failure_reason == "candles must contain Candle objects."
+    assert result.source_candle_reference == "candle:NIFTY:5m:bad"
+
+
+def test_stage_result_preserves_valueerror_failure_details():
+    exc = ValueError("candle timeframe mismatch.")
+    result = failed_price_action_trigger_stage_result(
+        exc=exc,
+        decision_timestamp=START + timedelta(minutes=5),
+        source_candle_reference="candle:NIFTY:1m:bad",
+        trigger_zone_reference="hot_zone:bad",
+        snapshot_generation="NIFTY:5m:2026-07-29T09:20:00+05:30",
+    )
+
+    assert result.status is VisionPriceActionTriggerStageStatus.TRIGGER_ASSEMBLY_FAILED
+    assert result.failure_type == "ValueError"
+    assert result.failure_reason == "candle timeframe mismatch."
 
 
 def test_first_touch_and_penetration_are_not_rejection_or_breakout():

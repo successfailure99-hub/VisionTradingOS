@@ -45,6 +45,7 @@ from engines.vision_method import (
     VisionOptionConfirmationRequest,
     VisionOptionConfirmation,
     VisionOptionConfirmationContext,
+    VisionPriceActionTriggerStageResult,
     VisionRangeLocation,
     VisionReversalState,
     VisionSetupQuality,
@@ -109,6 +110,7 @@ class _LiveAssembly:
     pivot_opening_assessment: object | None = None
     pivot_confluence_context: object | None = None
     price_action_trigger_context: object | None = None
+    price_action_trigger_stage_result: object | None = None
     snapshot: VisionMethodSnapshot | None = None
     report: VisionMethodValidationReport | None = None
     failures: tuple[VisionContextAssemblyFailure, ...] = ()
@@ -211,6 +213,7 @@ class VisionMethodLiveInspectorBridge:
         pivot_opening_assessment = getattr(runtime_snapshot, "pivot_opening_assessment", None)
         pivot_confluence_context = getattr(runtime_snapshot, "pivot_confluence_context", None)
         price_action_trigger_context = getattr(runtime_snapshot, "price_action_trigger_context", None)
+        price_action_trigger_stage_result = getattr(runtime_snapshot, "price_action_trigger_stage_result", None)
         if not history:
             failures.append(_missing_failure("Candle Engine", "Closed candle history is unavailable."))
             return _LiveAssembly(
@@ -222,6 +225,7 @@ class VisionMethodLiveInspectorBridge:
                 pivot_opening_assessment=pivot_opening_assessment,
                 pivot_confluence_context=pivot_confluence_context,
                 price_action_trigger_context=price_action_trigger_context,
+                price_action_trigger_stage_result=price_action_trigger_stage_result,
                 failures=tuple(failures),
             )
 
@@ -405,6 +409,20 @@ class VisionMethodLiveInspectorBridge:
                 option_confirmation = _fallback_option_confirmation(timestamp, failures)
                 self._logger.debug("[VisionMethodLive] OPTION_CONFIRMATION failed reason=%r", _safe_error(exc))
 
+        if (
+            price_action_trigger_stage_result is not None
+            and getattr(getattr(price_action_trigger_stage_result, "status", None), "value", None) == "trigger_assembly_failed"
+        ):
+            failures.append(
+                VisionContextAssemblyFailure(
+                    stage="Price-Action Trigger",
+                    status=VisionContextAssemblyStatus.FAILED,
+                    failure_reason=getattr(price_action_trigger_stage_result, "failure_type", None) or "TriggerAssemblyFailed",
+                    validation_message=getattr(price_action_trigger_stage_result, "failure_reason", None)
+                    or "Price-action trigger assembly failed.",
+                )
+            )
+
         snapshot = None
         report = None
         if (
@@ -433,6 +451,7 @@ class VisionMethodLiveInspectorBridge:
                     pivot_opening_assessment=pivot_opening_assessment,
                     pivot_confluence_context=pivot_confluence_context,
                     price_action_trigger_context=price_action_trigger_context,
+                    price_action_trigger_stage_result=price_action_trigger_stage_result,
                     assembly_failures=tuple(failures),
                 ),
                 instrument=runtime_snapshot.symbol,
@@ -465,6 +484,7 @@ class VisionMethodLiveInspectorBridge:
             pivot_opening_assessment=pivot_opening_assessment,
             pivot_confluence_context=pivot_confluence_context,
             price_action_trigger_context=price_action_trigger_context,
+            price_action_trigger_stage_result=price_action_trigger_stage_result,
             snapshot=snapshot,
             report=report,
             failures=tuple(failures),
@@ -805,6 +825,7 @@ class VisionMethodLiveInspectorBridge:
             pivot_opening_assessment=assembly.pivot_opening_assessment,
             pivot_confluence_context=assembly.pivot_confluence_context,
             price_action_trigger_context=assembly.price_action_trigger_context,
+            price_action_trigger_stage_result=assembly.price_action_trigger_stage_result,
         )
 
     def _status_from_snapshot(
@@ -845,6 +866,7 @@ class VisionMethodLiveInspectorBridge:
             pivot_opening_assessment=snapshot.pivot_opening_assessment,
             pivot_confluence_context=snapshot.pivot_confluence_context,
             price_action_trigger_context=snapshot.price_action_trigger_context,
+            price_action_trigger_stage_result=snapshot.price_action_trigger_stage_result,
         )
 
     def _internal_error_status(self, exc: Exception) -> VisionMethodLiveStatus:
@@ -1110,6 +1132,9 @@ def _available_contexts_from_assembly(assembly: _LiveAssembly) -> tuple[str, ...
         contexts.append("Setup Qualification")
     if assembly.option_confirmation is not None and assembly.option_confirmation.quality is not VisionLevelQuality.INSUFFICIENT:
         contexts.append("Option Confirmation")
+    stage = assembly.price_action_trigger_stage_result
+    if stage is not None and getattr(getattr(stage, "status", None), "value", None) != "trigger_assembly_failed":
+        contexts.append("Price-Action Trigger")
     return tuple(contexts)
 
 

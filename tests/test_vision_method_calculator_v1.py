@@ -58,6 +58,7 @@ from engines.vision_method import (
     VisionPivotZoneQuality,
     VisionPriceActionTrigger,
     VisionPriceActionTriggerContext,
+    VisionPriceActionTriggerStageStatus,
     VisionTriggerAcceptanceState,
     VisionTriggerAlignment,
     VisionTriggerBreakState,
@@ -67,6 +68,8 @@ from engines.vision_method import (
     VisionTriggerRetestState,
     VisionTriggerType,
     calculate_vision_method_snapshot,
+    failed_price_action_trigger_stage_result,
+    price_action_trigger_stage_result_from_context,
 )
 
 
@@ -307,6 +310,7 @@ def trigger(
 
 
 def request(**overrides) -> VisionMethodCalculationRequest:
+    trigger_context = overrides.pop("price_action_trigger_context", trigger())
     values = {
         "instrument": RuntimeInstrument.NIFTY,
         "timeframe": TimeFrame.FIVE_MINUTES,
@@ -318,7 +322,13 @@ def request(**overrides) -> VisionMethodCalculationRequest:
         "structure_event_context": event(),
         "setup_qualification_context": setup(),
         "option_confirmation_context": option(),
-        "price_action_trigger_context": trigger(),
+        "price_action_trigger_context": trigger_context,
+        "price_action_trigger_stage_result": price_action_trigger_stage_result_from_context(
+            trigger_context,
+            snapshot_generation=f"NIFTY:5m:{NOW.isoformat()}",
+        )
+        if trigger_context is not None
+        else None,
     }
     values.update(overrides)
     return VisionMethodCalculationRequest(**values)
@@ -358,7 +368,29 @@ def test_complete_bearish_methodology_produces_short_eligible_snapshot():
     assert result.candidate_state is VisionCandidateState.SHORT_ELIGIBLE
     assert result.quality == "high"
     assert "Bearish BOS" in result.supporting_reasons
-    assert "Call writing supports setup" in result.supporting_reasons
+
+
+def test_technical_trigger_failure_blocks_eligible_promotion_without_methodology_no_trigger_label():
+    stage = failed_price_action_trigger_stage_result(
+        exc=ValueError("candle timezone mismatch."),
+        decision_timestamp=NOW,
+        source_candle_reference="candle:NIFTY:5m:2026-07-29T10:25:00+05:30:2026-07-29T10:30:00+05:30",
+        trigger_zone_reference="hot_zone:2026-07-29:100.0000:100.2000:bearish_resistance:camarilla_h3",
+        snapshot_generation=f"NIFTY:5m:{NOW.isoformat()}",
+    )
+
+    result = calculate_vision_method_snapshot(
+        request(
+            price_action_trigger_context=None,
+            price_action_trigger_stage_result=stage,
+        )
+    )
+
+    assert result.candidate_state is VisionCandidateState.PREPARE_LONG
+    assert result.price_action_trigger_stage_result is stage
+    assert any("price-action trigger technical failure: ValueError: candle timezone mismatch." in reason for reason in result.supporting_reasons)
+    assert all("no_trigger" not in reason for reason in result.supporting_reasons)
+    assert "Put writing supports setup" in result.supporting_reasons
 
 
 def test_observe_wait_prepare_avoid_and_insufficient_states_are_deterministic():

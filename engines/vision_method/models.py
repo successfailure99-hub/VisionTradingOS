@@ -62,7 +62,7 @@ from .pivot_context import VisionPivotFlightPlan
 if TYPE_CHECKING:
     from .opening_assessment import VisionPivotOpeningAssessment
     from .pivot_confluence import VisionPivotConfluenceContext
-    from .price_action_trigger import VisionPriceActionTriggerContext
+    from .price_action_trigger import VisionPriceActionTriggerContext, VisionPriceActionTriggerStageResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -651,6 +651,7 @@ class VisionMethodSnapshot:
     pivot_opening_assessment: "VisionPivotOpeningAssessment | None" = None
     pivot_confluence_context: "VisionPivotConfluenceContext | None" = None
     price_action_trigger_context: "VisionPriceActionTriggerContext | None" = None
+    price_action_trigger_stage_result: "VisionPriceActionTriggerStageResult | None" = None
     entry_location_context: VisionEntryLocationContext = field(default_factory=lambda: VisionEntryLocationContext(
         direction="unknown",
         direction_quality=VisionDirectionQuality.INVALID,
@@ -740,6 +741,18 @@ class VisionMethodSnapshot:
                 raise ValueError("price_action_trigger_context trading date mismatch.")
             if self.price_action_trigger_context.timestamp > self.timestamp:
                 raise ValueError("price_action_trigger_context timestamp cannot be after snapshot timestamp.")
+        if self.price_action_trigger_stage_result is not None:
+            from .price_action_trigger import VisionPriceActionTriggerStageResult
+
+            if not isinstance(self.price_action_trigger_stage_result, VisionPriceActionTriggerStageResult):
+                raise TypeError("price_action_trigger_stage_result must be VisionPriceActionTriggerStageResult or None.")
+            if self.price_action_trigger_stage_result.decision_timestamp > self.timestamp:
+                raise ValueError("price_action_trigger_stage_result timestamp cannot be after snapshot timestamp.")
+            if (
+                self.price_action_trigger_stage_result.trigger_context is not None
+                and self.price_action_trigger_stage_result.trigger_context is not self.price_action_trigger_context
+            ):
+                raise ValueError("price_action_trigger_stage_result trigger context mismatch.")
         object.__setattr__(self, "blocking_reasons", _normalize_text_tuple(self.blocking_reasons, "blocking_reasons"))
         object.__setattr__(self, "supporting_reasons", _normalize_text_tuple(self.supporting_reasons, "supporting_reasons"))
         object.__setattr__(self, "quality", _normalize_text(self.quality, "quality"))

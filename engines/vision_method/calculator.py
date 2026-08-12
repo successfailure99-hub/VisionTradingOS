@@ -28,6 +28,7 @@ from .enums import (
     VisionOpeningLocation,
     VisionOpeningRangeState,
     VisionOptionConfirmation,
+    VisionPriceActionTriggerStageStatus,
     VisionSetupQuality,
     VisionSetupType,
     VisionStructureEventPhase,
@@ -55,7 +56,7 @@ from .models import (
 from .opening_assessment import VisionPivotOpeningAssessment
 from .pivot_confluence import VisionPivotConfluenceContext
 from .pivot_context import VisionPivotFlightPlan
-from .price_action_trigger import VisionPriceActionTriggerContext
+from .price_action_trigger import VisionPriceActionTriggerContext, VisionPriceActionTriggerStageResult
 from .validator import validate_vision_method_snapshot
 
 
@@ -76,6 +77,7 @@ class VisionMethodCalculationRequest:
     pivot_opening_assessment: VisionPivotOpeningAssessment | None = None
     pivot_confluence_context: VisionPivotConfluenceContext | None = None
     price_action_trigger_context: VisionPriceActionTriggerContext | None = None
+    price_action_trigger_stage_result: VisionPriceActionTriggerStageResult | None = None
     assembly_failures: tuple[VisionContextAssemblyFailure, ...] = ()
 
     def __post_init__(self) -> None:
@@ -136,6 +138,16 @@ class VisionMethodCalculationRequest:
                 raise ValueError("price_action_trigger_context trading date mismatch.")
             if self.price_action_trigger_context.timestamp > self.timestamp:
                 raise ValueError("price_action_trigger_context timestamp inconsistency.")
+        if self.price_action_trigger_stage_result is not None:
+            if not isinstance(self.price_action_trigger_stage_result, VisionPriceActionTriggerStageResult):
+                raise TypeError("price_action_trigger_stage_result must be VisionPriceActionTriggerStageResult or None.")
+            if self.price_action_trigger_stage_result.decision_timestamp > self.timestamp:
+                raise ValueError("price_action_trigger_stage_result timestamp inconsistency.")
+            if (
+                self.price_action_trigger_stage_result.trigger_context is not None
+                and self.price_action_trigger_stage_result.trigger_context is not self.price_action_trigger_context
+            ):
+                raise ValueError("price_action_trigger_stage_result trigger context mismatch.")
         object.__setattr__(self, "assembly_failures", _normalize_assembly_failures(self.assembly_failures))
 
 
@@ -178,6 +190,7 @@ def calculate_vision_method_snapshot(
         pivot_opening_assessment=request.pivot_opening_assessment,
         pivot_confluence_context=request.pivot_confluence_context,
         price_action_trigger_context=request.price_action_trigger_context,
+        price_action_trigger_stage_result=request.price_action_trigger_stage_result,
         entry_location_context=entry_location,
         assembly_failures=request.assembly_failures,
     )
@@ -205,6 +218,8 @@ def validate_vision_method_calculation_request(
     if request.pivot_confluence_context is not None and request.pivot_confluence_context.timestamp > request.timestamp:
         raise ValueError("timestamp inconsistency.")
     if request.price_action_trigger_context is not None and request.price_action_trigger_context.timestamp > request.timestamp:
+        raise ValueError("timestamp inconsistency.")
+    if request.price_action_trigger_stage_result is not None and request.price_action_trigger_stage_result.decision_timestamp > request.timestamp:
         raise ValueError("timestamp inconsistency.")
     if request.timestamp.utcoffset() != request.opening_range_context.opening_start_time.utcoffset():
         raise ValueError("timezone mismatch.")
@@ -511,6 +526,11 @@ def _price_action_trigger_allows_action(request: VisionMethodCalculationRequest,
 def _price_action_trigger_gate_reason(request: VisionMethodCalculationRequest, direction: str | None) -> str | None:
     if direction not in {"bullish", "bearish"}:
         return "direction is unavailable"
+    stage = request.price_action_trigger_stage_result
+    if stage is not None and stage.status is VisionPriceActionTriggerStageStatus.TRIGGER_ASSEMBLY_FAILED:
+        return f"price-action trigger technical failure: {stage.failure_type}: {stage.failure_reason}"
+    if stage is not None and stage.status is VisionPriceActionTriggerStageStatus.INSUFFICIENT_DATA:
+        return f"price-action trigger insufficient data: {stage.failure_reason or 'required trigger input unavailable'}"
     context = request.price_action_trigger_context
     if context is None:
         return "valid 5-minute price-action trigger is unavailable"

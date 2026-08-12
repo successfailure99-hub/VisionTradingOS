@@ -32,6 +32,7 @@ from .enums import (
     VisionPivotZoneQuality,
     VisionPivotZoneStatus,
     VisionPivotZoneType,
+    VisionPriceActionTriggerStageStatus,
     VisionReversalState,
     VisionStructureEventPhase,
     VisionTriggerAcceptanceState,
@@ -214,6 +215,109 @@ class VisionPriceActionTriggerContext:
         _require_enum(self.quality, VisionLevelQuality, "quality")
         _require_enum(self.status, VisionTriggerInteractionState, "status")
         object.__setattr__(self, "warnings", _normalize_unique_text_tuple(self.warnings, "warnings"))
+
+
+@dataclass(frozen=True, slots=True)
+class VisionPriceActionTriggerStageResult:
+    status: VisionPriceActionTriggerStageStatus
+    trigger_context: VisionPriceActionTriggerContext | None
+    failure_type: str | None
+    failure_reason: str | None
+    source_candle_reference: str
+    trigger_zone_reference: str
+    decision_timestamp: datetime
+    snapshot_generation: str
+    producer: str = "SymbolRuntime._current_price_action_trigger_context"
+    consumer: str = "VisionMethodCalculationRequest"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, VisionPriceActionTriggerStageStatus):
+            raise TypeError("status must be VisionPriceActionTriggerStageStatus.")
+        if self.trigger_context is not None and not isinstance(self.trigger_context, VisionPriceActionTriggerContext):
+            raise TypeError("trigger_context must be VisionPriceActionTriggerContext or None.")
+        if self.failure_type is not None:
+            object.__setattr__(self, "failure_type", _normalize_text(self.failure_type, "failure_type"))
+        if self.failure_reason is not None:
+            object.__setattr__(self, "failure_reason", _normalize_text(self.failure_reason, "failure_reason"))
+        object.__setattr__(self, "source_candle_reference", _normalize_text(self.source_candle_reference, "source_candle_reference"))
+        object.__setattr__(self, "trigger_zone_reference", _normalize_text(self.trigger_zone_reference, "trigger_zone_reference"))
+        _validate_aware(self.decision_timestamp, "decision_timestamp")
+        object.__setattr__(self, "snapshot_generation", _normalize_text(self.snapshot_generation, "snapshot_generation"))
+        object.__setattr__(self, "producer", _normalize_text(self.producer, "producer"))
+        object.__setattr__(self, "consumer", _normalize_text(self.consumer, "consumer"))
+        if self.status is VisionPriceActionTriggerStageStatus.TRIGGER_ASSEMBLY_FAILED:
+            if not self.failure_type or not self.failure_reason:
+                raise ValueError("technical trigger failure requires failure_type and failure_reason.")
+            return
+        if self.failure_type is not None:
+            raise ValueError("normal trigger-stage result cannot contain exception diagnostics.")
+
+
+def price_action_trigger_stage_result_from_context(
+    context: VisionPriceActionTriggerContext,
+    *,
+    snapshot_generation: str,
+) -> VisionPriceActionTriggerStageResult:
+    trigger = context.trigger
+    if trigger.trigger_type is VisionTriggerType.INDECISION:
+        status = VisionPriceActionTriggerStageStatus.EVALUATED_INDECISION
+    elif trigger.trigger_type is VisionTriggerType.NO_TRIGGER:
+        if trigger.interaction_state is VisionTriggerInteractionState.NO_INTERACTION:
+            status = VisionPriceActionTriggerStageStatus.EVALUATED_NO_INTERACTION
+        else:
+            status = VisionPriceActionTriggerStageStatus.EVALUATED_NO_TRIGGER
+    else:
+        status = VisionPriceActionTriggerStageStatus.EVALUATED_TRIGGER
+    return VisionPriceActionTriggerStageResult(
+        status=status,
+        trigger_context=context,
+        failure_type=None,
+        failure_reason=None,
+        source_candle_reference=trigger.source_candle_reference,
+        trigger_zone_reference=trigger.zone_reference,
+        decision_timestamp=context.timestamp,
+        snapshot_generation=snapshot_generation,
+    )
+
+
+def insufficient_price_action_trigger_stage_result(
+    *,
+    reason: str,
+    decision_timestamp: datetime,
+    source_candle_reference: str = "none",
+    trigger_zone_reference: str = "none",
+    snapshot_generation: str,
+) -> VisionPriceActionTriggerStageResult:
+    return VisionPriceActionTriggerStageResult(
+        status=VisionPriceActionTriggerStageStatus.INSUFFICIENT_DATA,
+        trigger_context=None,
+        failure_type=None,
+        failure_reason=reason,
+        source_candle_reference=source_candle_reference,
+        trigger_zone_reference=trigger_zone_reference,
+        decision_timestamp=decision_timestamp,
+        snapshot_generation=snapshot_generation,
+    )
+
+
+def failed_price_action_trigger_stage_result(
+    *,
+    exc: Exception,
+    decision_timestamp: datetime,
+    source_candle_reference: str = "none",
+    trigger_zone_reference: str = "none",
+    snapshot_generation: str,
+) -> VisionPriceActionTriggerStageResult:
+    return VisionPriceActionTriggerStageResult(
+        status=VisionPriceActionTriggerStageStatus.TRIGGER_ASSEMBLY_FAILED,
+        trigger_context=None,
+        failure_type=type(exc).__name__,
+        failure_reason=str(exc),
+        source_candle_reference=source_candle_reference,
+        trigger_zone_reference=trigger_zone_reference,
+        decision_timestamp=decision_timestamp,
+        snapshot_generation=snapshot_generation,
+    )
 
 
 @dataclass(frozen=True, slots=True)

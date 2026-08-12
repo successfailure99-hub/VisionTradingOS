@@ -123,7 +123,7 @@ def test_stale_prior_session_vision_reference_is_rejected(tmp_path):
         snapshot_reference="vision_method:NIFTY:5m:2026-07-29T10:30:00+05:30:long_eligible:high",
     )
     aug_7 = NOW.replace(month=8, day=7)
-    aug_7_snapshot = replace(snapshot, timestamp=aug_7, price_action_trigger_context=None)
+    aug_7_snapshot = replace(snapshot, timestamp=aug_7, price_action_trigger_context=None, price_action_trigger_stage_result=None)
     aug_7_report = replace(report, timestamp=aug_7)
     candle = _decision_candle(timestamp=aug_7)
 
@@ -165,7 +165,7 @@ def test_session_rollover_resets_forensic_counters(tmp_path):
     )
 
     next_day = NOW + timedelta(days=1)
-    second = replace(first, timestamp=next_day, price_action_trigger_context=None)
+    second = replace(first, timestamp=next_day, price_action_trigger_context=None, price_action_trigger_stage_result=None)
     second_report = replace(first_report, timestamp=next_day)
     second_candidate = replace(
         first_candidate,

@@ -115,6 +115,7 @@ from engines.vision_method import (
     VisionLevelContextRequest,
     VisionPriceActionTriggerContext,
     VisionPriceActionTriggerRequest,
+    VisionPriceActionTriggerStageResult,
     VisionPivotConfluenceContext,
     VisionPivotConfluenceRequest,
     VisionPivotFlightPlan,
@@ -126,6 +127,9 @@ from engines.vision_method import (
     build_pivot_confluence_context,
     build_pivot_flight_plan,
     build_price_action_trigger_context,
+    failed_price_action_trigger_stage_result,
+    insufficient_price_action_trigger_stage_result,
+    price_action_trigger_stage_result_from_context,
 )
 from engines.vwap.vwap_engine import VWAPEngine
 
@@ -423,6 +427,7 @@ class SymbolRuntime:
         self._pivot_confluence_identity: tuple | None = None
         self._price_action_trigger_context: VisionPriceActionTriggerContext | None = None
         self._price_action_trigger_identity: tuple | None = None
+        self._price_action_trigger_stage_result: VisionPriceActionTriggerStageResult | None = None
         self._session_opening_price: float | None = None
         self._session_opening_timestamp: datetime | None = None
         self._session_opening_trading_date: date | None = None
@@ -1168,6 +1173,7 @@ class SymbolRuntime:
         self._pivot_confluence_identity = None
         self._price_action_trigger_context = None
         self._price_action_trigger_identity = None
+        self._price_action_trigger_stage_result = None
         self._session_opening_price = None
         self._session_opening_timestamp = None
         self._session_opening_trading_date = None
@@ -1279,6 +1285,7 @@ class SymbolRuntime:
             pivot_opening_assessment=pivot_opening_assessment,
             pivot_confluence_context=pivot_confluence_context,
             price_action_trigger_context=price_action_trigger_context,
+            price_action_trigger_stage_result=self._price_action_trigger_stage_result,
             vision_trade_candidate=self._vision_trade_candidate,
             option_trade_candidate=self._option_trade_candidate,
             option_paper_risk=self._option_paper_risk,
@@ -1366,6 +1373,7 @@ class SymbolRuntime:
             self._pivot_confluence_identity = None
             self._price_action_trigger_context = None
             self._price_action_trigger_identity = None
+            self._price_action_trigger_stage_result = None
         if self._session_opening_price is not None:
             return
         if session.session_open is not None and tick.timestamp.astimezone(IST) < session.session_open:
@@ -1403,6 +1411,7 @@ class SymbolRuntime:
         self._pivot_confluence_identity = None
         self._price_action_trigger_context = None
         self._price_action_trigger_identity = None
+        self._price_action_trigger_stage_result = None
 
     def _current_pivot_opening_assessment(
         self,
@@ -1489,6 +1498,7 @@ class SymbolRuntime:
             self._pivot_confluence_identity = None
             self._price_action_trigger_context = None
             self._price_action_trigger_identity = None
+            self._price_action_trigger_stage_result = None
             return None
         previous_day = next(
             (item for item in self._daily_ohlc_history if item.trading_date == runtime_session.previous_completed_trading_date),
@@ -1499,6 +1509,7 @@ class SymbolRuntime:
             self._pivot_confluence_identity = None
             self._price_action_trigger_context = None
             self._price_action_trigger_identity = None
+            self._price_action_trigger_stage_result = None
             return None
         current_price = float(latest_candle.close)
         timestamp = market_timestamp or latest_candle.end_time
@@ -1560,6 +1571,7 @@ class SymbolRuntime:
             self._pivot_confluence_identity = None
             self._price_action_trigger_context = None
             self._price_action_trigger_identity = None
+            self._price_action_trigger_stage_result = None
         return self._pivot_confluence_context
 
     def _current_price_action_trigger_context(
@@ -1570,19 +1582,42 @@ class SymbolRuntime:
         opening_assessment: VisionPivotOpeningAssessment | None,
     ) -> VisionPriceActionTriggerContext | None:
         trading_date = runtime_session.trading_date
-        if trading_date is None or confluence_context is None:
+        timestamp = market_timestamp or self._canonical_market_timestamp
+        trigger_timestamp = _trigger_stage_timestamp(timestamp)
+        generation = _trigger_snapshot_generation(self._instrument, self._vision_decision_timeframe, trigger_timestamp)
+        if trading_date is None:
             self._price_action_trigger_context = None
             self._price_action_trigger_identity = None
+            if trigger_timestamp is not None:
+                self._price_action_trigger_stage_result = insufficient_price_action_trigger_stage_result(
+                    reason="Runtime trading date unavailable.",
+                    decision_timestamp=trigger_timestamp,
+                    snapshot_generation=generation,
+                )
+            else:
+                self._price_action_trigger_stage_result = None
             return None
-        timestamp = market_timestamp or self._canonical_market_timestamp
-        if timestamp is None:
+        if timestamp is None or trigger_timestamp is None:
+            self._price_action_trigger_stage_result = None
             return None
-        source_snapshot = self._vision_method_snapshot if self._vision_method_snapshot is not None and self._vision_method_snapshot.timestamp.date() == trading_date else None
         history = tuple(
             candle
             for candle in self.get_candle_history(self._vision_decision_timeframe)
             if candle.start_time.date() == trading_date and candle.end_time <= timestamp
         )
+        source_candle = history[-1] if history else None
+        source_reference = _trigger_candle_reference(source_candle)
+        if confluence_context is None:
+            self._price_action_trigger_context = None
+            self._price_action_trigger_identity = None
+            self._price_action_trigger_stage_result = insufficient_price_action_trigger_stage_result(
+                reason="Pivot confluence context unavailable.",
+                decision_timestamp=trigger_timestamp,
+                source_candle_reference=source_reference,
+                snapshot_generation=generation,
+            )
+            return None
+        source_snapshot = self._vision_method_snapshot if self._vision_method_snapshot is not None and self._vision_method_snapshot.timestamp.date() == trading_date else None
         identity = (
             trading_date,
             timestamp,
@@ -1597,7 +1632,7 @@ class SymbolRuntime:
         if self._price_action_trigger_context is not None and self._price_action_trigger_identity == identity:
             return self._price_action_trigger_context
         try:
-            self._price_action_trigger_context = build_price_action_trigger_context(
+            context = build_price_action_trigger_context(
                 VisionPriceActionTriggerRequest(
                     instrument=self._instrument,
                     timeframe=self._vision_decision_timeframe,
@@ -1613,11 +1648,24 @@ class SymbolRuntime:
                     previous_context=self._price_action_trigger_context,
                 )
             )
+            self._price_action_trigger_context = context
+            self._price_action_trigger_stage_result = price_action_trigger_stage_result_from_context(
+                context,
+                snapshot_generation=generation,
+            )
             self._price_action_trigger_identity = identity
-        except (TypeError, ValueError):
-            self._price_action_trigger_context = None
+            return context
+        except (TypeError, ValueError) as exc:
+            zone_reference = _trigger_zone_reference(confluence_context)
+            self._price_action_trigger_stage_result = failed_price_action_trigger_stage_result(
+                exc=exc,
+                decision_timestamp=trigger_timestamp,
+                source_candle_reference=source_reference,
+                trigger_zone_reference=zone_reference,
+                snapshot_generation=generation,
+            )
             self._price_action_trigger_identity = None
-        return self._price_action_trigger_context
+            return None
 
     def _process_paper_tick(self, tick: Tick) -> None:
         if self._option_paper_position is not None and self._option_paper_position.status is OptionPaperPositionStatus.OPEN:
@@ -3813,6 +3861,34 @@ def _runtime_session_id(session: RuntimeTradingSession) -> str:
     trading_date = session.trading_date.isoformat() if session.trading_date is not None else "unknown"
     timestamp = session.market_timestamp.isoformat() if session.market_timestamp is not None else "unknown"
     return ":".join((session.instrument.value, trading_date, timestamp))
+
+
+def _trigger_snapshot_generation(instrument: RuntimeInstrument, timeframe: TimeFrame, timestamp: datetime | None) -> str:
+    timestamp_text = timestamp.isoformat() if timestamp is not None else "unavailable"
+    return f"{instrument.value}:{timeframe.value}:{timestamp_text}"
+
+
+def _trigger_stage_timestamp(timestamp: datetime | None) -> datetime | None:
+    if timestamp is None:
+        return None
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        return timestamp.replace(tzinfo=IST)
+    return timestamp
+
+
+def _trigger_candle_reference(candle: Candle | None) -> str:
+    if candle is None:
+        return "none"
+    return f"candle:{candle.symbol}:{candle.timeframe}:{candle.start_time.isoformat()}:{candle.end_time.isoformat()}"
+
+
+def _trigger_zone_reference(context: VisionPivotConfluenceContext | None) -> str:
+    if context is None or not context.hot_zones:
+        return "none"
+    zone = context.hot_zones[0]
+    members = ",".join(member.kind.value for member in zone.member_references)
+    return f"hot_zone:{zone.trading_date.isoformat()}:{zone.zone_low:.4f}:{zone.zone_high:.4f}:{zone.directional_role.value}:{members}"
+
 
 def _paper_trade_state(snapshot) -> str:
     if snapshot is None:
