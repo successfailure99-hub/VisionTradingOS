@@ -7,7 +7,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import QApplication, QScrollArea
 
 from application import ApplicationBootstrap
@@ -138,6 +138,8 @@ def test_reusable_widgets_have_readable_minimum_sizes():
     card = MetricCard("Runtime Status")
     assert card.minimumHeight() >= 72
     assert card.value_label.minimumHeight() >= 24
+    assert card.value_label.wordWrap()
+    assert card.value_label.textInteractionFlags() & Qt.TextSelectableByMouse
     badge = StatusBadge("Ready")
     assert badge.minimumHeight() >= 28
     assert badge.minimumSizeHint().height() >= 24
@@ -154,6 +156,7 @@ def test_field_grid_wrapped_value_can_expand_without_fixed_maximum_height():
     assert value.sizeHint().height() > value.minimumHeight()
     assert grid.sizeHint().height() > value.minimumHeight()
     assert grid.maximumHeight() > 1_000_000
+    assert value.textInteractionFlags() & Qt.TextSelectableByMouse
 
 
 def test_long_ai_explanation_remains_accessible_inside_scroll_area():
@@ -179,9 +182,36 @@ def test_long_ai_explanation_remains_accessible_inside_scroll_area():
     app().processEvents()
     scroll = sections.widget(3)
     assert isinstance(scroll, QScrollArea)
+    assert scroll.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
     assert panels["ai"]._labels["Explanation"].text() == explanation
     assert panels["ai"]._labels["Explanation"].sizeHint().height() > panels["ai"]._labels["Explanation"].minimumHeight()
     assert scroll.verticalScrollBar().maximum() > 0
+
+
+def test_ai_conflict_is_wrapped_selectable_text_not_status_badge():
+    app()
+    window = three_instrument_window()
+    panels = window._instrument_panels["NIFTY"]
+    conflict = long_wrapped_text()
+    panels["ai"].render(
+        DashboardAIView(
+            symbol="NIFTY",
+            market_summary="Summary",
+            confidence="Neutral",
+            agreement="Neutral",
+            conflict=conflict,
+            trading_suitability="Neutral",
+            explanation="-",
+            missing_information=(),
+            snapshot_generation_id="NIFTY:5m:2026-08-12 09:30:00 IST",
+        )
+    )
+    label = panels["ai"]._labels["Conflict"]
+    assert not isinstance(label, StatusBadge)
+    assert label.text() == conflict
+    assert label.wordWrap()
+    assert label.textInteractionFlags() & Qt.TextSelectableByMouse
+    assert panels["ai"]._labels["Snapshot Generation"].text() == "NIFTY:5m:2026-08-12 09:30:00 IST"
 
 
 def test_long_strategy_block_reason_remains_accessible_inside_scroll_area():
@@ -220,6 +250,7 @@ def test_long_strategy_block_reason_remains_accessible_inside_scroll_area():
     app().processEvents()
     scroll = sections.widget(4)
     assert isinstance(scroll, QScrollArea)
+    assert scroll.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
     assert panels["strategy"]._labels["Block"].text() == block_reason
     assert panels["strategy"]._labels["Block"].sizeHint().height() > panels["strategy"]._labels["Block"].minimumHeight()
     assert scroll.verticalScrollBar().maximum() > 0

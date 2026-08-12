@@ -8,6 +8,13 @@ from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QSizePolicy, QVBoxLay
 from dashboard import formatters
 
 
+def configure_readable_label(label: QLabel) -> QLabel:
+    label.setWordWrap(True)
+    label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+    return label
+
+
 class StatusBadge(QLabel):
     def __init__(self, text: str = formatters.MISSING, parent=None):
         super().__init__(text, parent)
@@ -36,11 +43,11 @@ class MetricCard(QFrame):
         self._title = QLabel(title)
         self._title.setProperty("role", "metric-title")
         self._title.setMinimumHeight(18)
-        self._title.setWordWrap(True)
+        configure_readable_label(self._title)
         self._value = QLabel(value)
         self._value.setProperty("role", "metric-value")
         self._value.setMinimumHeight(26)
-        self._value.setWordWrap(True)
+        configure_readable_label(self._value)
         layout.addWidget(self._title)
         layout.addWidget(self._value)
         self.setMinimumHeight(76)
@@ -79,8 +86,7 @@ class FieldGrid(QWidget):
             value.setProperty("role", "field-value")
             value.setMinimumHeight(24)
             value.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            value.setWordWrap(True)
-            value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            configure_readable_label(value)
             layout.addWidget(name, row, 0)
             layout.addWidget(value, row, 1)
             layout.setRowMinimumHeight(row, 28)

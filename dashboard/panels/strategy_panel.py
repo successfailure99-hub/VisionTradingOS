@@ -21,6 +21,7 @@ class StrategyPanel(QGroupBox):
         self._fields = (
             "Candidate State", "Candidate Direction", "Candidate Quality", "Candidate Validation",
             "Candidate Reference", "Candidate Reason", "Candidate Source",
+            "Snapshot Generation", "Snapshot Created At", "Runtime Market Timestamp", "Vision Decision Timestamp",
             "Decision", "Direction", "Setup", "Entry", "Stop",
             "Target", "Block", "Risk", "Approved Qty",
             "Risk Amount", "Reward/Risk", "Entry Price", "Stop Price",
@@ -45,6 +46,10 @@ class StrategyPanel(QGroupBox):
             "Candidate Reference": view.candidate_reference,
             "Candidate Reason": view.candidate_reason,
             "Candidate Source": view.candidate_source,
+            "Snapshot Generation": view.snapshot_generation_id,
+            "Snapshot Created At": formatters.timestamp(view.snapshot_created_at),
+            "Runtime Market Timestamp": formatters.timestamp(view.runtime_market_timestamp),
+            "Vision Decision Timestamp": formatters.timestamp(view.vision_decision_timestamp),
             "Decision": view.decision,
             "Direction": view.direction,
             "Setup": view.setup_quality,

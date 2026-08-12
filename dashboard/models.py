@@ -605,6 +605,10 @@ class DashboardAIView:
     trading_suitability: str
     explanation: str
     missing_information: tuple[str, ...]
+    snapshot_generation_id: str = "-"
+    snapshot_created_at: datetime | None = None
+    runtime_market_timestamp: datetime | None = None
+    vision_decision_timestamp: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -639,6 +643,10 @@ class DashboardStrategyView:
     candidate_source: str = "VISION_METHOD"
     strategy_source: str = "-"
     recovered_position_note: str = "-"
+    snapshot_generation_id: str = "-"
+    snapshot_created_at: datetime | None = None
+    runtime_market_timestamp: datetime | None = None
+    vision_decision_timestamp: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

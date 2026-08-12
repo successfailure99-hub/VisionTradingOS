@@ -60,6 +60,56 @@ def test_window_title_timer_default_and_tabs_match_runtime_snapshots():
     assert window.styleSheet()
 
 
+def test_tab_switch_uses_cached_dashboard_view_without_runtime_recalculation():
+    lifecycle = ApplicationBootstrap().create_application()
+    window = VisionMainWindow(lifecycle)
+    window.refresh()
+
+    def fail_refresh():
+        raise AssertionError("tab switching must not refresh Vision Method runtime")
+
+    window._vision_method_bridge.refresh = fail_refresh
+    panels = window._instrument_panels["NIFTY"]
+    sections = panels["sections"]
+    market_index = next(index for index in range(sections.count()) if sections.tabText(index) == "Market")
+    strategy_index = next(index for index in range(sections.count()) if sections.tabText(index) == "Strategy")
+    sections.setCurrentIndex(market_index)
+    app().processEvents()
+    sections.setCurrentIndex(strategy_index)
+    app().processEvents()
+
+    diagnostics = window.diagnostics()
+    assert diagnostics["last_tab_source"].startswith("Trading/NIFTY/")
+    assert diagnostics["last_tab_target"] == "Trading/NIFTY/Strategy"
+    assert diagnostics["last_panel_key"] == "NIFTY/Strategy"
+    assert diagnostics["last_disk_io_detected"] is False
+    assert diagnostics["last_network_io_detected"] is False
+    assert diagnostics["last_calculator_invoked"] is False
+    assert "last_panel_update_ms" in diagnostics
+
+
+def test_repeated_warm_tab_switch_records_cache_hit_without_widget_rebuild():
+    lifecycle = ApplicationBootstrap().create_application()
+    window = VisionMainWindow(lifecycle)
+    window.refresh()
+    panels = window._instrument_panels["NIFTY"]
+    sections = panels["sections"]
+    strategy_index = next(index for index in range(sections.count()) if sections.tabText(index) == "Strategy")
+    ai_index = next(index for index in range(sections.count()) if sections.tabText(index) == "AI")
+
+    sections.setCurrentIndex(strategy_index)
+    app().processEvents()
+    sections.setCurrentIndex(ai_index)
+    app().processEvents()
+    sections.setCurrentIndex(strategy_index)
+    app().processEvents()
+
+    diagnostics = window.diagnostics()
+    assert diagnostics["last_tab_target"] == "Trading/NIFTY/Strategy"
+    assert diagnostics["last_panel_key"] == "NIFTY/Strategy"
+    assert diagnostics["last_widget_rebuilt"] is False
+
+
 def test_header_runtime_health_uses_canonical_runtime_view_not_stale_supervisor_aggregate():
     lifecycle = ApplicationBootstrap().bootstrap()
     window = VisionMainWindow(lifecycle)

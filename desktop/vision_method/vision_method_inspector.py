@@ -209,6 +209,8 @@ def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:
         "Instrument": snapshot.instrument.value,
         "Timeframe": snapshot.timeframe.value,
         "Timestamp": formatters.timestamp(snapshot.timestamp),
+        "Snapshot Generation": f"{snapshot.instrument.value}:{snapshot.timeframe.value}:{formatters.timestamp(snapshot.timestamp)}",
+        "Vision Decision Timestamp": formatters.timestamp(snapshot.timestamp),
         "Candidate State": snapshot.candidate_state.value,
         "Quality": snapshot.quality,
         "CPR Position": level.cpr_context.relation.value,
@@ -330,6 +332,12 @@ def _status_values(status: VisionMethodLiveStatus) -> dict[str, str]:
         "Instrument": status.instrument or "unavailable",
         "Timeframe": status.timeframe or "unavailable",
         "Timestamp": status.market_timestamp or "unavailable",
+        "Snapshot Generation": (
+            f"{status.instrument}:{status.timeframe}:{status.market_timestamp}"
+            if status.instrument and status.timeframe and status.market_timestamp
+            else "unavailable"
+        ),
+        "Vision Decision Timestamp": status.market_timestamp or "unavailable",
         "Candidate State": status.candidate_state,
         "Quality": status.quality,
         "Validation Result": status.validation_result,
@@ -457,6 +465,8 @@ def _diagnostic_values(status: VisionMethodLiveStatus) -> dict[str, str]:
             "Instrument",
             "Timeframe",
             "Timestamp",
+            "Snapshot Generation",
+            "Vision Decision Timestamp",
             "Candidate State",
             "Quality",
             "Validation Result",
@@ -806,6 +816,8 @@ _SECTION_FIELDS = (
             "Instrument",
             "Timeframe",
             "Timestamp",
+            "Snapshot Generation",
+            "Vision Decision Timestamp",
             "Candidate State",
             "Quality",
             "Validation Result",

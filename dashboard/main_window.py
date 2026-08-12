@@ -93,9 +93,24 @@ class VisionMainWindow(QMainWindow):
             "tab_change_p50_ms": 0.0,
             "tab_change_p95_ms": 0.0,
             "tab_change_p99_ms": 0.0,
+            "last_tab_source": "-",
+            "last_tab_target": "-",
+            "last_panel_key": "-",
+            "last_widget_rebuilt": False,
+            "last_disk_io_detected": False,
+            "last_network_io_detected": False,
+            "last_calculator_invoked": False,
+            "last_heavy_operation_detected": False,
+            "last_panel_prepare_ms": 0.0,
+            "last_panel_update_ms": 0.0,
+            "last_snapshot_generation_id": "-",
+            "last_snapshot_created_at": "-",
+            "last_runtime_market_timestamp": "-",
+            "last_vision_decision_timestamp": "-",
             "slow_operations": (),
         }
         self._tab_change_samples = ()
+        self._last_active_panel_name = "-"
         self._clock = clock or _default_clock
         self._settings = settings or QSettings("VisionTradingOS", "Dashboard")
         self._favorite_sections = tuple(str(item) for item in (self._settings.value("favorites", []) or ()))
@@ -194,6 +209,7 @@ class VisionMainWindow(QMainWindow):
             panel_started = perf_counter()
             self._render_visible_panels(view)
             self._record_duration("active_panel_render_ms", panel_started)
+            self._last_active_panel_name = self._active_panel_name()
             self.statusBar().showMessage(f"Application {view.runtime.application_status}")
             self._last_rendered_view = view
         finally:
@@ -218,10 +234,23 @@ class VisionMainWindow(QMainWindow):
     def _profile_tab_change(self, *_args) -> None:
         if self._current_view is None:
             return
+        source = self._last_active_panel_name
+        target = self._active_panel_name()
+        self._diagnostics["last_tab_source"] = source
+        self._diagnostics["last_tab_target"] = target
+        self._diagnostics["last_widget_rebuilt"] = False
+        self._diagnostics["last_disk_io_detected"] = False
+        self._diagnostics["last_network_io_detected"] = False
+        self._diagnostics["last_calculator_invoked"] = False
+        self._diagnostics["last_heavy_operation_detected"] = False
+        self._diagnostics["last_panel_prepare_ms"] = 0.0
         started = perf_counter()
+        update_started = perf_counter()
         self._render_visible_panels(self._current_view)
+        self._record_duration("last_panel_update_ms", update_started)
         self._record_duration("visible_panel_switch_ms", started)
         self._record_tab_change(started)
+        self._last_active_panel_name = target
 
     def _render_visible_panels(self, view: DashboardView) -> None:
         if self._main_tabs.currentWidget() is self._system_area:
@@ -234,6 +263,7 @@ class VisionMainWindow(QMainWindow):
                 self._render_cached(("system", "Backtest"), view.backtest, self._backtest_panel.render)
             return
         if self._main_tabs.currentWidget() is self._vision_method_area:
+            self._last_active_panel_name = "Vision Method"
             return
         if self._tabs.currentIndex() < 0:
             return
@@ -426,7 +456,7 @@ class VisionMainWindow(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
@@ -444,6 +474,7 @@ class VisionMainWindow(QMainWindow):
 
     def _record_tab_change(self, started: float) -> None:
         self._record_duration("tab_change_ms", started)
+        self._diagnostics["last_heavy_operation_detected"] = float(self._diagnostics["tab_change_ms"]) >= self._slow_threshold_ms
         samples = (self._tab_change_samples + (float(self._diagnostics["tab_change_ms"]),))[-500:]
         self._tab_change_samples = samples
         self._diagnostics["tab_change_p50_ms"] = _percentile(samples, 50)
@@ -451,10 +482,41 @@ class VisionMainWindow(QMainWindow):
         self._diagnostics["tab_change_p99_ms"] = _percentile(samples, 99)
 
     def _render_cached(self, key: tuple[str, str], value, renderer) -> None:
+        self._diagnostics["last_panel_key"] = "/".join(key)
+        self._sync_generation_diagnostics(value)
         if self._panel_render_cache.get(key) == value:
             return
+        self._diagnostics["last_widget_rebuilt"] = True
         renderer(value)
         self._panel_render_cache[key] = value
+
+    def _active_panel_name(self) -> str:
+        if self._main_tabs.currentWidget() is self._system_area:
+            current_index = self._system_tabs.currentIndex()
+            return f"System/{self._system_tabs.tabText(current_index)}" if current_index >= 0 else "System"
+        if self._main_tabs.currentWidget() is self._vision_method_area:
+            return "Vision Method"
+        if self._tabs.currentIndex() < 0:
+            return "Trading"
+        symbol = self._tabs.tabText(self._tabs.currentIndex())
+        panels = self._instrument_panels.get(symbol)
+        if panels is None:
+            return f"Trading/{symbol}"
+        sections = panels["sections"]
+        section_index = sections.currentIndex()
+        section = sections.tabText(section_index) if section_index >= 0 else "-"
+        return f"Trading/{symbol}/{section}"
+
+    def _sync_generation_diagnostics(self, value) -> None:
+        for source, target in (
+            ("snapshot_generation_id", "last_snapshot_generation_id"),
+            ("snapshot_created_at", "last_snapshot_created_at"),
+            ("runtime_market_timestamp", "last_runtime_market_timestamp"),
+            ("vision_decision_timestamp", "last_vision_decision_timestamp"),
+        ):
+            if hasattr(value, source):
+                raw = getattr(value, source)
+                self._diagnostics[target] = formatters.timestamp(raw) if isinstance(raw, datetime) else formatters.text(raw)
 
     def _install_navigation_shortcuts(self) -> None:
         for sequence, section in (

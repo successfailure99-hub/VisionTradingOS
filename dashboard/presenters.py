@@ -45,6 +45,29 @@ MARKET_OPEN_TIME = time(9, 15)
 OPTION_CHAIN_STALE_SECONDS = 60
 
 
+def _snapshot_generation_id(runtime_snapshot: RuntimeSnapshot) -> str:
+    created_at = getattr(runtime_snapshot, "snapshot_created_at", None) or getattr(runtime_snapshot, "updated_at", None)
+    timestamp = formatters.timestamp(created_at) if created_at is not None else "-"
+    return f"{_enum_text(runtime_snapshot.symbol)}:{runtime_snapshot.timeframe}:{timestamp}"
+
+
+def _runtime_market_timestamp(runtime_snapshot: RuntimeSnapshot) -> datetime | None:
+    return (
+        getattr(runtime_snapshot, "latest_tick_at", None)
+        or getattr(runtime_snapshot, "latest_closed_candle_at", None)
+        or getattr(runtime_snapshot, "latest_analysis_at", None)
+        or getattr(runtime_snapshot, "updated_at", None)
+    )
+
+
+def _vision_decision_timestamp(runtime_snapshot: RuntimeSnapshot) -> datetime | None:
+    vision_snapshot = getattr(runtime_snapshot, "vision_method_snapshot", None)
+    if vision_snapshot is not None:
+        return getattr(vision_snapshot, "timestamp", None)
+    candidate = getattr(runtime_snapshot, "vision_trade_candidate", None)
+    return getattr(candidate, "timestamp", None)
+
+
 def build_dashboard_view(
     lifecycle_snapshot: LifecycleSnapshot,
     live_market_data_snapshot: LiveMarketDataRuntimeSnapshot | None = None,
@@ -1043,6 +1066,10 @@ def build_option_chain_view(
 
 def build_ai_view(runtime_snapshot: RuntimeSnapshot) -> DashboardAIView:
     candidate = getattr(runtime_snapshot, "vision_trade_candidate", None)
+    generation_id = _snapshot_generation_id(runtime_snapshot)
+    snapshot_created_at = getattr(runtime_snapshot, "snapshot_created_at", None) or getattr(runtime_snapshot, "updated_at", None)
+    runtime_market_timestamp = _runtime_market_timestamp(runtime_snapshot)
+    vision_decision_timestamp = _vision_decision_timestamp(runtime_snapshot)
     if candidate is not None:
         audit = getattr(runtime_snapshot, "decision_audit", None)
         return DashboardAIView(
@@ -1054,6 +1081,10 @@ def build_ai_view(runtime_snapshot: RuntimeSnapshot) -> DashboardAIView:
             trading_suitability=_enum_text(candidate.candidate_state),
             explanation=getattr(runtime_snapshot, "vision_ai_explanation", None) or getattr(candidate, "reason", MISSING),
             missing_information=(getattr(audit, "reason", MISSING),) if getattr(audit, "rejected", False) else (),
+            snapshot_generation_id=generation_id,
+            snapshot_created_at=snapshot_created_at,
+            runtime_market_timestamp=runtime_market_timestamp,
+            vision_decision_timestamp=vision_decision_timestamp,
         )
     ai = runtime_snapshot.ai_reasoning_v2 or runtime_snapshot.ai_reasoning
     return DashboardAIView(
@@ -1065,6 +1096,10 @@ def build_ai_view(runtime_snapshot: RuntimeSnapshot) -> DashboardAIView:
         trading_suitability=_ai_suitability(ai),
         explanation=_ai_explanation(ai),
         missing_information=_ai_missing_information(ai),
+        snapshot_generation_id=generation_id,
+        snapshot_created_at=snapshot_created_at,
+        runtime_market_timestamp=runtime_market_timestamp,
+        vision_decision_timestamp=vision_decision_timestamp,
     )
 
 
@@ -1213,6 +1248,10 @@ def build_strategy_view(runtime_snapshot: RuntimeSnapshot) -> DashboardStrategyV
         candidate_source="VISION_METHOD" if candidate is not None or canonical_position is not None else "-",
         strategy_source=getattr(strategy, "trade_source", None) or ("LEGACY_DIAGNOSTIC" if runtime_snapshot.strategy is not None else "-"),
         recovered_position_note=recovered_note,
+        snapshot_generation_id=_snapshot_generation_id(runtime_snapshot),
+        snapshot_created_at=getattr(runtime_snapshot, "snapshot_created_at", None) or getattr(runtime_snapshot, "updated_at", None),
+        runtime_market_timestamp=_runtime_market_timestamp(runtime_snapshot),
+        vision_decision_timestamp=_vision_decision_timestamp(runtime_snapshot),
     )
 
 
