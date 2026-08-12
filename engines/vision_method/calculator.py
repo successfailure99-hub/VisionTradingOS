@@ -29,6 +29,7 @@ from .enums import (
     VisionOpeningRangeState,
     VisionOptionConfirmation,
     VisionPriceActionTriggerStageStatus,
+    VisionSetupDirection,
     VisionSetupQuality,
     VisionSetupType,
     VisionStructureEventPhase,
@@ -805,12 +806,9 @@ def _assembly_failure_blocks(failure: VisionContextAssemblyFailure) -> bool:
 
 
 def _setup_direction(setup: VisionSetupQualificationContext) -> str | None:
-    text = " ".join(setup.supporting_reasons).casefold()
-    bullish = any(token in text for token in ("bullish", "above cpr", "above h3", "cross above"))
-    bearish = any(token in text for token in ("bearish", "below cpr", "below l3", "cross below"))
-    if bullish and not bearish:
+    if setup.setup_direction is VisionSetupDirection.BULLISH:
         return "bullish"
-    if bearish and not bullish:
+    if setup.setup_direction is VisionSetupDirection.BEARISH:
         return "bearish"
     return None
 

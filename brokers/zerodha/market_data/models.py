@@ -144,6 +144,20 @@ class ZerodhaTickBatchResult:
                 raise ValueError(f"{name} must be a non-negative integer")
         object.__setattr__(self, "normalized_ticks", tuple(self.normalized_ticks))
         object.__setattr__(self, "delivered_ticks", tuple(self.delivered_ticks))
-        normalized = set(self.normalized_ticks)
-        if any(tick not in normalized for tick in self.delivered_ticks):
+        if any(not _matches_normalized_tick(tick, self.normalized_ticks) for tick in self.delivered_ticks):
             raise ValueError("delivered_ticks must be a subset of normalized_ticks")
+
+
+def _matches_normalized_tick(delivered: Tick, normalized_ticks: tuple[Tick, ...]) -> bool:
+    for normalized in normalized_ticks:
+        if (
+            delivered.symbol is normalized.symbol
+            and delivered.exchange is normalized.exchange
+            and delivered.timestamp == normalized.timestamp
+            and delivered.last_price == normalized.last_price
+            and delivered.bid_price == normalized.bid_price
+            and delivered.ask_price == normalized.ask_price
+            and delivered.open_interest == normalized.open_interest
+        ):
+            return True
+    return False

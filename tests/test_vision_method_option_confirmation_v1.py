@@ -24,6 +24,7 @@ from engines.vision_method import (
     VisionOptionConfirmation,
     VisionOptionConfirmationContext,
     VisionOptionConfirmationRequest,
+    VisionSetupDirection,
     VisionSetupQualificationContext,
     VisionSetupQuality,
     VisionSetupType,
@@ -42,6 +43,7 @@ def setup(
     supporting: tuple[str, ...] = ("Above CPR", "Above H3", "Bullish BOS"),
     eligible: bool = True,
     quality: VisionSetupQuality = VisionSetupQuality.HIGH,
+    setup_direction: VisionSetupDirection = VisionSetupDirection.BULLISH,
 ) -> VisionSetupQualificationContext:
     return VisionSetupQualificationContext(
         setup_type=setup_type,
@@ -49,6 +51,7 @@ def setup(
         blocking_reasons=(),
         supporting_reasons=supporting,
         eligible_for_option_confirmation=eligible,
+        setup_direction=setup_direction,
     )
 
 
@@ -208,6 +211,33 @@ def test_option_chain_contradicts_bullish_setup_with_call_writing():
     assert result.quality is VisionLevelQuality.FULL
     assert "Call writing contradicts setup" in result.contradicting_factors
     assert "Option analytics bias bearish" in result.contradicting_factors
+
+
+def test_option_confirmation_uses_typed_setup_direction_not_reason_text():
+    chain = option_chain()
+    bearish_analytics = analytics(
+        chain,
+        bias=OptionAnalyticsBias.BEARISH,
+        pressure=OptionPressureType.CALL_WRITING,
+        pcr_direction=OptionTrendDirection.FALLING,
+        change_pcr_direction=OptionTrendDirection.FALLING,
+        bullish_score=1,
+        bearish_score=4,
+    )
+
+    result = assemble_vision_option_confirmation_context(
+        request(
+            setup_context=setup(
+                supporting=("Above CPR", "Bullish BOS"),
+                setup_direction=VisionSetupDirection.BEARISH,
+            ),
+            chain=chain,
+            analytics_snapshot=bearish_analytics,
+        )
+    )
+
+    assert result.confirmation_state is VisionOptionConfirmation.CONFIRMS
+    assert "Call writing supports setup" in result.supporting_factors
 
 
 def test_option_chain_partial_when_confirmation_and_contradiction_coexist():

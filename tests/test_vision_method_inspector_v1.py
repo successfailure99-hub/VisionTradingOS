@@ -31,6 +31,7 @@ from engines.vision_method import (
     VisionCandidateState,
     VisionMethodValidationTraceStep,
     VisionOptionConfirmation,
+    VisionSetupDirection,
     VisionPriceActionTriggerStageStatus,
     VisionTriggerDirection,
     VisionTriggerType,
@@ -580,7 +581,10 @@ def test_live_bridge_option_timezone_failure_is_neutral_without_hard_veto(monkey
     panel = VisionMethodInspector()
 
     def qualified_bearish_setup(*_args, **_kwargs):
-        return setup(supporting=("Below CPR", "Below L3", "Bearish BOS"))
+        return setup(
+            supporting=("Below CPR", "Below L3", "Bearish BOS"),
+            setup_direction=VisionSetupDirection.BEARISH,
+        )
 
     def fail_option_confirmation(*_args, **_kwargs):
         raise ValueError("option_chain.timestamp timezone mismatch.")
@@ -776,11 +780,10 @@ def test_main_window_refresh_updates_live_vision_method_inspector():
     assert window._vision_method_inspector._labels["Candidate State"].text() != "-"
     assert window._vision_method_bridge.last_report is not None
     runtime_snapshot = lifecycle.orchestrator.snapshot().runtime_snapshots[0]
-    assert runtime_snapshot.vision_method_snapshot is window._vision_method_bridge.last_snapshot
-    assert runtime_snapshot.vision_method_validation_report is window._vision_method_bridge.last_report
-    assert runtime_snapshot.vision_trade_candidate is not None
-    assert view.strategies[0].candidate_state != "-"
-    assert view.strategies[0].candidate_reference == runtime_snapshot.vision_trade_candidate.snapshot_reference
+    assert runtime_snapshot.vision_method_snapshot is None
+    assert runtime_snapshot.vision_method_validation_report is None
+    assert runtime_snapshot.vision_trade_candidate is None
+    assert view.strategies[0].candidate_state == "-"
 
 
 def test_live_bridge_invokes_existing_calculator_once_per_refresh(monkeypatch):
@@ -804,6 +807,16 @@ def test_live_bridge_invokes_existing_calculator_once_per_refresh(monkeypatch):
     assert calls == 1
 
 
+def test_live_bridge_refresh_does_not_process_paper_trade():
+    app()
+    lifecycle, runtime = _live_lifecycle()
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, VisionMethodInspector()).refresh()
+
+    assert result.ready is True
+    assert runtime.paper_trade_process_calls == 0
+
+
 class _FakeRuntime:
     def __init__(self, snapshot_value, history):
         self.instrument = RuntimeInstrument.NIFTY
@@ -811,6 +824,7 @@ class _FakeRuntime:
         self.history = tuple(history)
         self.snapshot_calls = 0
         self.history_calls = 0
+        self.paper_trade_process_calls = 0
 
     def snapshot(self, *_args, **_kwargs):
         self.snapshot_calls += 1
@@ -821,6 +835,7 @@ class _FakeRuntime:
         return self.history
 
     def process_vision_method_paper_trade(self, snapshot, validation_report):
+        self.paper_trade_process_calls += 1
         from engines.runtime_adapter import adapt_vision_method_to_trade_candidate
 
         candidate = adapt_vision_method_to_trade_candidate(snapshot, validation_report)

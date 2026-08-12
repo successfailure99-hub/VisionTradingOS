@@ -3,7 +3,7 @@ Tests for Application Orchestrator V1 runtime contracts.
 """
 
 from dataclasses import FrozenInstanceError
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -64,6 +64,7 @@ from engines.trade_journal.models import TradeJournalSnapshot
 
 
 TS = datetime(2026, 7, 12, 9, 15)
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def tick(symbol=Instrument.NIFTY, timestamp=TS, price=100.0, volume=10):
@@ -76,6 +77,24 @@ def tick(symbol=Instrument.NIFTY, timestamp=TS, price=100.0, volume=10):
         bid_price=price - 0.5,
         ask_price=price + 0.5,
         open_interest=100,
+    )
+
+
+def candle(timestamp=TS, *, high=101.0, low=99.0, close=100.0, timeframe="1m"):
+    from core.models.candle import Candle
+
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        timestamp = timestamp.replace(tzinfo=IST)
+    return Candle(
+        symbol="NIFTY",
+        timeframe=timeframe,
+        start_time=timestamp,
+        end_time=timestamp + timedelta(minutes=1),
+        open=close,
+        high=high,
+        low=low,
+        close=close,
+        volume=100,
     )
 
 
@@ -304,6 +323,26 @@ def test_process_tick_returns_immutable_runtime_snapshot_with_dashboard_state():
     assert duplicate.market_context == snapshot.market_context
     assert duplicate.ai_reasoning_v2 == snapshot.ai_reasoning_v2
     assert duplicate.strategy_decision_v2 == snapshot.strategy_decision_v2
+
+
+def test_session_high_low_ignores_prior_session_warmup_history():
+    orchestrator = ApplicationOrchestrator(EventBus())
+    orchestrator.start()
+    runtime = orchestrator.get_runtime(RuntimeInstrument.NIFTY)
+    runtime.warm_up_candles(
+        (
+            candle(TS - timedelta(days=1), high=999.0, low=1.0, close=100.0),
+        ),
+        replace=True,
+    )
+
+    timestamp = TS.replace(tzinfo=IST)
+    snapshot = orchestrator.process_tick(tick(timestamp=timestamp, price=101.0))
+    snapshot = orchestrator.process_tick(tick(timestamp=timestamp + timedelta(minutes=1), price=102.0))
+
+    assert snapshot.market_context is not None
+    assert snapshot.market_context.session_high == 102.0
+    assert snapshot.market_context.session_low == 101.0
 
 
 def test_option_chain_update_refreshes_dashboard_analysis_after_spot_tick():

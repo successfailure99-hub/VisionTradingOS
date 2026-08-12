@@ -23,6 +23,7 @@ from engines.option_chain_analytics.models import OptionChainAnalyticsSnapshot
 from .enums import (
     VisionLevelQuality,
     VisionOptionConfirmation,
+    VisionSetupDirection,
     VisionSetupType,
 )
 from .models import (
@@ -176,12 +177,9 @@ def validate_option_confirmation_context(context: VisionOptionConfirmationContex
 def _setup_direction(setup: VisionSetupQualificationContext) -> str | None:
     if setup.setup_type in (VisionSetupType.FAILED_BREAKOUT, VisionSetupType.RANGE_FADE, VisionSetupType.NO_QUALITY_SETUP):
         return None
-    text = " ".join(setup.supporting_reasons).casefold()
-    bullish = any(token in text for token in ("bullish", "above cpr", "above h3", "cross above"))
-    bearish = any(token in text for token in ("bearish", "below cpr", "below l3", "cross below"))
-    if bullish and not bearish:
+    if setup.setup_direction is VisionSetupDirection.BULLISH:
         return "bullish"
-    if bearish and not bullish:
+    if setup.setup_direction is VisionSetupDirection.BEARISH:
         return "bearish"
     return None
 

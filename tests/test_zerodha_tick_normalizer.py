@@ -56,6 +56,18 @@ def test_volume_fallbacks_and_missing_oi_depth():
     assert tick.ask_price == 0.0
 
 
+def test_cumulative_volume_traded_remains_raw_normalized_volume():
+    item = normalizer()
+
+    first = item.normalize(raw_tick(volume_traded=100))
+    second = item.normalize(raw_tick(volume_traded=115))
+    duplicate_or_stale = item.normalize(raw_tick(volume_traded=115))
+
+    assert first.volume == 100
+    assert second.volume == 115
+    assert duplicate_or_stale.volume == 115
+
+
 def test_missing_volume_and_oi_become_zero_for_index_like_ticks():
     payload = raw_tick()
     payload.pop("volume_traded")

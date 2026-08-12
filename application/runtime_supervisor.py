@@ -63,6 +63,10 @@ class RuntimeSupervisorCheck:
     def healthy(self) -> bool:
         return self.status in {"READY", "VALID", "NOT_APPLICABLE", "SYNCHRONIZED"}
 
+    @property
+    def degraded(self) -> bool:
+        return self.status in {"DEGRADED", "PARTIAL", "STALE"}
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeSupervisorSnapshot:
@@ -179,6 +183,8 @@ class RuntimeSupervisor:
         status = "READY" if checks and all(item.healthy for item in checks) else "RECOVERING"
         if any(item.status in {"FAILED", "ERROR"} for item in checks):
             status = "FAILED"
+        elif any(item.degraded for item in checks):
+            status = "DEGRADED"
         snapshot = RuntimeSupervisorSnapshot(status, self._interval_ms, tuple(checks))
         self._last_snapshot = snapshot
         return snapshot
@@ -288,6 +294,8 @@ def _normalize_status(value: str) -> str:
     text = str(value).strip().upper() or "RECOVERING"
     if text in {"READY", "VALID", "NOT_APPLICABLE", "SYNCHRONIZED"}:
         return text
+    if text in {"DEGRADED", "PARTIAL", "STALE"}:
+        return "DEGRADED"
     if text in {"FAILED", "ERROR", "BLOCKED"}:
         return "FAILED"
     return "RECOVERING"

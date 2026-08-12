@@ -362,6 +362,30 @@ def test_process_raw_ticks_serialized_delivery_counts_and_errors():
     assert subject.status is ZerodhaWebSocketStatus.CREATED
 
 
+def test_process_raw_ticks_delivers_incremental_volume_after_duplicate_suppression():
+    delivered = []
+    subject = manager(subscriptions=(sub(101),), consumer=delivered.append)
+    first = raw(101, 25000.0)
+    duplicate = raw(101, 25000.0)
+    second = raw(101, 25000.5)
+    third = raw(101, 25001.0)
+    first["volume"] = duplicate["volume"] = 100
+    second["volume"] = third["volume"] = 115
+
+    result = subject.process_raw_ticks(
+        (
+            first,
+            duplicate,
+            second,
+            third,
+        )
+    )
+
+    assert [tick.volume for tick in delivered] == [100, 15, 0]
+    assert [tick.volume for tick in result.delivered_ticks] == [100, 15, 0]
+    assert [tick.volume for tick in result.normalized_ticks] == [100, 100, 115, 115]
+
+
 def test_snapshot_immutable_no_secret_fields_same_client_callbacks_once_and_rlock():
     client = FakeTickerClient()
     subject = manager(client, (sub(101),))

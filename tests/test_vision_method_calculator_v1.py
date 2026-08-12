@@ -36,6 +36,7 @@ from engines.vision_method import (
     VisionPreviousDayRelation,
     VisionRangeLocation,
     VisionReversalState,
+    VisionSetupDirection,
     VisionSetupQualificationContext,
     VisionSetupQuality,
     VisionSetupType,
@@ -215,6 +216,7 @@ def setup(
     supporting: tuple[str, ...] = ("Above CPR", "Above H3", "Bullish BOS"),
     blocking: tuple[str, ...] = (),
     eligible: bool = True,
+    setup_direction: VisionSetupDirection = VisionSetupDirection.BULLISH,
 ) -> VisionSetupQualificationContext:
     return VisionSetupQualificationContext(
         setup_type=setup_type,
@@ -222,6 +224,7 @@ def setup(
         blocking_reasons=blocking,
         supporting_reasons=supporting,
         eligible_for_option_confirmation=eligible,
+        setup_direction=setup_direction,
     )
 
 
@@ -356,7 +359,10 @@ def test_complete_bearish_methodology_produces_short_eligible_snapshot():
             opening_range_context=opening(state=VisionOpeningRangeState.BREAK_BELOW, direction=VisionBreakDirection.DOWN, location=VisionRangeLocation.BELOW_RANGE),
             structure_context=structure(trend=VisionStructureTrend.BEARISH, pattern=VisionStructurePattern.LL),
             structure_event_context=event(bos=VisionBOS.BEARISH_BOS),
-            setup_qualification_context=setup(supporting=("Below CPR", "Below L3", "Bearish BOS")),
+            setup_qualification_context=setup(
+                supporting=("Below CPR", "Below L3", "Bearish BOS"),
+                setup_direction=VisionSetupDirection.BEARISH,
+            ),
             option_confirmation_context=option(supporting=("Call writing supports setup",)),
             price_action_trigger_context=trigger(
                 direction=VisionTriggerDirection.BEARISH,
@@ -396,12 +402,13 @@ def test_technical_trigger_failure_blocks_eligible_promotion_without_methodology
 def test_observe_wait_prepare_avoid_and_insufficient_states_are_deterministic():
     observe = calculate_vision_method_snapshot(
         request(
-            setup_qualification_context=setup(
-                setup_type=VisionSetupType.RANGE_FADE,
-                quality=VisionSetupQuality.MEDIUM,
-                supporting=("Inside CPR",),
-                eligible=True,
-            ),
+                setup_qualification_context=setup(
+                    setup_type=VisionSetupType.RANGE_FADE,
+                    quality=VisionSetupQuality.MEDIUM,
+                    supporting=("Inside CPR",),
+                    eligible=True,
+                    setup_direction=VisionSetupDirection.UNKNOWN,
+                ),
             option_confirmation_context=option(state=VisionOptionConfirmation.NEUTRAL),
         )
     )
@@ -484,7 +491,10 @@ def test_bearish_retest_with_neutral_options_can_be_short_eligible():
             opening_range_context=opening(state=VisionOpeningRangeState.RETEST, direction=VisionBreakDirection.DOWN, location=VisionRangeLocation.BELOW_RANGE),
             structure_context=structure(trend=VisionStructureTrend.BEARISH, pattern=VisionStructurePattern.LL),
             structure_event_context=event(bos=VisionBOS.BEARISH_BOS),
-            setup_qualification_context=setup(supporting=("Below CPR", "Below L3", "Bearish BOS")),
+            setup_qualification_context=setup(
+                supporting=("Below CPR", "Below L3", "Bearish BOS"),
+                setup_direction=VisionSetupDirection.BEARISH,
+            ),
             option_confirmation_context=option(state=VisionOptionConfirmation.NEUTRAL),
             price_action_trigger_context=trigger(
                 direction=VisionTriggerDirection.BEARISH,
@@ -497,6 +507,32 @@ def test_bearish_retest_with_neutral_options_can_be_short_eligible():
     assert result.candidate_state is VisionCandidateState.SHORT_ELIGIBLE
     assert result.entry_location_context.direction == "bearish"
     assert result.entry_location_context.entry_location_state is VisionEntryLocationState.FAVORABLE
+
+
+def test_calculator_uses_typed_setup_direction_not_supporting_reason_text():
+    result = calculate_vision_method_snapshot(
+        request(
+            current_price=99.0,
+            level_context=level(cpr=VisionCPRRelation.BELOW_CPR, zone=VisionCamarillaZone.L3_L4, vwap=VisionVWAPRelation.BELOW_VWAP),
+            opening_range_context=opening(state=VisionOpeningRangeState.RETEST, direction=VisionBreakDirection.DOWN, location=VisionRangeLocation.BELOW_RANGE),
+            structure_context=structure(trend=VisionStructureTrend.BEARISH, pattern=VisionStructurePattern.LL),
+            structure_event_context=event(bos=VisionBOS.BEARISH_BOS),
+            setup_qualification_context=setup(
+                supporting=("legacy bullish text should not drive direction",),
+                setup_direction=VisionSetupDirection.BEARISH,
+            ),
+            option_confirmation_context=option(state=VisionOptionConfirmation.NEUTRAL),
+            price_action_trigger_context=trigger(
+                direction=VisionTriggerDirection.BEARISH,
+                trigger_type=VisionTriggerType.BEARISH_RETEST_HOLD,
+                interaction=VisionTriggerInteractionState.HOLDING,
+            ),
+        )
+    )
+
+    assert result.candidate_state is VisionCandidateState.SHORT_ELIGIBLE
+    assert result.entry_location_context.direction == "bearish"
+    assert "Final direction bearish" in result.supporting_reasons
 
 
 def test_duplicate_reasons_are_suppressed_preserving_first_seen_order():

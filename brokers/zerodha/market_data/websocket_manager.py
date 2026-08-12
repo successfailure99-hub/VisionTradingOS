@@ -4,6 +4,7 @@ Zerodha live market-data WebSocket manager.
 
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import RLock
 from time import perf_counter_ns
@@ -19,6 +20,7 @@ from brokers.zerodha.market_data.models import (
 )
 from brokers.zerodha.market_data.normalizer import ZerodhaTickNormalizer
 from brokers.zerodha.market_data.subscription_registry import ZerodhaSubscriptionRegistry
+from core.models.tick import Tick
 
 
 def _default_clock() -> datetime:
@@ -109,6 +111,8 @@ class ZerodhaWebSocketManager:
         self._runtime_processed_at: datetime | None = None
         self._latest_tick_latency_ms: float | None = None
         self._max_tick_latency_ms: float | None = None
+        self._last_delivered_cumulative_volume_by_token: dict[int, int] = {}
+        self._last_delivered_raw_tick_by_token: dict[int, Tick] = {}
         self._subscriptions_applied_for_connection = False
         self._client.set_callbacks(
             on_connect=self._on_connect,
@@ -278,13 +282,20 @@ class ZerodhaWebSocketManager:
                     continue
                 try:
                     self._event_published_at = self._now()
-                    self._tick_consumer(tick)
+                    token = self._token(raw_tick)
+                    if self._last_delivered_raw_tick_by_token.get(token) == tick:
+                        continue
+                    cumulative_volume = self._cumulative_volume(raw_tick)
+                    delivered_tick = self._with_incremental_volume(token, cumulative_volume, tick)
+                    self._tick_consumer(delivered_tick)
                     runtime_processed_at = self._now()
                     latency_ms = (perf_counter_ns() - broker_started_ns) / 1_000_000.0
                     self._runtime_processed_at = runtime_processed_at
                     self._latest_tick_latency_ms = latency_ms
                     self._max_tick_latency_ms = max(self._max_tick_latency_ms or 0.0, latency_ms)
-                    delivered_ticks.append(tick)
+                    self._last_delivered_raw_tick_by_token[token] = tick
+                    self._last_delivered_cumulative_volume_by_token[token] = cumulative_volume
+                    delivered_ticks.append(delivered_tick)
                     self._delivered_tick_count += 1
                 except Exception as exc:
                     rejected += 1
@@ -297,6 +308,38 @@ class ZerodhaWebSocketManager:
                 delivered_ticks=tuple(delivered_ticks),
                 rejected_count=rejected,
             )
+
+    def _with_incremental_volume(self, token: int, cumulative_volume: int, tick: Tick) -> Tick:
+        previous = self._last_delivered_cumulative_volume_by_token.get(token)
+        if previous is None:
+            incremental = cumulative_volume
+        elif cumulative_volume <= previous:
+            incremental = 0
+        else:
+            incremental = cumulative_volume - previous
+        return replace(tick, volume=incremental)
+
+    def _token(self, raw_tick: Mapping[str, object]) -> int:
+        token = raw_tick.get("instrument_token")
+        if isinstance(token, bool) or not isinstance(token, int):
+            raise TypeError("instrument_token must be a positive integer")
+        if token <= 0:
+            raise ValueError("instrument_token must be positive")
+        return token
+
+    def _cumulative_volume(self, raw_tick: Mapping[str, object]) -> int:
+        value = raw_tick.get("volume_traded")
+        if value is None:
+            value = raw_tick.get("volume", 0)
+        if isinstance(value, bool):
+            raise TypeError("volume must be an integer")
+        try:
+            volume = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("volume must be an integer") from exc
+        if volume < 0:
+            raise ValueError("volume cannot be negative")
+        return volume
 
     def snapshot(self) -> ZerodhaWebSocketSnapshot:
         with self._lock:

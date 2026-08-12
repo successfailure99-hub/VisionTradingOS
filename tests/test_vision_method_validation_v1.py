@@ -37,6 +37,7 @@ from engines.vision_method import (
     VisionPreviousDayRelation,
     VisionRangeLocation,
     VisionReversalState,
+    VisionSetupDirection,
     VisionSetupQualificationContext,
     VisionSetupQuality,
     VisionSetupType,
@@ -203,6 +204,7 @@ def setup(
     supporting: tuple[str, ...] = ("Above CPR", "Above H3", "Bullish BOS"),
     blocking: tuple[str, ...] = (),
     eligible: bool = True,
+    setup_direction: VisionSetupDirection = VisionSetupDirection.BULLISH,
 ) -> VisionSetupQualificationContext:
     return VisionSetupQualificationContext(
         setup_type=setup_type,
@@ -210,6 +212,7 @@ def setup(
         blocking_reasons=blocking,
         supporting_reasons=supporting,
         eligible_for_option_confirmation=eligible,
+        setup_direction=setup_direction,
     )
 
 
@@ -284,7 +287,10 @@ def test_valid_bearish_snapshot_records_short_eligible_methodology():
             ),
             structure_context=structure(trend=VisionStructureTrend.BEARISH, pattern=VisionStructurePattern.LL),
             structure_event_context=structure_event(bos=VisionBOS.BEARISH_BOS),
-            setup_qualification_context=setup(supporting=("Below CPR", "Below L3", "Bearish BOS")),
+            setup_qualification_context=setup(
+                supporting=("Below CPR", "Below L3", "Bearish BOS"),
+                setup_direction=VisionSetupDirection.BEARISH,
+            ),
             price_action_trigger_context=trigger(
                 direction=VisionTriggerDirection.BEARISH,
                 trigger_type=VisionTriggerType.BEARISH_INITIATIVE_BREAKOUT,

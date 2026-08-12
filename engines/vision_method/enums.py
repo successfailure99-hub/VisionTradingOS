@@ -244,6 +244,13 @@ class VisionSetupQuality(str, Enum):
     INVALID = "invalid"
 
 
+class VisionSetupDirection(str, Enum):
+    BULLISH = "bullish"
+    BEARISH = "bearish"
+    NEUTRAL = "neutral"
+    UNKNOWN = "unknown"
+
+
 class VisionDirectionQuality(str, Enum):
     HIGH = "high"
     MEDIUM = "medium"

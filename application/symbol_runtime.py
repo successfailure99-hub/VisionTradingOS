@@ -791,7 +791,7 @@ class SymbolRuntime:
     def _process_option_paper_market_update(self) -> None:
         if self._option_paper_position is None or self._option_paper_position.status is not OptionPaperPositionStatus.OPEN:
             return
-        premium = self._current_option_premium(self._option_paper_position.candidate)
+        premium = self._current_option_close_premium(self._option_paper_position.candidate)
         timestamp = getattr(self.option_chain_engine.snapshot, "timestamp", None)
         if premium is None or not isinstance(timestamp, datetime):
             return
@@ -1674,12 +1674,13 @@ class SymbolRuntime:
                 trigger_zone_reference=zone_reference,
                 snapshot_generation=generation,
             )
+            self._price_action_trigger_context = None
             self._price_action_trigger_identity = None
             return None
 
     def _process_paper_tick(self, tick: Tick) -> None:
         if self._option_paper_position is not None and self._option_paper_position.status is OptionPaperPositionStatus.OPEN:
-            premium = self._current_option_premium(self._option_paper_position.candidate)
+            premium = self._current_option_close_premium(self._option_paper_position.candidate)
             if premium is not None:
                 self._option_paper_position = update_option_paper_position(
                     self._option_paper_position,
@@ -1705,6 +1706,12 @@ class SymbolRuntime:
                 self.risk_engine.record_decision(updated)
 
     def _current_option_premium(self, candidate: OptionTradeCandidate) -> float | None:
+        return self._current_option_leg_premium(candidate, prefer="bid")
+
+    def _current_option_close_premium(self, candidate: OptionTradeCandidate) -> float | None:
+        return self._current_option_leg_premium(candidate, prefer="ask")
+
+    def _current_option_leg_premium(self, candidate: OptionTradeCandidate, *, prefer: str) -> float | None:
         snapshot = self.option_chain_engine.snapshot
         if snapshot is None:
             return None
@@ -1714,8 +1721,12 @@ class SymbolRuntime:
             leg = strike.put if candidate.option_type.value == "put" else strike.call
             if leg is None:
                 return None
+            if prefer == "ask" and leg.ask_price is not None and leg.ask_price > 0:
+                return float(leg.ask_price)
             if leg.bid_price is not None and leg.bid_price > 0:
                 return float(leg.bid_price)
+            if leg.ask_price is not None and leg.ask_price > 0:
+                return float(leg.ask_price)
             if leg.last_price > 0:
                 return float(leg.last_price)
         return None
@@ -3789,14 +3800,20 @@ class SymbolRuntime:
 
     def _session_high_low(self, current_price: float, timeframe: str | TimeFrame | None = None) -> tuple[float, float]:
         lane = self._timeframe_for(timeframe)
+        trading_date = None
+        timestamp = self._canonical_market_timestamp or getattr(self._last_tick, "timestamp", None)
+        if isinstance(timestamp, datetime):
+            trading_date = self._exchange_session_date(timestamp) or _market_date(timestamp)
         highs = [current_price]
         lows = [current_price]
         candle_engine = self.candle_engines[lane]
         current = candle_engine.get_current(self._core_instrument)
-        if current is not None:
+        if current is not None and (trading_date is None or _market_date(current.start_time) == trading_date):
             highs.append(current.high)
             lows.append(current.low)
         for candle in candle_engine.get_history(self._core_instrument):
+            if trading_date is not None and _market_date(candle.start_time) != trading_date:
+                continue
             highs.append(candle.high)
             lows.append(candle.low)
         return max(highs), min(lows)

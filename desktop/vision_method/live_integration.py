@@ -460,8 +460,6 @@ class VisionMethodLiveInspectorBridge:
             self._logger.debug("[VisionMethod] Snapshot generated")
             report = validate_vision_method(snapshot)
             self._logger.debug("[VisionMethod] Validation complete")
-            if hasattr(runtime, "process_vision_method_paper_trade"):
-                runtime.process_vision_method_paper_trade(snapshot, report)
             self._logger.debug(
                 "[VisionMethodLive] candidate=%s validation=%s",
                 snapshot.candidate_state.value,

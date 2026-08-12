@@ -20,6 +20,7 @@ from engines.vision_method import (
     VisionOpeningRangeState,
     VisionOptionConfirmation,
     VisionRangeLocation,
+    VisionSetupDirection,
     VisionStructurePattern,
     VisionStructureTrend,
     VisionTriggerDirection,
@@ -62,7 +63,10 @@ def test_short_eligible_snapshot_creates_short_trade_candidate():
         ),
         structure_context=structure(trend=VisionStructureTrend.BEARISH, pattern=VisionStructurePattern.LL),
         structure_event_context=structure_event(bos=VisionBOS.BEARISH_BOS),
-        setup_qualification_context=setup(supporting=("Below CPR", "Below L3", "Bearish BOS")),
+        setup_qualification_context=setup(
+            supporting=("Below CPR", "Below L3", "Bearish BOS"),
+            setup_direction=VisionSetupDirection.BEARISH,
+        ),
         option_confirmation_context=option(supporting=("Call writing supports setup",)),
         price_action_trigger_context=trigger(
             direction=VisionTriggerDirection.BEARISH,
@@ -99,7 +103,10 @@ def test_short_eligible_snapshot_creates_short_trade_candidate():
         ),
         (
             snapshot(
-                setup_qualification_context=setup(supporting=("Inside CPR",)),
+                setup_qualification_context=setup(
+                    supporting=("Inside CPR",),
+                    setup_direction=VisionSetupDirection.NEUTRAL,
+                ),
                 option_confirmation_context=option(state=VisionOptionConfirmation.NEUTRAL, neutral=("Mixed positioning",)),
             ),
             TradeCandidateState.NO_CANDIDATE,

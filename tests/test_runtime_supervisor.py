@@ -74,5 +74,5 @@ def test_runtime_supervisor_treats_supporting_liquidity_readiness_as_degraded_no
     checks = {check.stage: check for check in result.checks}
 
     assert checks["Liquidity Input History"].status == "DEGRADED"
-    assert result.status != "FAILED"
+    assert result.status == "DEGRADED"
     assert runtime is item.orchestrator.get_runtime(RuntimeInstrument.NIFTY)

@@ -46,6 +46,7 @@ from .enums import (
     VisionPreviousDayRelation,
     VisionRangeLocation,
     VisionReversalState,
+    VisionSetupDirection,
     VisionSetupQuality,
     VisionSetupType,
     VisionMSS,
@@ -502,12 +503,15 @@ class VisionSetupQualificationContext:
     blocking_reasons: tuple[str, ...]
     supporting_reasons: tuple[str, ...]
     eligible_for_option_confirmation: bool
+    setup_direction: VisionSetupDirection = VisionSetupDirection.UNKNOWN
 
     def __post_init__(self) -> None:
         if not isinstance(self.setup_type, VisionSetupType):
             raise TypeError("setup_type must be VisionSetupType.")
         if not isinstance(self.setup_quality, VisionSetupQuality):
             raise TypeError("setup_quality must be VisionSetupQuality.")
+        if not isinstance(self.setup_direction, VisionSetupDirection):
+            raise TypeError("setup_direction must be VisionSetupDirection.")
         blocking = _normalize_unique_text_tuple(self.blocking_reasons, "blocking_reasons")
         supporting = _normalize_unique_text_tuple(self.supporting_reasons, "supporting_reasons")
         if not isinstance(self.eligible_for_option_confirmation, bool):

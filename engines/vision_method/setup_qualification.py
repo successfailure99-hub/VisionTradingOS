@@ -25,6 +25,7 @@ from .enums import (
     VisionLiquiditySweep,
     VisionOpeningRangeState,
     VisionRangeLocation,
+    VisionSetupDirection,
     VisionSetupQuality,
     VisionSetupType,
     VisionStructureEventPhase,
@@ -84,6 +85,7 @@ def assemble_vision_setup_qualification_context(
     validate_setup_qualification_request(request, instrument=instrument, timeframe=timeframe)
     blocking = _blocking_reasons(request)
     supporting = _supporting_reasons(request)
+    direction = _setup_direction(request)
 
     if blocking:
         result = VisionSetupQualificationContext(
@@ -92,10 +94,12 @@ def assemble_vision_setup_qualification_context(
             blocking_reasons=blocking,
             supporting_reasons=supporting,
             eligible_for_option_confirmation=False,
+            setup_direction=VisionSetupDirection.UNKNOWN,
         )
         return validate_setup_qualification_context(result)
 
     setup_type = _classify_setup(request)
+    direction = direction if setup_type is not VisionSetupType.NO_QUALITY_SETUP else VisionSetupDirection.UNKNOWN
     if setup_type is VisionSetupType.NO_QUALITY_SETUP:
         result = VisionSetupQualificationContext(
             setup_type=setup_type,
@@ -103,6 +107,7 @@ def assemble_vision_setup_qualification_context(
             blocking_reasons=_no_quality_blocking_reasons(request),
             supporting_reasons=supporting,
             eligible_for_option_confirmation=False,
+            setup_direction=VisionSetupDirection.UNKNOWN,
         )
         return validate_setup_qualification_context(result)
 
@@ -113,6 +118,7 @@ def assemble_vision_setup_qualification_context(
         blocking_reasons=(),
         supporting_reasons=supporting,
         eligible_for_option_confirmation=quality in (VisionSetupQuality.HIGH, VisionSetupQuality.MEDIUM),
+        setup_direction=direction,
     )
     return validate_setup_qualification_context(result)
 
@@ -233,6 +239,25 @@ def _classify_quality(request: VisionSetupQualificationRequest, setup_type: Visi
     if setup_type in (VisionSetupType.PULLBACK_CONTINUATION, VisionSetupType.FAILED_BREAKOUT, VisionSetupType.RANGE_FADE):
         return VisionSetupQuality.MEDIUM
     return VisionSetupQuality.LOW
+
+
+def _setup_direction(request: VisionSetupQualificationRequest) -> VisionSetupDirection:
+    event = request.structure_event_context
+    if event.bos is VisionBOS.BULLISH_BOS or event.choch is VisionCHoCH.BULLISH_CHOCH:
+        return VisionSetupDirection.BULLISH
+    if event.bos is VisionBOS.BEARISH_BOS or event.choch is VisionCHoCH.BEARISH_CHOCH:
+        return VisionSetupDirection.BEARISH
+    if request.opening_range_context.break_direction is VisionBreakDirection.UP:
+        return VisionSetupDirection.BULLISH
+    if request.opening_range_context.break_direction is VisionBreakDirection.DOWN:
+        return VisionSetupDirection.BEARISH
+    if request.structure_context.trend is VisionStructureTrend.BULLISH:
+        return VisionSetupDirection.BULLISH
+    if request.structure_context.trend is VisionStructureTrend.BEARISH:
+        return VisionSetupDirection.BEARISH
+    if request.structure_context.trend is VisionStructureTrend.RANGING:
+        return VisionSetupDirection.NEUTRAL
+    return VisionSetupDirection.UNKNOWN
 
 
 def _is_trend_continuation(request: VisionSetupQualificationRequest) -> bool:

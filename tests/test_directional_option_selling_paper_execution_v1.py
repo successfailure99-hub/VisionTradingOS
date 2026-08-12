@@ -36,6 +36,7 @@ from engines.vision_method import (
     VisionCPRRelation,
     VisionOpeningRangeState,
     VisionRangeLocation,
+    VisionSetupDirection,
     VisionStructurePattern,
     VisionStructureTrend,
     VisionTriggerDirection,
@@ -154,7 +155,10 @@ def bearish_snapshot():
         ),
         structure_context=structure(trend=VisionStructureTrend.BEARISH, pattern=VisionStructurePattern.LL),
         structure_event_context=structure_event(bos=VisionBOS.BEARISH_BOS),
-        setup_qualification_context=setup(supporting=("Below CPR", "Below L3", "Bearish BOS")),
+        setup_qualification_context=setup(
+            supporting=("Below CPR", "Below L3", "Bearish BOS"),
+            setup_direction=VisionSetupDirection.BEARISH,
+        ),
         price_action_trigger_context=trigger(
             direction=VisionTriggerDirection.BEARISH,
             trigger_type=VisionTriggerType.BEARISH_INITIATIVE_BREAKOUT,
@@ -415,6 +419,27 @@ def test_symbol_runtime_directional_option_selling_stays_paper_only_and_has_no_s
     assert view.option_paper_position.position_id == view.canonical_paper_position.trade_id
     assert build_position_view(view).status == "Paper Option Position Open"
     assert build_position_view(view).last_price == view.option_paper_position.current_premium
+
+
+def test_symbol_runtime_marks_open_short_option_position_with_buy_to_close_ask():
+    item = SymbolRuntime(
+        EventBus(),
+        RuntimeConfiguration(option_expiry_date=EXPIRY, directional_option_selling_configuration=option_config()),
+        RuntimeInstrument.NIFTY,
+    )
+    item.start()
+    item._last_tick = __import__("tests.test_vision_paper_trading_integration_v1", fromlist=["tick"]).tick()
+    item.set_option_universe(universe())
+    item.process_option_chain_runtime(chain_snapshot(put_bid=100.0))
+
+    method = snapshot()
+    report = validate_vision_method(method)
+    item.process_vision_method_paper_trade(method, report)
+    item.process_option_chain_runtime(chain_snapshot(put_bid=49.0, timestamp=NOW + timedelta(minutes=1)))
+    view = item.snapshot()
+
+    assert view.option_paper_position is not None
+    assert view.option_paper_position.current_premium == 50.0
 
 
 def test_symbol_runtime_blocks_fresh_vision_option_paper_candidate_after_market_close():
