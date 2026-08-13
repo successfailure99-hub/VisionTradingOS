@@ -29,6 +29,7 @@ from engines.trade_journal_v1.models import (
 from engines.trade_journal_v1.persistence import (
     TradeJournalPersistence,
     TradeJournalQuery,
+    checkpoint_from_option_paper_position,
     checkpoint_from_runtime_position,
     record_from_entry,
 )
@@ -159,13 +160,16 @@ class TradeJournalV1Engine(BaseEngine):
     def save_checkpoint(self, runtime_paper_position, *, trading_date, exchange: str = "NSE", timeframe: str = "1m") -> ActivePaperPositionCheckpoint | None:
         if runtime_paper_position is None:
             return None
-        checkpoint = checkpoint_from_runtime_position(
-            runtime_paper_position,
-            trading_date=trading_date,
-            exchange=exchange,
-            timeframe=timeframe,
-            created_at=self._now(),
-        )
+        if isinstance(runtime_paper_position, OptionPaperPositionSnapshot):
+            checkpoint = checkpoint_from_option_paper_position(runtime_paper_position, trading_date=trading_date)
+        else:
+            checkpoint = checkpoint_from_runtime_position(
+                runtime_paper_position,
+                trading_date=trading_date,
+                exchange=exchange,
+                timeframe=timeframe,
+                created_at=self._now(),
+            )
         self._persistence.save_checkpoint(checkpoint)
         return checkpoint
 

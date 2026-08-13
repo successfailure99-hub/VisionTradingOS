@@ -162,6 +162,14 @@ class ZerodhaWebSocketManager:
                 return self.snapshot()
         return self.connect()
 
+    def schedule_reconnect(self, reason: str = "manual reconnect requested") -> ZerodhaWebSocketSnapshot:
+        with self._lock:
+            if self._status in {ZerodhaWebSocketStatus.DISCONNECTING, ZerodhaWebSocketStatus.STOPPED}:
+                return self.snapshot()
+            self._record_error_unlocked(RuntimeError(reason))
+            self._schedule_reconnect_unlocked()
+            return self.snapshot()
+
     def disconnect(self) -> ZerodhaWebSocketSnapshot:
         with self._lock:
             if self._status in {ZerodhaWebSocketStatus.CREATED, ZerodhaWebSocketStatus.DISCONNECTED, ZerodhaWebSocketStatus.STOPPED}:

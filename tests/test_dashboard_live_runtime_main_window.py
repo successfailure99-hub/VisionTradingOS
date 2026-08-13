@@ -61,6 +61,9 @@ class FakeLiveRuntime(LiveMarketDataRuntime):
             last_error=None,
         )
 
+    def poll_watchdog(self):
+        return self.snapshot()
+
     def start(self):
         self.start_calls += 1
         return self.snapshot()

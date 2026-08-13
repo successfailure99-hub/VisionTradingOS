@@ -110,6 +110,7 @@ from engines.trade_execution_policy.models import ExecutionRequest, TradeExecuti
 from engines.tradingview_evidence.engine import TradingViewEvidenceMappingEngine
 from engines.tradingview_evidence.models import TradingViewEvidenceRequest
 from engines.trade_journal_v1 import TradeJournalV1Configuration, TradeJournalV1Engine
+from engines.trade_journal_v1.persistence import option_paper_position_from_checkpoint
 from engines.vision_method import (
     VisionMethodSnapshot,
     VisionMethodValidationReport,
@@ -426,6 +427,7 @@ class SymbolRuntime:
         self._last_closed_candles_by_timeframe: dict[TimeFrame, tuple[Candle, ...]] = {}
         self._vision_method_snapshot: VisionMethodSnapshot | None = None
         self._vision_method_validation_report: VisionMethodValidationReport | None = None
+        self._vision_decision_provenance = "LIVE"
         self._pivot_flight_plan: VisionPivotFlightPlan | None = None
         self._pivot_flight_plan_identity: tuple | None = None
         self._pivot_opening_assessment: VisionPivotOpeningAssessment | None = None
@@ -811,6 +813,7 @@ class SymbolRuntime:
             timestamp=timestamp,
         )
         self._record_option_paper_journal_if_available()
+        self._sync_paper_checkpoint()
 
     def build_market_context(
         self,
@@ -1178,6 +1181,7 @@ class SymbolRuntime:
         self._last_closed_candles_by_timeframe = {}
         self._vision_method_snapshot = None
         self._vision_method_validation_report = None
+        self._vision_decision_provenance = "LIVE"
         self._pivot_flight_plan = None
         self._pivot_flight_plan_identity = None
         self._pivot_opening_assessment = None
@@ -1303,6 +1307,7 @@ class SymbolRuntime:
             trade_journal_v1=self.trade_journal_v1_engine.snapshot(),
             vision_method_snapshot=self._vision_method_snapshot,
             vision_method_validation_report=self._vision_method_validation_report,
+            vision_decision_provenance=self._vision_decision_provenance,
             pivot_flight_plan=pivot_flight_plan,
             pivot_opening_assessment=pivot_opening_assessment,
             pivot_confluence_context=pivot_confluence_context,
@@ -1821,15 +1826,15 @@ class SymbolRuntime:
             for candle in candles:
                 self._processed_vision_decision_identities.add(self._vision_decision_identity(candle))
             self._record_decision_audit(
-                "Vision Method",
-                "Feed recovery closed multiple Vision decision candles at once; catch-up candles were retained as history only.",
+                "HISTORICAL_CATCHUP",
+                "Feed recovery closed multiple Vision decision candles at once; recovered decision candles were retained as history only.",
                 rejected=True,
             )
             return
         for candle in candles:
             self._process_runtime_vision_decision_candle(candle)
 
-    def _process_runtime_vision_decision_candle(self, candle: Candle) -> None:
+    def _process_runtime_vision_decision_candle(self, candle: Candle, *, allow_trade: bool = True, provenance: str = "LIVE") -> None:
         if candle.timeframe != self._vision_decision_timeframe.value:
             raise ValueError("Vision decision source candle timeframe mismatch.")
         trading_date = self._exchange_session_date(candle.end_time)
@@ -1863,6 +1868,10 @@ class SymbolRuntime:
                     rejected=True,
                 )
                 return
+            self._vision_decision_provenance = provenance
+            if not allow_trade:
+                self._observe_vision_method_recovery_context(assembly.snapshot, assembly.report)
+                return
             self.process_vision_method_paper_trade(assembly.snapshot, assembly.report)
         except Exception as exc:
             self._record_decision_audit(
@@ -1873,6 +1882,28 @@ class SymbolRuntime:
             raise
         finally:
             self._processed_vision_decision_identities.add(identity)
+
+    def _observe_vision_method_recovery_context(
+        self,
+        snapshot: VisionMethodSnapshot,
+        validation_report: VisionMethodValidationReport,
+    ) -> None:
+        self._vision_method_snapshot = snapshot
+        self._vision_method_validation_report = validation_report
+        candidate = adapt_vision_method_to_trade_candidate(snapshot, validation_report)
+        self._vision_trade_candidate = candidate
+        self._vision_ai_explanation = _vision_method_explanation(candidate, validation_report)
+        self._vision_strategy_decision_v2 = None
+        self._option_trade_candidate = None
+        self._option_selection_diagnostics = ()
+        self._option_paper_risk = None
+        self._record_decision_audit(
+            "RECOVERY_CONTEXT",
+            "Recovery-context Vision analysis refreshed display and forensics without opening a stale paper option position.",
+            rejected=True,
+            vision_trade_candidate=candidate,
+        )
+        self._record_vision_forensic_trace(snapshot, validation_report, candidate)
 
     def _vision_decision_identity(self, candle: Candle) -> str:
         trading_date = self._exchange_session_date(candle.end_time)
@@ -2021,6 +2052,7 @@ class SymbolRuntime:
     ) -> TradeCandidate:
         self._vision_method_snapshot = snapshot
         self._vision_method_validation_report = validation_report
+        self._vision_decision_provenance = "LIVE"
         candidate = adapt_vision_method_to_trade_candidate(snapshot, validation_report)
         self._vision_trade_candidate = candidate
         self._vision_ai_explanation = _vision_method_explanation(candidate, validation_report)
@@ -2140,6 +2172,7 @@ class SymbolRuntime:
             return
         self._option_paper_position = open_option_paper_position(risk)
         self._record_option_paper_journal_if_available()
+        self._sync_paper_checkpoint()
         self._record_decision_audit(
             "PAPER_POSITION_OPENED",
             "OSE-1 directional option-selling paper chain accepted the candidate.",
@@ -2787,6 +2820,7 @@ class SymbolRuntime:
         return lifecycle.position_snapshot.active_position
 
     def _canonical_paper_position(self) -> RuntimePaperPositionSnapshot | None:
+        self._restore_option_paper_position_from_checkpoint()
         if self._option_paper_position is not None:
             position = self._option_paper_position
             risk = self._option_paper_risk
@@ -2881,6 +2915,29 @@ class SymbolRuntime:
 
 
     def _sync_paper_checkpoint(self) -> None:
+        if self._option_paper_position is not None:
+            date_value = _market_date(self._option_paper_position.updated_at)
+            if date_value is None:
+                return
+            if self._option_paper_position.status is not OptionPaperPositionStatus.OPEN:
+                self.trade_journal_v1_engine.clear_checkpoint()
+                self._paper_recovery = self.trade_journal_v1_engine.load_checkpoint(
+                    expected_instrument=self._core_instrument,
+                    trading_date=date_value,
+                )
+                return
+            checkpoint = self.trade_journal_v1_engine.save_checkpoint(
+                self._option_paper_position,
+                trading_date=date_value,
+                exchange=self._configuration.exchange,
+                timeframe=self._vision_decision_timeframe.value,
+            )
+            if checkpoint is not None:
+                self._paper_recovery = self.trade_journal_v1_engine.load_checkpoint(
+                    expected_instrument=self._core_instrument,
+                    trading_date=date_value,
+                )
+            return
         canonical = self._canonical_paper_position()
         if canonical is None:
             return
@@ -2900,6 +2957,22 @@ class SymbolRuntime:
         )
         if checkpoint is not None:
             self._paper_recovery = self.trade_journal_v1_engine.load_checkpoint(expected_instrument=self._core_instrument, trading_date=date_value)
+
+    def _restore_option_paper_position_from_checkpoint(self) -> None:
+        if self._option_paper_position is not None:
+            return
+        if self._vision_trade_candidate is not None or self._option_trade_candidate is not None or self._option_paper_risk is not None:
+            return
+        checkpoint = self._recovered_checkpoint()
+        if checkpoint is None or getattr(checkpoint, "execution_style", None) != "DIRECTIONAL_OPTION_SELLING_PAPER":
+            return
+        try:
+            self._option_paper_position = option_paper_position_from_checkpoint(checkpoint)
+        except Exception as exc:
+            self._record_decision_audit(
+                "OPTION_PAPER_RECOVERY",
+                f"Directional option paper checkpoint could not be restored: {_safe_error(exc)}",
+            )
 
     def _paper_recovery_status(self) -> str:
         recovery = self._paper_recovery

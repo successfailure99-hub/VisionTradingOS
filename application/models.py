@@ -756,6 +756,7 @@ class RuntimeSnapshot:
     vision_method_snapshot: VisionMethodSnapshot | None = None
     vision_method_validation_report: VisionMethodValidationReport | None = None
     vision_trade_candidate: TradeCandidate | None = None
+    vision_decision_provenance: str = "LIVE"
     option_trade_candidate: OptionTradeCandidate | None = None
     option_selection_diagnostics: tuple[OptionContractSelectionDiagnostic, ...] = ()
     option_paper_risk: OptionPaperRiskSnapshot | None = None
@@ -838,6 +839,11 @@ class RuntimeSnapshot:
             raise TypeError("vision_method_snapshot must be VisionMethodSnapshot or None")
         if self.vision_method_validation_report is not None and not isinstance(self.vision_method_validation_report, VisionMethodValidationReport):
             raise TypeError("vision_method_validation_report must be VisionMethodValidationReport or None")
+        object.__setattr__(
+            self,
+            "vision_decision_provenance",
+            _normalize_vision_forensic_text(self.vision_decision_provenance, "vision_decision_provenance"),
+        )
         if self.pivot_flight_plan is not None and not isinstance(self.pivot_flight_plan, VisionPivotFlightPlan):
             raise TypeError("pivot_flight_plan must be VisionPivotFlightPlan or None")
         if self.pivot_opening_assessment is not None and not isinstance(self.pivot_opening_assessment, VisionPivotOpeningAssessment):

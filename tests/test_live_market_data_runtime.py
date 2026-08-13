@@ -8,7 +8,7 @@ from threading import RLock
 import pytest
 
 from application.bootstrap import ApplicationBootstrap
-from application.live_market_data import LiveMarketDataConfiguration, LiveMarketDataRuntime, LiveMarketDataRuntimeStatus
+from application.live_market_data import LiveFeedWatchdogState, LiveMarketDataConfiguration, LiveMarketDataRuntime, LiveMarketDataRuntimeStatus
 from brokers.zerodha.auth import ZerodhaCredentials, ZerodhaSessionManager
 from brokers.zerodha.market_data import ZerodhaInstrumentSubscription, ZerodhaWebSocketStatus, ZerodhaWebSocketManager
 from core.enums.exchange import Exchange
@@ -61,8 +61,10 @@ def sub(instrument=Instrument.NIFTY, token=101):
     return ZerodhaInstrumentSubscription(token, instrument, Exchange.NSE)
 
 
-def config(subscription=sub()):
-    return LiveMarketDataConfiguration("api_key_secret", (subscription,))
+def config(subscription=sub(), **overrides):
+    values = {"api_key": "api_key_secret", "subscriptions": (subscription,)}
+    values.update(overrides)
+    return LiveMarketDataConfiguration(**values)
 
 
 def auth(expires_at=NOW + timedelta(hours=1)):
@@ -79,26 +81,36 @@ def lifecycle(running=True):
     return manager
 
 
-def runtime(app=None, session=None, configuration=None, ticker=None):
+def runtime(app=None, session=None, configuration=None, ticker=None, clock=None):
     app = app or lifecycle()
     session = session or auth()
     configuration = configuration or config()
     ticker = ticker or FakeTickerClient()
+    clock = clock or (lambda: NOW)
     websocket = ZerodhaWebSocketManager(
         api_key=configuration.api_key,
         session=session.session,
         tick_consumer=app.orchestrator.process_tick,
         subscriptions=configuration.subscriptions,
         client=ticker,
-        clock=lambda: NOW,
+        clock=clock,
     )
     return LiveMarketDataRuntime(
         lifecycle=app,
         session_manager=session,
         configuration=configuration,
         websocket_manager=websocket,
-        clock=lambda: NOW,
+        clock=clock,
     ), ticker
+
+
+def raw_tick(timestamp, *, price=25000.0, volume=100):
+    return {
+        "instrument_token": 101,
+        "last_price": price,
+        "exchange_timestamp": timestamp,
+        "volume": volume,
+    }
 
 
 def test_validate_requires_running_lifecycle_authenticated_session_and_matching_config():
@@ -170,3 +182,71 @@ def test_start_errors_are_redacted():
 
     assert "api_key_secret" not in subject.snapshot().last_error
     assert "access_secret" not in subject.snapshot().last_error
+
+
+def test_watchdog_detects_silent_stall_drives_retry_and_requires_fresh_tick(tmp_path):
+    current = [datetime(2026, 7, 15, 4, 0, tzinfo=UTC)]
+    subject, ticker = runtime(
+        session=auth(current[0] + timedelta(hours=1)),
+        configuration=config(stale_data_seconds=120, feed_trace_path=tmp_path / "feed.jsonl"),
+        clock=lambda: current[0],
+    )
+    subject.start()
+    ticker.callbacks["on_connect"](None, {})
+
+    waiting = subject.poll_watchdog()
+    assert waiting.watchdog_state is LiveFeedWatchdogState.WAITING_FIRST_TICK
+    assert waiting.watchdog_blocks_decisions is False
+
+    ticker.callbacks["on_ticks"](None, (raw_tick(current[0], price=25000.0, volume=100),))
+    healthy = subject.poll_watchdog()
+    assert healthy.watchdog_state is LiveFeedWatchdogState.HEALTHY
+
+    current[0] = current[0] + timedelta(seconds=121)
+    stale = subject.poll_watchdog()
+    assert stale.watchdog_state is LiveFeedWatchdogState.RECONNECT_SCHEDULED
+    assert stale.watchdog_blocks_decisions is True
+    assert subject.websocket_manager.snapshot().status is ZerodhaWebSocketStatus.RECONNECT_WAIT
+
+    before_due = subject.poll_watchdog()
+    assert ticker.connect_calls == 1
+    assert before_due.watchdog_state is LiveFeedWatchdogState.RECONNECT_SCHEDULED
+
+    current[0] = current[0] + timedelta(seconds=2)
+    reconnecting = subject.poll_watchdog()
+    assert ticker.connect_calls == 2
+    assert reconnecting.watchdog_state is LiveFeedWatchdogState.RECONNECTING
+    ticker.callbacks["on_connect"](None, {})
+
+    verifying = subject.poll_watchdog()
+    assert verifying.watchdog_state is LiveFeedWatchdogState.VERIFYING_FRESH_TICK
+    assert verifying.watchdog_blocks_decisions is True
+
+    ticker.callbacks["on_ticks"](None, (raw_tick(current[0], price=25001.0, volume=100),))
+    recovered = subject.poll_watchdog()
+    assert recovered.watchdog_state is LiveFeedWatchdogState.RECOVERED
+    assert recovered.watchdog_blocks_decisions is False
+
+    trace = (tmp_path / "feed.jsonl").read_text(encoding="utf-8")
+    assert "STALL_DETECTED" in trace
+    assert "RECONNECT_SCHEDULED" in trace
+    assert "FRESH_TICK_CONFIRMED" in trace
+    assert "api_key_secret" not in trace
+    assert "access_secret" not in trace
+
+
+def test_watchdog_does_not_recover_outside_active_session(tmp_path):
+    current = [datetime(2026, 7, 18, 4, 0, tzinfo=UTC)]
+    subject, ticker = runtime(
+        session=auth(current[0] + timedelta(hours=1)),
+        configuration=config(stale_data_seconds=1, feed_trace_path=tmp_path / "feed.jsonl"),
+        clock=lambda: current[0],
+    )
+    subject.start()
+    ticker.callbacks["on_connect"](None, {})
+    ticker.callbacks["on_ticks"](None, (raw_tick(datetime(2026, 7, 15, 4, 0, tzinfo=UTC)),))
+
+    snapshot = subject.poll_watchdog()
+    assert snapshot.watchdog_state is LiveFeedWatchdogState.MARKET_CLOSED
+    assert subject.websocket_manager.snapshot().status is ZerodhaWebSocketStatus.CONNECTED
+    assert ticker.connect_calls == 1

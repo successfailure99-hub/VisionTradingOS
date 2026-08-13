@@ -9,9 +9,11 @@ from core.event_bus import EventBus
 from core.enums.instrument import Instrument
 from dashboard.presenters import build_position_view
 from engines.trade_journal_v1 import PaperRecoveryStatus, TradeJournalV1Configuration, TradeJournalV1Engine
-from engines.trade_journal_v1.persistence import TradeJournalPersistence, TradeJournalQuery
+from engines.option_paper_execution import OptionPaperPositionStatus
+from engines.trade_journal_v1.persistence import TradeJournalPersistence, TradeJournalQuery, option_paper_position_from_checkpoint
 from tests.test_trade_journal_v1_integration import closed_lifecycle
 from tests.test_vision_method_validation_v1 import NOW, snapshot
+from tests.test_directional_option_selling_paper_execution_v1 import _option_position_for_journal
 from tests.test_vision_paper_trading_integration_v1 import process, tick
 
 
@@ -115,6 +117,24 @@ def test_checkpoint_created_updated_and_restored_same_session(tmp_path):
     assert engine.checkpoint_exists is True
 
 
+def test_option_paper_checkpoint_round_trips_full_execution_contract(tmp_path):
+    engine = journal_engine(tmp_path)
+    opened = _option_position_for_journal()
+
+    checkpoint = engine.save_checkpoint(opened, trading_date=NOW.date())
+    restored = engine.load_checkpoint(expected_instrument=Instrument.NIFTY, trading_date=NOW.date())
+    restored_position = option_paper_position_from_checkpoint(restored.checkpoint)
+
+    assert checkpoint.execution_style == "DIRECTIONAL_OPTION_SELLING_PAPER"
+    assert checkpoint.instrument_type == "OPTION"
+    assert checkpoint.option_position_reference == opened.position_id
+    assert restored.status is PaperRecoveryStatus.RESTORED
+    assert restored_position.position_id == opened.position_id
+    assert restored_position.status is OptionPaperPositionStatus.OPEN
+    assert restored_position.candidate == replace(opened.candidate, selection_diagnostics=())
+    assert restored_position.risk == replace(opened.risk, candidate=restored_position.candidate)
+
+
 def test_next_session_stale_checkpoint_is_closed_before_shutdown(tmp_path):
     engine = journal_engine(tmp_path)
     engine.save_checkpoint(runtime_position(), trading_date=NOW.date())
@@ -195,6 +215,26 @@ def test_runtime_checkpoint_dashboard_and_journal_state_align(tmp_path):
     assert opened.journal_persistence.active_checkpoint_status == "ACTIVE"
     assert opened.journal_persistence.recovery_status == "RESTORED"
     assert opened.canonical_paper_position.recovery_status == "RESTORED"
+
+
+def test_runtime_restores_option_paper_checkpoint_as_canonical_option_position(tmp_path):
+    item = runtime_with_durable_journal(tmp_path)
+    opened = _option_position_for_journal()
+    item.trade_journal_v1_engine.save_checkpoint(opened, trading_date=NOW.date())
+    item._paper_recovery = item.trade_journal_v1_engine.load_checkpoint(
+        expected_instrument=Instrument.NIFTY,
+        trading_date=NOW.date(),
+    )
+    item._last_tick = tick(timestamp=NOW)
+
+    runtime = item.snapshot()
+
+    assert item._option_paper_position.position_id == opened.position_id
+    assert runtime.option_paper_position.position_id == opened.position_id
+    assert runtime.canonical_paper_position is not None
+    assert runtime.canonical_paper_position.trade_id == opened.position_id
+    assert runtime.canonical_paper_position.source == "VISION_METHOD_OPTION_SELLING_PAPER"
+    assert runtime.canonical_paper_position.status == OptionPaperPositionStatus.OPEN.value
 
 
 def test_runtime_recovered_checkpoint_is_not_canonical_after_session_rollover(tmp_path):

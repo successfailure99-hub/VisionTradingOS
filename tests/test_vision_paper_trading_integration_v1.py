@@ -4,8 +4,10 @@ from pathlib import Path
 
 from application import RuntimeConfiguration, RuntimeInstrument, SymbolRuntime
 from core.models.daily_ohlc import DailyOHLC
+from core.models.candle import Candle
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
+from core.enums.timeframe import TimeFrame
 from core.event_bus import EventBus
 from core.models.tick import Tick
 from dashboard.presenters import build_journal_view, build_position_view
@@ -28,6 +30,20 @@ def tick(price=100.0, *, timestamp=NOW):
         bid_price=price - 0.1,
         ask_price=price + 0.1,
         open_interest=0,
+    )
+
+
+def candle(start, end, *, close=100.0, timeframe="5m"):
+    return Candle(
+        symbol=Instrument.NIFTY.value,
+        timeframe=timeframe,
+        start_time=start,
+        end_time=end,
+        open=close - 1.0,
+        high=close + 1.0,
+        low=close - 2.0,
+        close=close,
+        volume=100,
     )
 
 
@@ -385,6 +401,29 @@ def test_duplicate_refresh_and_reconnect_do_not_duplicate_vision_position():
     assert second.trade_lifecycle_v1.position_open_count == 1
     assert second.trade_lifecycle_v1.processing_count == first.trade_lifecycle_v1.processing_count
     assert second.paper_trading.position is None
+
+
+def test_multi_candle_recovery_keeps_catchup_history_without_fake_trade_decision():
+    item = runtime()
+    item._vision_decision_timeframe = TimeFrame.FIVE_MINUTES
+    first = candle(NOW.replace(hour=9, minute=15), NOW.replace(hour=9, minute=20), close=100.0)
+    second = candle(NOW.replace(hour=9, minute=20), NOW.replace(hour=9, minute=25), close=101.0)
+    latest = candle(NOW.replace(hour=9, minute=25), NOW.replace(hour=9, minute=30), close=102.0)
+    item._last_closed_candles_by_timeframe[item._vision_decision_timeframe] = (first, second, latest)
+    calls = []
+
+    def spy(candle_item, *, allow_trade=True, provenance="LIVE"):
+        calls.append((candle_item, allow_trade, provenance))
+
+    item._process_runtime_vision_decision_candle = spy
+
+    item._process_runtime_vision_decision_candles((item._vision_decision_timeframe,))
+
+    assert item._vision_decision_identity(first) in item._processed_vision_decision_identities
+    assert item._vision_decision_identity(second) in item._processed_vision_decision_identities
+    assert item._vision_decision_identity(latest) in item._processed_vision_decision_identities
+    assert calls == []
+    assert item._decision_audit.rejected_at == "HISTORICAL_CATCHUP"
 
 
 def test_non_actionable_candidate_has_no_canonical_paper_position():

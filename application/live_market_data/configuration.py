@@ -3,6 +3,7 @@ Live market-data runtime configuration.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from brokers.zerodha.market_data import ZerodhaInstrumentSubscription
 
@@ -17,6 +18,8 @@ class LiveMarketDataConfiguration:
     api_key: str
     subscriptions: tuple[ZerodhaInstrumentSubscription, ...]
     auto_connect: bool = False
+    stale_data_seconds: int = 120
+    feed_trace_path: Path | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.api_key, str):
@@ -26,6 +29,12 @@ class LiveMarketDataConfiguration:
             raise ValueError("api_key must be a non-empty string")
         if not isinstance(self.auto_connect, bool):
             raise TypeError("auto_connect must be bool")
+        if isinstance(self.stale_data_seconds, bool) or not isinstance(self.stale_data_seconds, int):
+            raise TypeError("stale_data_seconds must be an integer")
+        if self.stale_data_seconds <= 0:
+            raise ValueError("stale_data_seconds must be positive")
+        if self.feed_trace_path is not None:
+            object.__setattr__(self, "feed_trace_path", Path(self.feed_trace_path))
         subscriptions = tuple(self.subscriptions)
         if not subscriptions:
             raise ValueError("at least one subscription is required")

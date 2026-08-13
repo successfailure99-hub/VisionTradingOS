@@ -310,6 +310,54 @@ class ActivePaperPositionCheckpoint:
     created_at: datetime
     updated_at: datetime
     checkpoint_version: int = 1
+    instrument_type: str = "UNDERLYING"
+    execution_style: str = "STRATEGY_DECISION_V2"
+    runtime_session_id: str | None = None
+    option_candidate_reference: str | None = None
+    option_position_reference: str | None = None
+    contract_trading_symbol: str | None = None
+    instrument_token: int | None = None
+    expiry: date | None = None
+    strike: float | None = None
+    option_type: str | None = None
+    transaction_type: str | None = None
+    moneyness: str | None = None
+    itm_steps: int | None = None
+    lots: int | None = None
+    lot_size: int | None = None
+    underlying_spot: float | None = None
+    premium_reference: float | None = None
+    bid: float | None = None
+    ask: float | None = None
+    spread: float | None = None
+    open_interest: int | None = None
+    volume: int | None = None
+    implied_volatility: float | None = None
+    delta: float | None = None
+    underlying_invalidation: str | None = None
+    underlying_target_context: str | None = None
+    selection_score: float | None = None
+    selection_policy: str | None = None
+    selection_reasoning: tuple[str, ...] = ()
+    option_candidate_status: str | None = None
+    risk_decision: str | None = None
+    requested_lots: int | None = None
+    approved_lots: int | None = None
+    approved_quantity: int | None = None
+    risk_per_unit: float | None = None
+    reward_per_unit: float | None = None
+    planned_rupee_risk: float | None = None
+    planned_rupee_reward: float | None = None
+    paper_capital: float | None = None
+    margin_available: float | None = None
+    option_risk_reason: str | None = None
+    option_risk_warnings: tuple[str, ...] = ()
+    current_premium: float | None = None
+    exit_premium: float | None = None
+    closed_at: datetime | None = None
+    realized_pnl: float | None = None
+    total_pnl: float | None = None
+    exit_reason: str | None = None
 
     def __post_init__(self) -> None:
         _non_empty(self.trade_id, "trade_id")
@@ -342,6 +390,61 @@ class ActivePaperPositionCheckpoint:
         _positive_int(self.quantity, "quantity")
         object.__setattr__(self, "unrealized_pnl", _finite_real(self.unrealized_pnl, "unrealized_pnl"))
         _positive_int(self.checkpoint_version, "checkpoint_version")
+        object.__setattr__(self, "instrument_type", _non_empty(self.instrument_type, "instrument_type"))
+        object.__setattr__(self, "execution_style", _non_empty(self.execution_style, "execution_style"))
+        for name in (
+            "runtime_session_id",
+            "option_candidate_reference",
+            "option_position_reference",
+            "contract_trading_symbol",
+            "option_type",
+            "transaction_type",
+            "moneyness",
+            "underlying_invalidation",
+            "underlying_target_context",
+            "selection_policy",
+            "option_candidate_status",
+            "risk_decision",
+            "option_risk_reason",
+            "exit_reason",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, _non_empty(value, name))
+        if self.expiry is not None and (not isinstance(self.expiry, date) or isinstance(self.expiry, datetime)):
+            raise TypeError("expiry must be date or None")
+        if self.closed_at is not None:
+            _aware(self.closed_at, "closed_at")
+        for name in ("instrument_token", "itm_steps", "lots", "lot_size", "open_interest", "volume", "requested_lots", "approved_lots", "approved_quantity"):
+            value = getattr(self, name)
+            if value is not None:
+                _non_negative_int(value, name)
+        for name in (
+            "strike",
+            "underlying_spot",
+            "premium_reference",
+            "bid",
+            "ask",
+            "spread",
+            "implied_volatility",
+            "delta",
+            "selection_score",
+            "risk_per_unit",
+            "reward_per_unit",
+            "planned_rupee_risk",
+            "planned_rupee_reward",
+            "paper_capital",
+            "margin_available",
+            "current_premium",
+            "exit_premium",
+            "realized_pnl",
+            "total_pnl",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, _finite_real(value, name))
+        object.__setattr__(self, "selection_reasoning", _strings(self.selection_reasoning, "selection_reasoning"))
+        object.__setattr__(self, "option_risk_warnings", _strings(self.option_risk_warnings, "option_risk_warnings"))
 
 
 @dataclass(frozen=True, slots=True)

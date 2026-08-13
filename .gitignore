@@ -50,4 +50,5 @@ dist/
 # Runtime journal/checkpoint artifacts
 /data/trade_journal_v1/
 /data/vision_forensics/
+/data/feed_forensics/
 /runtime/

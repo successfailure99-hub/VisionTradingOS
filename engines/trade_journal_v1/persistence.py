@@ -12,8 +12,24 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Iterator
 
+from application.enums import RuntimeInstrument
 from core.enums.instrument import Instrument
-from engines.option_paper_execution.models import OptionPaperPositionSnapshot
+from core.enums.exchange import Exchange
+from core.enums.timeframe import TimeFrame
+from engines.option_chain.enums import OptionType
+from engines.option_paper_execution.enums import (
+    OptionPaperMoneyness,
+    OptionPaperPositionStatus,
+    OptionPaperRiskDecision,
+    OptionPaperSelectionPolicy,
+    OptionPaperTransactionType,
+    OptionPaperUnderlyingDirection,
+)
+from engines.option_paper_execution.models import (
+    OptionPaperPositionSnapshot,
+    OptionPaperRiskSnapshot,
+    OptionTradeCandidate,
+)
 from engines.position_management_v1.enums import PositionExitReason
 from engines.trade_journal_v1.enums import PaperRecoveryStatus, TradeOutcome
 from engines.trade_journal_v1.models import (
@@ -336,6 +352,205 @@ def checkpoint_from_runtime_position(position, *, trading_date: date, exchange: 
     )
 
 
+def checkpoint_from_option_paper_position(position: OptionPaperPositionSnapshot, *, trading_date: date) -> ActivePaperPositionCheckpoint:
+    if not isinstance(position, OptionPaperPositionSnapshot):
+        raise TypeError("position must be OptionPaperPositionSnapshot")
+    candidate = position.candidate
+    risk = position.risk
+    return ActivePaperPositionCheckpoint(
+        trade_id=position.position_id,
+        instrument=Instrument(candidate.underlying.value),
+        exchange=candidate.exchange.value,
+        timeframe=candidate.decision_timeframe.value,
+        trading_date=trading_date,
+        candidate_identity=candidate.source_trade_candidate_reference,
+        candidate_state="option_paper",
+        direction=candidate.underlying_direction.value,
+        entry_timestamp=position.opened_at,
+        entry_price=position.entry_premium,
+        quantity=position.quantity,
+        stop_price=risk.stop_premium,
+        target_price=risk.target_premium,
+        last_market_timestamp=position.updated_at,
+        lifecycle_state="option_paper",
+        position_state=position.status.value,
+        unrealized_pnl=position.unrealized_pnl,
+        vision_method_snapshot_reference=candidate.source_vision_reference,
+        vision_method_validation_reference=candidate.source_trade_candidate_reference,
+        trade_candidate_reference=candidate.source_trade_candidate_reference,
+        risk_reference=f"OSE1:{risk.decision.value}",
+        created_at=position.opened_at,
+        updated_at=position.updated_at,
+        instrument_type="OPTION",
+        execution_style="DIRECTIONAL_OPTION_SELLING_PAPER",
+        runtime_session_id=candidate.runtime_session_id,
+        option_candidate_reference=candidate.candidate_id,
+        option_position_reference=position.position_id,
+        contract_trading_symbol=candidate.trading_symbol,
+        instrument_token=candidate.instrument_token,
+        expiry=candidate.expiry,
+        strike=candidate.strike,
+        option_type=candidate.option_type.value,
+        transaction_type=candidate.transaction_type.value,
+        moneyness=candidate.moneyness.value,
+        itm_steps=candidate.itm_steps,
+        lots=position.lots,
+        lot_size=candidate.lot_size,
+        underlying_spot=candidate.underlying_spot,
+        premium_reference=candidate.premium_reference,
+        bid=candidate.bid,
+        ask=candidate.ask,
+        spread=candidate.spread,
+        open_interest=candidate.open_interest,
+        volume=candidate.volume,
+        implied_volatility=candidate.implied_volatility,
+        delta=candidate.delta,
+        underlying_invalidation=candidate.underlying_invalidation,
+        underlying_target_context=candidate.underlying_target_context,
+        selection_score=candidate.selection_score,
+        selection_policy=candidate.selection_policy.value,
+        selection_reasoning=candidate.selection_reasoning,
+        option_candidate_status=candidate.status,
+        risk_decision=risk.decision.value,
+        requested_lots=risk.requested_lots,
+        approved_lots=risk.approved_lots,
+        approved_quantity=risk.approved_quantity,
+        risk_per_unit=risk.risk_per_unit,
+        reward_per_unit=risk.reward_per_unit,
+        planned_rupee_risk=risk.planned_rupee_risk,
+        planned_rupee_reward=risk.planned_rupee_reward,
+        paper_capital=risk.paper_capital,
+        margin_available=risk.margin_available,
+        option_risk_reason=risk.reason,
+        option_risk_warnings=risk.warnings,
+        current_premium=position.current_premium,
+        exit_premium=position.exit_premium,
+        closed_at=position.closed_at,
+        realized_pnl=position.realized_pnl,
+        total_pnl=position.total_pnl,
+        exit_reason=position.exit_reason,
+    )
+
+
+def option_paper_position_from_checkpoint(checkpoint: ActivePaperPositionCheckpoint) -> OptionPaperPositionSnapshot:
+    if not isinstance(checkpoint, ActivePaperPositionCheckpoint):
+        raise TypeError("checkpoint must be ActivePaperPositionCheckpoint")
+    if checkpoint.execution_style != "DIRECTIONAL_OPTION_SELLING_PAPER":
+        raise ValueError("checkpoint is not a directional option paper position")
+    required = {
+        "runtime_session_id": checkpoint.runtime_session_id,
+        "option_candidate_reference": checkpoint.option_candidate_reference,
+        "contract_trading_symbol": checkpoint.contract_trading_symbol,
+        "instrument_token": checkpoint.instrument_token,
+        "expiry": checkpoint.expiry,
+        "strike": checkpoint.strike,
+        "option_type": checkpoint.option_type,
+        "transaction_type": checkpoint.transaction_type,
+        "moneyness": checkpoint.moneyness,
+        "itm_steps": checkpoint.itm_steps,
+        "lot_size": checkpoint.lot_size,
+        "underlying_spot": checkpoint.underlying_spot,
+        "premium_reference": checkpoint.premium_reference,
+        "open_interest": checkpoint.open_interest,
+        "volume": checkpoint.volume,
+        "underlying_invalidation": checkpoint.underlying_invalidation,
+        "underlying_target_context": checkpoint.underlying_target_context,
+        "selection_score": checkpoint.selection_score,
+        "selection_policy": checkpoint.selection_policy,
+        "option_candidate_status": checkpoint.option_candidate_status,
+        "risk_decision": checkpoint.risk_decision,
+        "requested_lots": checkpoint.requested_lots,
+        "approved_lots": checkpoint.approved_lots,
+        "approved_quantity": checkpoint.approved_quantity,
+        "risk_per_unit": checkpoint.risk_per_unit,
+        "reward_per_unit": checkpoint.reward_per_unit,
+        "planned_rupee_risk": checkpoint.planned_rupee_risk,
+        "planned_rupee_reward": checkpoint.planned_rupee_reward,
+        "paper_capital": checkpoint.paper_capital,
+        "option_risk_reason": checkpoint.option_risk_reason,
+        "current_premium": checkpoint.current_premium,
+        "realized_pnl": checkpoint.realized_pnl,
+        "total_pnl": checkpoint.total_pnl,
+        "exit_reason": checkpoint.exit_reason,
+    }
+    missing = tuple(name for name, value in required.items() if value is None)
+    if missing:
+        raise ValueError(f"option checkpoint missing fields: {', '.join(missing)}")
+    candidate = OptionTradeCandidate(
+        candidate_id=checkpoint.option_candidate_reference,
+        runtime_session_id=checkpoint.runtime_session_id,
+        trading_date=checkpoint.trading_date,
+        created_at=checkpoint.created_at,
+        underlying=RuntimeInstrument(checkpoint.instrument.value),
+        underlying_direction=OptionPaperUnderlyingDirection(checkpoint.direction),
+        underlying_spot=checkpoint.underlying_spot,
+        decision_timeframe=TimeFrame(checkpoint.timeframe),
+        source_vision_reference=checkpoint.vision_method_snapshot_reference,
+        source_trade_candidate_reference=checkpoint.trade_candidate_reference,
+        expiry=checkpoint.expiry,
+        strike=checkpoint.strike,
+        option_type=OptionType(checkpoint.option_type),
+        transaction_type=OptionPaperTransactionType(checkpoint.transaction_type),
+        moneyness=OptionPaperMoneyness(checkpoint.moneyness),
+        itm_steps=checkpoint.itm_steps,
+        trading_symbol=checkpoint.contract_trading_symbol,
+        instrument_token=checkpoint.instrument_token,
+        exchange=Exchange(checkpoint.exchange),
+        premium_reference=checkpoint.premium_reference,
+        bid=checkpoint.bid,
+        ask=checkpoint.ask,
+        spread=checkpoint.spread,
+        open_interest=checkpoint.open_interest,
+        volume=checkpoint.volume,
+        implied_volatility=checkpoint.implied_volatility,
+        delta=checkpoint.delta,
+        lot_size=checkpoint.lot_size,
+        underlying_invalidation=checkpoint.underlying_invalidation,
+        underlying_target_context=checkpoint.underlying_target_context,
+        selection_score=checkpoint.selection_score,
+        selection_reasoning=checkpoint.selection_reasoning,
+        status=checkpoint.option_candidate_status,
+        selection_policy=OptionPaperSelectionPolicy(checkpoint.selection_policy),
+    )
+    risk = OptionPaperRiskSnapshot(
+        candidate=candidate,
+        timestamp=checkpoint.updated_at,
+        decision=OptionPaperRiskDecision(checkpoint.risk_decision),
+        requested_lots=checkpoint.requested_lots,
+        approved_lots=checkpoint.approved_lots,
+        approved_quantity=checkpoint.approved_quantity,
+        entry_premium=checkpoint.entry_price,
+        stop_premium=checkpoint.stop_price,
+        target_premium=checkpoint.target_price,
+        risk_per_unit=checkpoint.risk_per_unit,
+        reward_per_unit=checkpoint.reward_per_unit,
+        planned_rupee_risk=checkpoint.planned_rupee_risk,
+        planned_rupee_reward=checkpoint.planned_rupee_reward,
+        paper_capital=checkpoint.paper_capital,
+        margin_available=checkpoint.margin_available,
+        reason=checkpoint.option_risk_reason,
+        warnings=checkpoint.option_risk_warnings,
+    )
+    return OptionPaperPositionSnapshot(
+        position_id=checkpoint.option_position_reference or checkpoint.trade_id,
+        candidate=candidate,
+        risk=risk,
+        status=OptionPaperPositionStatus(checkpoint.position_state),
+        opened_at=checkpoint.entry_timestamp,
+        updated_at=checkpoint.updated_at,
+        closed_at=checkpoint.closed_at,
+        entry_premium=checkpoint.entry_price,
+        current_premium=checkpoint.current_premium,
+        exit_premium=checkpoint.exit_premium,
+        quantity=checkpoint.quantity,
+        lots=checkpoint.lots,
+        unrealized_pnl=checkpoint.unrealized_pnl,
+        realized_pnl=checkpoint.realized_pnl,
+        total_pnl=checkpoint.total_pnl,
+        exit_reason=checkpoint.exit_reason,
+    )
+
+
 def _record_to_payload(record: VisionTradeJournalRecord) -> dict[str, object]:
     return _to_payload(record)
 
@@ -365,6 +580,12 @@ def _checkpoint_from_payload(payload: dict[str, object]) -> ActivePaperPositionC
     data["trading_date"] = date.fromisoformat(data["trading_date"])
     for name in ("entry_timestamp", "last_market_timestamp", "created_at", "updated_at"):
         data[name] = datetime.fromisoformat(data[name])
+    if data.get("expiry") is not None:
+        data["expiry"] = date.fromisoformat(data["expiry"])
+    if data.get("closed_at") is not None:
+        data["closed_at"] = datetime.fromisoformat(data["closed_at"])
+    data["selection_reasoning"] = tuple(data.get("selection_reasoning") or ())
+    data["option_risk_warnings"] = tuple(data.get("option_risk_warnings") or ())
     return ActivePaperPositionCheckpoint(**data)
 
 
