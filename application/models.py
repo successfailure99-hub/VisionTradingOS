@@ -45,6 +45,7 @@ from engines.option_chain.models import OptionChainSnapshot, OptionChainState
 from engines.option_chain_analytics.models import OptionChainAnalyticsSnapshot
 from engines.option_paper_execution.models import (
     DirectionalOptionSellingConfiguration,
+    OptionContractSelectionDiagnostic,
     OptionPaperPositionSnapshot,
     OptionPaperRiskSnapshot,
     OptionTradeCandidate,
@@ -756,6 +757,7 @@ class RuntimeSnapshot:
     vision_method_validation_report: VisionMethodValidationReport | None = None
     vision_trade_candidate: TradeCandidate | None = None
     option_trade_candidate: OptionTradeCandidate | None = None
+    option_selection_diagnostics: tuple[OptionContractSelectionDiagnostic, ...] = ()
     option_paper_risk: OptionPaperRiskSnapshot | None = None
     option_paper_position: OptionPaperPositionSnapshot | None = None
     canonical_paper_position: RuntimePaperPositionSnapshot | None = None
@@ -850,6 +852,10 @@ class RuntimeSnapshot:
             raise TypeError("price_action_trigger_stage_result must be VisionPriceActionTriggerStageResult or None")
         if self.option_trade_candidate is not None and not isinstance(self.option_trade_candidate, OptionTradeCandidate):
             raise TypeError("option_trade_candidate must be OptionTradeCandidate or None")
+        diagnostics = tuple(self.option_selection_diagnostics)
+        if any(not isinstance(item, OptionContractSelectionDiagnostic) for item in diagnostics):
+            raise TypeError("option_selection_diagnostics must contain OptionContractSelectionDiagnostic values")
+        object.__setattr__(self, "option_selection_diagnostics", diagnostics)
         if self.option_paper_risk is not None and not isinstance(self.option_paper_risk, OptionPaperRiskSnapshot):
             raise TypeError("option_paper_risk must be OptionPaperRiskSnapshot or None")
         if self.option_paper_position is not None and not isinstance(self.option_paper_position, OptionPaperPositionSnapshot):

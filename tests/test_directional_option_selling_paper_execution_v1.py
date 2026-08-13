@@ -19,6 +19,7 @@ from dashboard.presenters import build_position_view
 from engines.option_chain.enums import OptionType
 from engines.option_chain.models import OptionChainSnapshot, OptionLeg, OptionStrike
 from engines.option_paper_execution import (
+    OptionContractRejectionReason,
     DirectionalOptionSellingConfiguration,
     OptionPaperExecutionStyle,
     OptionPaperPositionStatus,
@@ -27,7 +28,7 @@ from engines.option_paper_execution import (
 )
 from engines.option_paper_execution.lifecycle import open_option_paper_position, update_option_paper_position
 from engines.option_paper_execution.risk import evaluate_option_paper_risk
-from engines.option_paper_execution.selector import build_directional_option_trade_candidate
+from engines.option_paper_execution.selector import OptionContractSelectionError, build_directional_option_trade_candidate
 from engines.runtime_adapter import TradeCandidateDirection, TradeCandidateState
 from engines.trade_journal_v1 import TradeJournalV1Configuration, TradeJournalV1Engine, TradeRecordStatus
 from engines.vision_method import (
@@ -144,6 +145,30 @@ def chain_snapshot(
             )
         )
     return OptionChainSnapshot("NIFTY", "NSE", expiry, timestamp, 25000.0, tuple(rows))
+
+
+def chain_with_put_quotes(quotes, *, timestamp=NOW):
+    rows = []
+    for strike, attrs in quotes.items():
+        bid = attrs.get("bid", attrs.get("last", 100.0))
+        ask = attrs.get("ask", bid + 1.0 if bid > 0 else None)
+        last = attrs.get("last", bid)
+        rows.append(
+            OptionStrike(
+                float(strike),
+                OptionLeg(OptionType.CALL, 110.0, 5000, 100, 200, 110.0, 111.0),
+                OptionLeg(
+                    OptionType.PUT,
+                    float(last),
+                    int(attrs.get("oi", 5000)),
+                    100,
+                    int(attrs.get("volume", 200)),
+                    None if bid is None else float(bid),
+                    None if ask is None else float(ask),
+                ),
+            )
+        )
+    return OptionChainSnapshot("NIFTY", "NSE", EXPIRY, timestamp, 25000.0, tuple(rows))
 
 
 def bearish_snapshot():
@@ -361,6 +386,60 @@ def test_preferred_itm_policy_can_select_itm_while_atm_is_valid():
     assert "preferred_itm_depth" in " ".join(option_trade.selection_reasoning)
 
 
+def test_best_liquid_policy_can_select_deeper_itm_on_quote_quality():
+    method = snapshot()
+    report = validate_vision_method(method)
+    trade = __import__("engines.runtime_adapter", fromlist=["adapt_vision_method_to_trade_candidate"]).adapt_vision_method_to_trade_candidate(method, report)
+
+    option_trade = build_directional_option_trade_candidate(
+        trade_candidate=trade,
+        vision_snapshot=method,
+        validation_report=report,
+        option_universe=universe(strikes=(24900, 25000, 25100, 25200)),
+        option_chain_snapshot=chain_with_put_quotes(
+            {
+                25000: {"bid": 100.0, "ask": 114.0, "oi": 10, "volume": 1},
+                25100: {"bid": 110.0, "ask": 111.0, "oi": 90000, "volume": 90000},
+                25200: {"bid": 120.0, "ask": 121.0, "oi": 50000, "volume": 50000},
+            }
+        ),
+        configuration=option_config(selection_policy=OptionPaperSelectionPolicy.BEST_LIQUID_VALID),
+        runtime_session_id="NIFTY:2026-08-03",
+        trading_date=NOW.date(),
+    )
+
+    assert option_trade.strike == 25100.0
+    assert option_trade.itm_steps == 1
+    assert option_trade.selection_policy is OptionPaperSelectionPolicy.BEST_LIQUID_VALID
+    assert any(item.strike == 25000.0 for item in option_trade.selection_diagnostics)
+    assert any("deterministic liquidity score" in reason for reason in option_trade.selection_reasoning)
+
+
+def test_best_liquid_policy_uses_depth_only_as_tie_break():
+    method = snapshot()
+    report = validate_vision_method(method)
+    trade = __import__("engines.runtime_adapter", fromlist=["adapt_vision_method_to_trade_candidate"]).adapt_vision_method_to_trade_candidate(method, report)
+
+    option_trade = build_directional_option_trade_candidate(
+        trade_candidate=trade,
+        vision_snapshot=method,
+        validation_report=report,
+        option_universe=universe(strikes=(24900, 25000, 25100)),
+        option_chain_snapshot=chain_with_put_quotes(
+            {
+                25000: {"bid": 100.0, "ask": 101.0, "oi": 5000, "volume": 200},
+                25100: {"bid": 100.0, "ask": 101.0, "oi": 5000, "volume": 200},
+            }
+        ),
+        configuration=option_config(selection_policy=OptionPaperSelectionPolicy.BEST_LIQUID_VALID),
+        runtime_session_id="NIFTY:2026-08-03",
+        trading_date=NOW.date(),
+    )
+
+    assert option_trade.strike == 25000.0
+    assert option_trade.itm_steps == 0
+
+
 def test_prepare_candidates_stale_expired_and_cross_session_option_data_are_rejected():
     method = snapshot()
     report = validate_vision_method(method)
@@ -411,6 +490,99 @@ def test_prepare_candidates_stale_expired_and_cross_session_option_data_are_reje
             runtime_session_id="NIFTY:2026-08-03",
             trading_date=NOW.date(),
         )
+
+
+def test_future_option_quote_is_rejected_with_typed_stage():
+    method = snapshot()
+    report = validate_vision_method(method)
+    trade = __import__("engines.runtime_adapter", fromlist=["adapt_vision_method_to_trade_candidate"]).adapt_vision_method_to_trade_candidate(method, report)
+
+    with pytest.raises(OptionContractSelectionError) as future:
+        build_directional_option_trade_candidate(
+            trade_candidate=trade,
+            vision_snapshot=method,
+            validation_report=report,
+            option_universe=universe(),
+            option_chain_snapshot=chain_snapshot(timestamp=NOW + timedelta(seconds=2)),
+            configuration=option_config(),
+            runtime_session_id="NIFTY:2026-08-03",
+            trading_date=NOW.date(),
+        )
+
+    assert future.value.stage == "OPTION_CHAIN_FUTURE"
+
+
+def test_stale_option_quote_is_rejected_without_absolute_age():
+    method = snapshot()
+    report = validate_vision_method(method)
+    trade = __import__("engines.runtime_adapter", fromlist=["adapt_vision_method_to_trade_candidate"]).adapt_vision_method_to_trade_candidate(method, report)
+
+    with pytest.raises(OptionContractSelectionError) as stale:
+        build_directional_option_trade_candidate(
+            trade_candidate=trade,
+            vision_snapshot=method,
+            validation_report=report,
+            option_universe=universe(),
+            option_chain_snapshot=chain_snapshot(timestamp=NOW - timedelta(seconds=61)),
+            configuration=option_config(maximum_quote_age_seconds=60.0),
+            runtime_session_id="NIFTY:2026-08-03",
+            trading_date=NOW.date(),
+        )
+
+    assert stale.value.stage == "OPTION_CHAIN_STALE"
+
+
+def test_naive_option_quote_timestamp_is_rejected_with_typed_stage():
+    method = snapshot()
+    report = validate_vision_method(method)
+    trade = __import__("engines.runtime_adapter", fromlist=["adapt_vision_method_to_trade_candidate"]).adapt_vision_method_to_trade_candidate(method, report)
+
+    with pytest.raises(OptionContractSelectionError) as naive:
+        build_directional_option_trade_candidate(
+            trade_candidate=trade,
+            vision_snapshot=method,
+            validation_report=report,
+            option_universe=universe(),
+            option_chain_snapshot=chain_snapshot(timestamp=NOW.replace(tzinfo=None)),
+            configuration=option_config(),
+            runtime_session_id="NIFTY:2026-08-03",
+            trading_date=NOW.date(),
+        )
+
+    assert naive.value.stage == "OPTION_CHAIN_TIMEZONE_MISMATCH"
+
+
+def test_no_valid_contract_returns_per_strike_diagnostics():
+    method = snapshot()
+    report = validate_vision_method(method)
+    trade = __import__("engines.runtime_adapter", fromlist=["adapt_vision_method_to_trade_candidate"]).adapt_vision_method_to_trade_candidate(method, report)
+
+    with pytest.raises(OptionContractSelectionError) as no_valid:
+        build_directional_option_trade_candidate(
+            trade_candidate=trade,
+            vision_snapshot=method,
+            validation_report=report,
+            option_universe=universe(strikes=(24900, 25000, 25100)),
+            option_chain_snapshot=chain_with_put_quotes(
+                {
+                    25000: {"bid": 0.0, "ask": None, "last": 0.0, "oi": 0, "volume": 0},
+                    25100: {"bid": 100.0, "ask": 130.0, "oi": 10, "volume": 0},
+                }
+            ),
+            configuration=option_config(minimum_open_interest=100, minimum_volume=100, maximum_spread_fraction=0.05),
+            runtime_session_id="NIFTY:2026-08-03",
+            trading_date=NOW.date(),
+        )
+
+    diagnostics = no_valid.value.diagnostics
+    assert no_valid.value.stage == "NO_VALID_ATM_ITM_CONTRACT"
+    assert len(diagnostics) == 4
+    by_strike = {item.strike: item for item in diagnostics if item.strike is not None}
+    assert OptionContractRejectionReason.INVALID_PREMIUM in by_strike[25000.0].rejection_reasons
+    assert OptionContractRejectionReason.OI_BELOW_MINIMUM in by_strike[25000.0].rejection_reasons
+    assert OptionContractRejectionReason.VOLUME_BELOW_MINIMUM in by_strike[25100.0].rejection_reasons
+    assert OptionContractRejectionReason.SPREAD_TOO_WIDE in by_strike[25100.0].rejection_reasons
+    assert any(OptionContractRejectionReason.OUTSIDE_UNIVERSE in item.rejection_reasons for item in diagnostics)
 
 
 def test_underlying_invalidation_closes_and_closed_position_is_not_updated_twice():
@@ -466,6 +638,43 @@ def test_symbol_runtime_directional_option_selling_stays_paper_only_and_has_no_s
     assert view.option_paper_position.position_id == view.canonical_paper_position.trade_id
     assert build_position_view(view).status == "Paper Option Position Open"
     assert build_position_view(view).last_price == view.option_paper_position.current_premium
+
+
+def test_symbol_runtime_exposes_option_selection_rejection_diagnostics():
+    item = SymbolRuntime(
+        EventBus(),
+        RuntimeConfiguration(
+            option_expiry_date=EXPIRY,
+            directional_option_selling_configuration=option_config(
+                minimum_open_interest=100,
+                minimum_volume=100,
+                maximum_spread_fraction=0.05,
+            ),
+        ),
+        RuntimeInstrument.NIFTY,
+    )
+    item.start()
+    item._last_tick = __import__("tests.test_vision_paper_trading_integration_v1", fromlist=["tick"]).tick()
+    item.set_option_universe(universe(strikes=(24900, 25000, 25100)))
+    item.process_option_chain(
+        chain_with_put_quotes(
+            {
+                25000: {"bid": 0.0, "ask": None, "last": 0.0, "oi": 0, "volume": 0},
+                25100: {"bid": 100.0, "ask": 130.0, "oi": 10, "volume": 0},
+            }
+        )
+    )
+
+    method = snapshot()
+    report = validate_vision_method(method)
+    item.process_vision_method_paper_trade(method, report)
+    view = item.snapshot()
+
+    assert view.option_trade_candidate is None
+    assert view.option_paper_position is None
+    assert view.decision_audit.rejected_at == "NO_VALID_ATM_ITM_CONTRACT"
+    assert view.option_selection_diagnostics
+    assert any(OptionContractRejectionReason.SPREAD_TOO_WIDE in item.rejection_reasons for item in view.option_selection_diagnostics)
 
 
 def test_symbol_runtime_marks_open_short_option_position_with_buy_to_close_ask():

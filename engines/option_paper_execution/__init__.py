@@ -3,6 +3,8 @@ Directional option-selling paper execution contracts.
 """
 
 from .enums import (
+    OptionContractRejectionReason,
+    OptionContractSelectionStatus,
     OptionPaperExecutionStyle,
     OptionPaperPositionStatus,
     OptionPaperRiskDecision,
@@ -13,6 +15,7 @@ from .enums import (
 )
 from .models import (
     DirectionalOptionSellingConfiguration,
+    OptionContractSelectionDiagnostic,
     OptionPaperPositionSnapshot,
     OptionPaperRiskSnapshot,
     OptionTradeCandidate,
@@ -20,6 +23,9 @@ from .models import (
 
 __all__ = [
     "DirectionalOptionSellingConfiguration",
+    "OptionContractRejectionReason",
+    "OptionContractSelectionDiagnostic",
+    "OptionContractSelectionStatus",
     "OptionPaperExecutionStyle",
     "OptionPaperMoneyness",
     "OptionPaperPositionSnapshot",

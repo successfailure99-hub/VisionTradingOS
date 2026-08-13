@@ -5,6 +5,7 @@ Desktop live option-chain integration helpers.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import deque
 from datetime import datetime
 from enum import Enum
 from math import isfinite
@@ -33,6 +34,7 @@ from engines.option_chain_analytics import OptionChainAnalyticsEngine
 
 
 SUPPORTED_OPTION_CHAIN_INSTRUMENTS = (Instrument.NIFTY, Instrument.BANKNIFTY, Instrument.SENSEX)
+OPTION_CHAIN_EVENT_CAPACITY = 128
 
 
 class DesktopOptionChainConfigurationError(RuntimeError):
@@ -141,7 +143,7 @@ class _MutableInstrumentState:
     last_updated_at: datetime | None = None
     last_error: str | None = None
     state: DesktopOptionChainRuntimeState = DesktopOptionChainRuntimeState.DISABLED
-    events: list[str] = None
+    events: deque[str] = None
     normalized_timestamp_count: int = 0
     naive_timestamps_localized: int = 0
     aware_timestamps_accepted: int = 0
@@ -153,7 +155,7 @@ class _MutableInstrumentState:
 
     def __post_init__(self) -> None:
         if self.events is None:
-            self.events = []
+            self.events = deque(maxlen=OPTION_CHAIN_EVENT_CAPACITY)
 
     def log(self, clock, message: str) -> None:
         timestamp = _safe_now(clock)
@@ -492,7 +494,7 @@ class DesktopOptionChainRuntimeManager:
             last_updated_at=state.last_updated_at,
             last_error=state.last_error,
             state=status,
-            events=tuple(state.events[-8:]),
+            events=tuple(state.events)[-8:],
             normalized_timestamp_count=state.normalized_timestamp_count,
             naive_timestamps_localized=state.naive_timestamps_localized,
             aware_timestamps_accepted=state.aware_timestamps_accepted,

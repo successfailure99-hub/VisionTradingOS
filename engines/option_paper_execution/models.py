@@ -15,6 +15,8 @@ from core.enums.timeframe import TimeFrame
 from engines.option_chain.enums import OptionType
 
 from .enums import (
+    OptionContractRejectionReason,
+    OptionContractSelectionStatus,
     OptionPaperExecutionStyle,
     OptionPaperMoneyness,
     OptionPaperPositionStatus,
@@ -23,6 +25,61 @@ from .enums import (
     OptionPaperTransactionType,
     OptionPaperUnderlyingDirection,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class OptionContractSelectionDiagnostic:
+    strike: float | None
+    option_type: OptionType
+    itm_steps: int
+    premium: float | None
+    bid: float | None
+    ask: float | None
+    spread: float | None
+    spread_fraction: float | None
+    open_interest: int | None
+    volume: int | None
+    status: OptionContractSelectionStatus
+    rejection_reasons: tuple[OptionContractRejectionReason, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.strike is not None:
+            object.__setattr__(self, "strike", _positive_real(self.strike, "strike"))
+        if not isinstance(self.option_type, OptionType):
+            raise TypeError("option_type must be OptionType")
+        _non_negative_int(self.itm_steps, "itm_steps")
+        for name in ("premium", "bid", "ask", "spread", "spread_fraction"):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, _finite_real(value, name))
+        if self.premium is not None and self.premium < 0:
+            raise ValueError("premium must be non-negative when supplied")
+        if self.bid is not None and self.bid < 0:
+            raise ValueError("bid must be non-negative when supplied")
+        if self.ask is not None and self.ask < 0:
+            raise ValueError("ask must be non-negative when supplied")
+        if self.spread is not None and self.spread < 0:
+            raise ValueError("spread must be non-negative when supplied")
+        if self.spread_fraction is not None and self.spread_fraction < 0:
+            raise ValueError("spread_fraction must be non-negative when supplied")
+        if self.bid is not None and self.ask is not None and self.bid > self.ask:
+            raise ValueError("diagnostic bid cannot exceed ask")
+        for name in ("open_interest", "volume"):
+            value = getattr(self, name)
+            if value is not None:
+                _non_negative_int(value, name)
+        if not isinstance(self.status, OptionContractSelectionStatus):
+            raise TypeError("status must be OptionContractSelectionStatus")
+        reasons = tuple(self.rejection_reasons)
+        if any(not isinstance(reason, OptionContractRejectionReason) for reason in reasons):
+            raise TypeError("rejection_reasons must contain OptionContractRejectionReason values")
+        if len(set(reasons)) != len(reasons):
+            raise ValueError("rejection_reasons cannot contain duplicates")
+        if self.status is OptionContractSelectionStatus.VALID:
+            reasons = (OptionContractRejectionReason.VALID,)
+        elif not reasons:
+            raise ValueError("rejected diagnostic requires at least one rejection reason")
+        object.__setattr__(self, "rejection_reasons", reasons)
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +177,8 @@ class OptionTradeCandidate:
     selection_score: float
     selection_reasoning: tuple[str, ...]
     status: str
+    selection_policy: OptionPaperSelectionPolicy = OptionPaperSelectionPolicy.ATM_FIRST
+    selection_diagnostics: tuple[OptionContractSelectionDiagnostic, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "candidate_id", _text(self.candidate_id, "candidate_id"))
@@ -167,6 +226,12 @@ class OptionTradeCandidate:
         _non_negative_int(self.volume, "volume")
         _positive_int(self.lot_size, "lot_size")
         object.__setattr__(self, "selection_reasoning", _strings(self.selection_reasoning, "selection_reasoning"))
+        if not isinstance(self.selection_policy, OptionPaperSelectionPolicy):
+            raise TypeError("selection_policy must be OptionPaperSelectionPolicy")
+        diagnostics = tuple(self.selection_diagnostics)
+        if any(not isinstance(item, OptionContractSelectionDiagnostic) for item in diagnostics):
+            raise TypeError("selection_diagnostics must contain OptionContractSelectionDiagnostic values")
+        object.__setattr__(self, "selection_diagnostics", diagnostics)
 
 
 @dataclass(frozen=True, slots=True)

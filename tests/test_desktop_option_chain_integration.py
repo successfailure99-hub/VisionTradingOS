@@ -16,6 +16,7 @@ from application.desktop_live_data import (
     create_dashboard_application,
     load_desktop_live_configuration,
 )
+from application.desktop_option_chain import OPTION_CHAIN_EVENT_CAPACITY
 from application.live_market_data import LiveMarketDataRuntimeFactory
 from core.enums.instrument import Instrument
 
@@ -455,6 +456,24 @@ def test_runtime_starts_stops_once_and_shutdown_is_idempotent():
     dashboard.shutdown()
     assert stack.live_integration.snapshot().stop_count == 1
     assert ticker.close_calls == 1
+
+
+def test_option_chain_runtime_events_are_bounded_and_latest_events_retained():
+    dashboard, ticker = create_dashboard()
+    ticker.callbacks["on_connect"](None, {})
+    manager = dashboard.live_option_chain_runtime
+    state = manager._instrument_state[Instrument.NIFTY]
+
+    for index in range(OPTION_CHAIN_EVENT_CAPACITY + 50):
+        state.log(lambda: NOW + timedelta(seconds=index), f"event-{index}")
+
+    snapshot = manager.snapshot()
+    nifty = next(item for item in snapshot.instruments if item.underlying is Instrument.NIFTY)
+    assert len(state.events) == OPTION_CHAIN_EVENT_CAPACITY
+    assert tuple(state.events)[0].endswith("event-50")
+    assert len(nifty.events) == 8
+    assert nifty.events[-1].endswith(f"event-{OPTION_CHAIN_EVENT_CAPACITY + 49}")
+    dashboard.shutdown()
 
 
 def test_provider_failure_is_safe_and_spot_runtime_remains_operational():

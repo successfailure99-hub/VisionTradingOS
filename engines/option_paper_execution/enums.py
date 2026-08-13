@@ -31,6 +31,22 @@ class OptionPaperSelectionPolicy(str, Enum):
     BEST_LIQUID_VALID = "best_liquid_valid"
 
 
+class OptionContractSelectionStatus(str, Enum):
+    VALID = "valid"
+    REJECTED = "rejected"
+
+
+class OptionContractRejectionReason(str, Enum):
+    OUTSIDE_UNIVERSE = "outside_universe"
+    MISSING_MARKET_STRIKE = "missing_market_strike"
+    MISSING_OPTION_LEG = "missing_option_leg"
+    INVALID_PREMIUM = "invalid_premium"
+    OI_BELOW_MINIMUM = "oi_below_minimum"
+    VOLUME_BELOW_MINIMUM = "volume_below_minimum"
+    SPREAD_TOO_WIDE = "spread_too_wide"
+    VALID = "valid"
+
+
 class OptionPaperRiskDecision(str, Enum):
     APPROVED = "approved"
     APPROVED_REDUCED = "approved_reduced"

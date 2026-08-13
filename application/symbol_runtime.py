@@ -41,6 +41,7 @@ from engines.option_chain.models import OptionChainSnapshot, OptionChainState
 from engines.option_chain_analytics.models import OptionChainAnalyticsSnapshot
 from engines.option_chain.option_chain_engine import OptionChainEngine
 from engines.option_paper_execution import (
+    OptionContractSelectionDiagnostic,
     OptionPaperExecutionStyle,
     OptionPaperPositionStatus,
     OptionPaperRiskDecision,
@@ -442,6 +443,7 @@ class SymbolRuntime:
         self._option_chain_last_error: str | None = None
         self._option_universe = None
         self._option_trade_candidate: OptionTradeCandidate | None = None
+        self._option_selection_diagnostics: tuple[OptionContractSelectionDiagnostic, ...] = ()
         self._option_paper_risk: OptionPaperRiskSnapshot | None = None
         self._option_paper_position: OptionPaperPositionSnapshot | None = None
         self._paper_recovery = None
@@ -1190,6 +1192,7 @@ class SymbolRuntime:
         self._session_opening_trading_date = None
         self._vision_ai_explanation = None
         self._option_trade_candidate = None
+        self._option_selection_diagnostics = ()
         self._option_paper_risk = None
         self._option_paper_position = None
         self._decision_audit = None
@@ -1307,6 +1310,7 @@ class SymbolRuntime:
             price_action_trigger_stage_result=self._price_action_trigger_stage_result,
             vision_trade_candidate=self._vision_trade_candidate,
             option_trade_candidate=self._option_trade_candidate,
+            option_selection_diagnostics=self._option_selection_diagnostics,
             option_paper_risk=self._option_paper_risk,
             option_paper_position=self._option_paper_position,
             canonical_paper_position=self._canonical_paper_position(),
@@ -2023,6 +2027,7 @@ class SymbolRuntime:
         if not _is_actionable_vision_candidate(candidate):
             self._vision_strategy_decision_v2 = None
             self._option_trade_candidate = None
+            self._option_selection_diagnostics = ()
             self._option_paper_risk = None
             self._record_decision_audit(
                 "Vision Method",
@@ -2036,6 +2041,7 @@ class SymbolRuntime:
         if runtime_session.status == "MARKET_CLOSED":
             self._vision_strategy_decision_v2 = None
             self._option_trade_candidate = None
+            self._option_selection_diagnostics = ()
             self._option_paper_risk = None
             self._record_decision_audit(
                 "MARKET_CLOSED",
@@ -2115,6 +2121,7 @@ class SymbolRuntime:
                 and self._option_paper_position.status is OptionPaperPositionStatus.OPEN,
             )
         except Exception as exc:
+            self._option_selection_diagnostics = tuple(getattr(exc, "diagnostics", ()) or ())
             self._record_decision_audit(
                 _option_paper_stage_from_error(exc),
                 f"Directional option paper candidate unavailable: {_safe_error(exc)}",
@@ -2122,6 +2129,7 @@ class SymbolRuntime:
             )
             return
         self._option_trade_candidate = option_candidate
+        self._option_selection_diagnostics = tuple(option_candidate.selection_diagnostics)
         self._option_paper_risk = risk
         if risk.decision not in {OptionPaperRiskDecision.APPROVED, OptionPaperRiskDecision.APPROVED_REDUCED}:
             self._record_decision_audit(
@@ -4074,6 +4082,9 @@ def _vision_assembly_rejection_reason(failures) -> str:
 
 
 def _option_paper_stage_from_error(exc: Exception) -> str:
+    stage = getattr(exc, "stage", None)
+    if isinstance(stage, str) and stage.strip():
+        return stage.strip()
     message = _safe_error(exc).casefold()
     if "stale" in message:
         return "OPTION_CHAIN_STALE"
