@@ -14,7 +14,12 @@ from engines.option_chain.models import OptionChainSnapshot, OptionLeg
 from engines.runtime_adapter import TradeCandidate, TradeCandidateDirection, TradeCandidateState
 from engines.vision_method import VisionMethodSnapshot, VisionMethodValidationReport
 
-from .enums import OptionPaperMoneyness, OptionPaperTransactionType, OptionPaperUnderlyingDirection
+from .enums import (
+    OptionPaperMoneyness,
+    OptionPaperSelectionPolicy,
+    OptionPaperTransactionType,
+    OptionPaperUnderlyingDirection,
+)
 from .models import DirectionalOptionSellingConfiguration, OptionTradeCandidate
 
 
@@ -76,7 +81,7 @@ def build_directional_option_trade_candidate(
     if not candidates:
         raise ValueError("no valid ATM/ITM option contract available for directional paper selling")
 
-    _, step, strike, contract, leg, spread, premium = sorted(candidates, key=lambda item: (-item[0], item[1], item[2]))[0]
+    _, step, strike, contract, leg, spread, premium = _select_candidate(candidates, configuration)
     moneyness = OptionPaperMoneyness.ATM if step == 0 else OptionPaperMoneyness.ITM
     exchange = Exchange.BSE if option_universe.venue.value == "BFO" else Exchange.NSE
     return OptionTradeCandidate(
@@ -122,6 +127,7 @@ def build_directional_option_trade_candidate(
         selection_reasoning=(
             "Vision Method produced an actionable underlying candidate.",
             f"{underlying_direction.value} underlying maps to SELL {option_type.value.upper()}.",
+            f"Selection policy: {configuration.selection_policy.value}.",
             f"Selected {moneyness.value.upper()} contract at {strike:g} using canonical option universe.",
         ),
         status="selected",
@@ -131,10 +137,20 @@ def build_directional_option_trade_candidate(
 def _pair_for_step(universe: ZerodhaOptionUniverse, option_type: OptionType, step: int):
     strikes = tuple(pair.strike for pair in universe.pairs)
     atm_index = strikes.index(universe.atm_strike)
-    index = atm_index - step if option_type is OptionType.PUT else atm_index + step
+    index = atm_index + step if option_type is OptionType.PUT else atm_index - step
     if index < 0 or index >= len(universe.pairs):
         raise ValueError("requested ITM step is outside the option universe")
     return universe.pairs[index]
+
+
+def _select_candidate(candidates, configuration: DirectionalOptionSellingConfiguration):
+    if configuration.selection_policy is OptionPaperSelectionPolicy.PREFERRED_ITM_DEPTH:
+        preferred = tuple(item for item in candidates if item[1] == configuration.preferred_itm_step)
+        if preferred:
+            return sorted(preferred, key=lambda item: (-item[0], item[2]))[0]
+    if configuration.selection_policy is OptionPaperSelectionPolicy.BEST_LIQUID_VALID:
+        return sorted(candidates, key=lambda item: (-item[0], item[1], item[2]))[0]
+    return sorted(candidates, key=lambda item: (item[1], -item[0], item[2]))[0]
 
 
 def _valid_leg(leg: OptionLeg, configuration: DirectionalOptionSellingConfiguration) -> bool:

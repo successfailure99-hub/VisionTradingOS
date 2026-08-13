@@ -28,6 +28,11 @@ from application.reference_data_bootstrap import run_reference_data_bootstrap
 from application.futures_vwap import DesktopFuturesVWAPRuntimeManager
 from engines.risk.models import InstrumentLotSize, RiskConfiguration
 from engines.paper_trading import PaperIntrabarPolicy, PaperTradingConfiguration
+from engines.option_paper_execution import (
+    DirectionalOptionSellingConfiguration,
+    OptionPaperExecutionStyle,
+    OptionPaperSelectionPolicy,
+)
 from engines.performance_analytics import PerformanceAnalyticsConfiguration
 from engines.historical_market_replay import ReplayConfiguration, ReplayLifecycleState, ReplayMode
 from engines.deterministic_backtest import BacktestConfiguration, BacktestLifecycleState, BacktestMode
@@ -100,6 +105,10 @@ ENV_PAPER_CLOSE_AT_SESSION_END = "PAPER_CLOSE_AT_SESSION_END"
 ENV_PAPER_CANCEL_PENDING_AT_SESSION_END = "PAPER_CANCEL_PENDING_AT_SESSION_END"
 ENV_PAPER_MAX_ACTIVE_POSITIONS_PER_INSTRUMENT = "PAPER_MAX_ACTIVE_POSITIONS_PER_INSTRUMENT"
 ENV_PAPER_STALE_DATA_SECONDS = "PAPER_STALE_DATA_SECONDS"
+ENV_OPTION_PAPER_EXECUTION_STYLE = "OPTION_PAPER_EXECUTION_STYLE"
+ENV_OPTION_PAPER_SELECTION_POLICY = "OPTION_PAPER_SELECTION_POLICY"
+ENV_OPTION_PAPER_PREFERRED_ITM_STEP = "OPTION_PAPER_PREFERRED_ITM_STEP"
+ENV_OPTION_PAPER_SELECTABLE_ITM_STEPS = "OPTION_PAPER_SELECTABLE_ITM_STEPS"
 ENV_PERFORMANCE_ANALYTICS_ENABLED = "PERFORMANCE_ANALYTICS_ENABLED"
 ENV_PERFORMANCE_JOURNAL_PERSISTENCE_ENABLED = "PERFORMANCE_JOURNAL_PERSISTENCE_ENABLED"
 ENV_PERFORMANCE_JOURNAL_PATH = "PERFORMANCE_JOURNAL_PATH"
@@ -147,6 +156,7 @@ class DesktopLiveDataSettings:
     futures_vwap_enabled: bool
     risk_configuration: RiskConfiguration | None
     paper_trading_configuration: PaperTradingConfiguration
+    directional_option_selling_configuration: DirectionalOptionSellingConfiguration
     performance_analytics_configuration: PerformanceAnalyticsConfiguration
     historical_replay_configuration: ReplayConfiguration
     backtest_configuration: BacktestConfiguration
@@ -162,6 +172,7 @@ class DesktopLiveDataSettings:
             f"futures_vwap_enabled={self.futures_vwap_enabled}, "
             f"risk_enabled={self.risk_configuration is not None}, "
             f"paper_trading_enabled={self.paper_trading_configuration.enabled}, "
+            f"option_paper_execution_style={self.directional_option_selling_configuration.execution_style.value}, "
             f"historical_replay_enabled={self.historical_replay_configuration.enabled})"
         )
 
@@ -176,6 +187,7 @@ def load_desktop_live_configuration(
     option_chain = _load_option_chain_settings(environ)
     risk_configuration = _load_risk_configuration(environ)
     paper_trading_configuration = _load_paper_trading_configuration(environ)
+    directional_option_selling_configuration = _load_directional_option_selling_configuration(environ)
     performance_analytics_configuration = _load_performance_analytics_configuration(environ)
     historical_replay_configuration = _load_historical_replay_configuration(environ)
     backtest_configuration = _load_backtest_configuration(environ)
@@ -205,6 +217,7 @@ def load_desktop_live_configuration(
             futures_vwap_enabled=False,
             risk_configuration=None,
             paper_trading_configuration=paper_trading_configuration,
+            directional_option_selling_configuration=directional_option_selling_configuration,
             performance_analytics_configuration=performance_analytics_configuration,
             historical_replay_configuration=historical_replay_configuration,
             backtest_configuration=backtest_configuration,
@@ -246,6 +259,7 @@ def load_desktop_live_configuration(
         futures_vwap_enabled=futures_vwap_enabled,
         risk_configuration=risk_configuration,
         paper_trading_configuration=paper_trading_configuration,
+        directional_option_selling_configuration=directional_option_selling_configuration,
         performance_analytics_configuration=performance_analytics_configuration,
         historical_replay_configuration=historical_replay_configuration,
         backtest_configuration=backtest_configuration,
@@ -385,6 +399,7 @@ def create_dashboard_application(
             timeframes=("1m", "5m", "15m"),
             risk_configuration=settings.risk_configuration,
             paper_trading_configuration=settings.paper_trading_configuration,
+            directional_option_selling_configuration=settings.directional_option_selling_configuration,
             performance_analytics_configuration=settings.performance_analytics_configuration,
             historical_replay_configuration=settings.historical_replay_configuration,
             deterministic_backtest_configuration=settings.backtest_configuration,
@@ -676,6 +691,49 @@ def _load_paper_trading_configuration(environ: Mapping[str, str]) -> PaperTradin
         max_active_positions_per_instrument=_parse_bounded_int(environ.get(ENV_PAPER_MAX_ACTIVE_POSITIONS_PER_INSTRUMENT, "1"), ENV_PAPER_MAX_ACTIVE_POSITIONS_PER_INSTRUMENT, minimum=1, maximum=1),
         stale_data_seconds=_parse_bounded_int(environ.get(ENV_PAPER_STALE_DATA_SECONDS, "300"), ENV_PAPER_STALE_DATA_SECONDS, minimum=1, maximum=86400),
     )
+
+
+def _load_directional_option_selling_configuration(environ: Mapping[str, str]) -> DirectionalOptionSellingConfiguration:
+    style_text = _text(environ.get(ENV_OPTION_PAPER_EXECUTION_STYLE, OptionPaperExecutionStyle.UNDERLYING_PAPER.value)).lower()
+    try:
+        style = OptionPaperExecutionStyle(style_text)
+    except Exception as exc:
+        allowed = ", ".join(item.value for item in OptionPaperExecutionStyle)
+        raise DesktopLiveDataConfigurationError(f"{ENV_OPTION_PAPER_EXECUTION_STYLE} must be one of: {allowed}") from exc
+    policy_text = _text(environ.get(ENV_OPTION_PAPER_SELECTION_POLICY, OptionPaperSelectionPolicy.ATM_FIRST.value)).lower()
+    try:
+        selection_policy = OptionPaperSelectionPolicy(policy_text)
+    except Exception as exc:
+        allowed = ", ".join(item.value for item in OptionPaperSelectionPolicy)
+        raise DesktopLiveDataConfigurationError(f"{ENV_OPTION_PAPER_SELECTION_POLICY} must be one of: {allowed}") from exc
+    selectable_steps = _parse_itm_steps(environ.get(ENV_OPTION_PAPER_SELECTABLE_ITM_STEPS, "0,1,2,3"))
+    preferred_step = _parse_bounded_int(
+        environ.get(ENV_OPTION_PAPER_PREFERRED_ITM_STEP, "0"),
+        ENV_OPTION_PAPER_PREFERRED_ITM_STEP,
+        minimum=0,
+        maximum=max(selectable_steps),
+    )
+    return DirectionalOptionSellingConfiguration(
+        execution_style=style,
+        selection_policy=selection_policy,
+        preferred_itm_step=preferred_step,
+        selectable_itm_steps=selectable_steps,
+    )
+
+
+def _parse_itm_steps(value: str | None) -> tuple[int, ...]:
+    text = _text(value)
+    if not text:
+        raise DesktopLiveDataConfigurationError(f"{ENV_OPTION_PAPER_SELECTABLE_ITM_STEPS} cannot be empty")
+    try:
+        steps = tuple(int(part.strip()) for part in text.split(",") if part.strip())
+    except Exception as exc:
+        raise DesktopLiveDataConfigurationError(f"{ENV_OPTION_PAPER_SELECTABLE_ITM_STEPS} must be comma-separated non-negative integers") from exc
+    if not steps or any(step < 0 for step in steps):
+        raise DesktopLiveDataConfigurationError(f"{ENV_OPTION_PAPER_SELECTABLE_ITM_STEPS} must contain non-negative integers")
+    if tuple(sorted(set(steps))) != steps:
+        raise DesktopLiveDataConfigurationError(f"{ENV_OPTION_PAPER_SELECTABLE_ITM_STEPS} must be sorted and unique")
+    return steps
 
 
 def _load_performance_analytics_configuration(environ: Mapping[str, str]) -> PerformanceAnalyticsConfiguration:

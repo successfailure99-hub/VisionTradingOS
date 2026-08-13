@@ -213,6 +213,7 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
     latency = tuple(getattr(validation, "latency_summaries", ()) or ())
     p95 = max((item.p95_ms for item in latency), default=None)
     runtime_snapshots = tuple(getattr(orchestrator, "runtime_snapshots", ()) or ())
+    primary_runtime = runtime_snapshots[0] if runtime_snapshots else None
     operational = next((getattr(snapshot, "operational_readiness", None) for snapshot in runtime_snapshots if getattr(snapshot, "operational_readiness", None) is not None), None)
     journal_persistence = next((getattr(snapshot, "journal_persistence", None) for snapshot in runtime_snapshots if getattr(snapshot, "journal_persistence", None) is not None), None)
     canonical_journal_ready = bool(journal_persistence is not None and getattr(journal_persistence, "operational_state", "") in {"READY_EMPTY", "READY_WITH_RECORDS"})
@@ -275,6 +276,9 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
         analysis_readiness=_enum_text(getattr(operational, "overall_state", None)),
         vision_readiness="READY" if bool(getattr(operational, "vision_evaluation_ready", False)) else "WAITING_FOR_DATA",
         paper_readiness="READY" if bool(getattr(operational, "paper_trading_ready", False)) else "NOT_APPLICABLE",
+        option_paper_execution_style=_plain_text(getattr(primary_runtime, "option_paper_execution_style", None)),
+        option_paper_selection_policy=_plain_text(getattr(primary_runtime, "option_paper_selection_policy", None)),
+        option_paper_preferred_itm_step=getattr(primary_runtime, "option_paper_preferred_itm_step", 0),
         journal_persistence_status=_enum_text(getattr(journal_persistence, "operational_state", None)),
         broker_read_only_sync="READY" if _broker_account_ready(broker_account) else "AUTH_REQUIRED",
         primary_blocker=primary_blocker,

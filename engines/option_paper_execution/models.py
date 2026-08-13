@@ -19,6 +19,7 @@ from .enums import (
     OptionPaperMoneyness,
     OptionPaperPositionStatus,
     OptionPaperRiskDecision,
+    OptionPaperSelectionPolicy,
     OptionPaperTransactionType,
     OptionPaperUnderlyingDirection,
 )
@@ -39,10 +40,14 @@ class DirectionalOptionSellingConfiguration:
     minimum_volume: int = 1
     maximum_quote_age_seconds: float = 180.0
     selectable_itm_steps: tuple[int, ...] = (0, 1, 2, 3)
+    selection_policy: OptionPaperSelectionPolicy = OptionPaperSelectionPolicy.ATM_FIRST
+    preferred_itm_step: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.execution_style, OptionPaperExecutionStyle):
             raise TypeError("execution_style must be OptionPaperExecutionStyle")
+        if not isinstance(self.selection_policy, OptionPaperSelectionPolicy):
+            raise TypeError("selection_policy must be OptionPaperSelectionPolicy")
         object.__setattr__(self, "paper_capital", _positive_real(self.paper_capital, "paper_capital"))
         for name in ("max_nifty_lots", "max_banknifty_lots", "max_sensex_lots"):
             _positive_int(getattr(self, name), name)
@@ -66,6 +71,9 @@ class DirectionalOptionSellingConfiguration:
         if tuple(sorted(set(steps))) != steps:
             raise ValueError("selectable_itm_steps must be sorted and unique")
         object.__setattr__(self, "selectable_itm_steps", steps)
+        _non_negative_int(self.preferred_itm_step, "preferred_itm_step")
+        if self.selection_policy is OptionPaperSelectionPolicy.PREFERRED_ITM_DEPTH and self.preferred_itm_step not in steps:
+            raise ValueError("preferred_itm_step must be included in selectable_itm_steps")
 
     def maximum_lots_for(self, instrument: RuntimeInstrument) -> int:
         if instrument is RuntimeInstrument.NIFTY:

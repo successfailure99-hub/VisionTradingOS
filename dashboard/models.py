@@ -128,6 +128,9 @@ class DashboardRuntimeView:
     analysis_readiness: str = "-"
     vision_readiness: str = "-"
     paper_readiness: str = "-"
+    option_paper_execution_style: str = "-"
+    option_paper_selection_policy: str = "-"
+    option_paper_preferred_itm_step: int = 0
     journal_persistence_status: str = "-"
     broker_read_only_sync: str = "-"
     primary_blocker: str = "-"

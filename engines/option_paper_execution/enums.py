@@ -25,6 +25,12 @@ class OptionPaperMoneyness(str, Enum):
     OTM = "otm"
 
 
+class OptionPaperSelectionPolicy(str, Enum):
+    ATM_FIRST = "atm_first"
+    PREFERRED_ITM_DEPTH = "preferred_itm_depth"
+    BEST_LIQUID_VALID = "best_liquid_valid"
+
+
 class OptionPaperRiskDecision(str, Enum):
     APPROVED = "approved"
     APPROVED_REDUCED = "approved_reduced"

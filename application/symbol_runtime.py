@@ -1257,6 +1257,9 @@ class SymbolRuntime:
             option_chain_analytics=option_chain_analytics,
             option_chain_runtime=self._option_chain_runtime_status(market_timestamp, runtime_session),
             adr_runtime=self._adr_runtime_status(runtime_session),
+            option_paper_execution_style=self._configuration.directional_option_selling_configuration.execution_style.value,
+            option_paper_selection_policy=self._configuration.directional_option_selling_configuration.selection_policy.value,
+            option_paper_preferred_itm_step=self._configuration.directional_option_selling_configuration.preferred_itm_step,
             market_context=self.market_context_engine.state,
             moving_average_context=self.moving_average_context_engine.state,
             momentum_context=self.momentum_context_engine.state,
@@ -2035,7 +2038,7 @@ class SymbolRuntime:
             self._option_trade_candidate = None
             self._option_paper_risk = None
             self._record_decision_audit(
-                "Vision Method",
+                "MARKET_CLOSED",
                 f"Vision Method actionable candidate blocked outside live session: {runtime_session.blocking_reason}",
                 vision_trade_candidate=candidate,
             )
@@ -2076,21 +2079,21 @@ class SymbolRuntime:
         config = self._configuration.directional_option_selling_configuration
         if self._option_paper_position is not None and self._option_paper_position.status is OptionPaperPositionStatus.OPEN:
             self._record_decision_audit(
-                "Option Paper Risk",
+                "OPEN_POSITION_EXISTS",
                 "Existing directional option paper position is already open.",
                 vision_trade_candidate=candidate,
             )
             return
         runtime_session = self._runtime_trading_session(candidate.timestamp)
         if runtime_session.trading_date is None:
-            self._record_decision_audit("Option Paper", "Runtime trading date unavailable.", vision_trade_candidate=candidate)
+            self._record_decision_audit("MARKET_CLOSED", "Runtime trading date unavailable.", vision_trade_candidate=candidate)
             return
         if self._option_universe is None:
-            self._record_decision_audit("Option Paper", "Canonical option universe unavailable.", vision_trade_candidate=candidate)
+            self._record_decision_audit("OPTION_UNIVERSE_UNAVAILABLE", "Canonical option universe unavailable.", vision_trade_candidate=candidate)
             return
         option_snapshot = self.option_chain_engine.snapshot
         if option_snapshot is None:
-            self._record_decision_audit("Option Paper", "Canonical option-chain snapshot unavailable.", vision_trade_candidate=candidate)
+            self._record_decision_audit("OPTION_CHAIN_UNAVAILABLE", "Canonical option-chain snapshot unavailable.", vision_trade_candidate=candidate)
             return
         try:
             from engines.option_paper_execution.selector import build_directional_option_trade_candidate
@@ -2113,7 +2116,7 @@ class SymbolRuntime:
             )
         except Exception as exc:
             self._record_decision_audit(
-                "Option Paper",
+                _option_paper_stage_from_error(exc),
                 f"Directional option paper candidate unavailable: {_safe_error(exc)}",
                 vision_trade_candidate=candidate,
             )
@@ -2122,7 +2125,7 @@ class SymbolRuntime:
         self._option_paper_risk = risk
         if risk.decision not in {OptionPaperRiskDecision.APPROVED, OptionPaperRiskDecision.APPROVED_REDUCED}:
             self._record_decision_audit(
-                "Option Paper Risk",
+                "OPTION_RISK_REJECTED",
                 risk.reason,
                 vision_trade_candidate=candidate,
             )
@@ -2130,7 +2133,7 @@ class SymbolRuntime:
         self._option_paper_position = open_option_paper_position(risk)
         self._record_option_paper_journal_if_available()
         self._record_decision_audit(
-            "NONE",
+            "PAPER_POSITION_OPENED",
             "OSE-1 directional option-selling paper chain accepted the candidate.",
             rejected=False,
             vision_trade_candidate=candidate,
@@ -4068,6 +4071,29 @@ def _vision_assembly_rejection_reason(failures) -> str:
     if first is None:
         return "Runtime-owned Vision Method assembly did not produce a snapshot."
     return f"Runtime-owned Vision Method assembly incomplete: {first.stage}: {first.validation_message}"
+
+
+def _option_paper_stage_from_error(exc: Exception) -> str:
+    message = _safe_error(exc).casefold()
+    if "stale" in message:
+        return "OPTION_CHAIN_STALE"
+    if "future" in message:
+        return "OPTION_CHAIN_FUTURE"
+    if "trading session" in message:
+        return "OPTION_CHAIN_SESSION_MISMATCH"
+    if "expiry" in message or "expired" in message:
+        return "OPTION_EXPIRY_MISMATCH"
+    if "open interest" in message:
+        return "CONTRACT_REJECTED_OI"
+    if "volume" in message:
+        return "CONTRACT_REJECTED_VOLUME"
+    if "spread" in message:
+        return "CONTRACT_REJECTED_SPREAD"
+    if "premium" in message:
+        return "CONTRACT_REJECTED_PREMIUM"
+    if "no valid" in message or "no valid atm/itm" in message:
+        return "NO_VALID_ATM_ITM_CONTRACT"
+    return "NO_VALID_ATM_ITM_CONTRACT"
 
 
 def _daily_ohlc_for_levels(daily_ohlc: DailyOHLC, trading_date: date | None) -> DailyOHLC:

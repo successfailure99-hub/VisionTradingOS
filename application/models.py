@@ -769,6 +769,9 @@ class RuntimeSnapshot:
     option_chain_analytics: OptionChainAnalyticsSnapshot | None = None
     option_chain_runtime: RuntimeOptionChainStatus | None = None
     adr_runtime: RuntimeADRStatus | None = None
+    option_paper_execution_style: str = "underlying_paper"
+    option_paper_selection_policy: str = "atm_first"
+    option_paper_preferred_itm_step: int = 0
     operational_readiness: OperationalReadinessSnapshot | None = None
     runtime_contract_report: RuntimeContractReport | None = None
     candle_history_count: int = 0
@@ -801,6 +804,18 @@ class RuntimeSnapshot:
             raise TypeError("option_chain_runtime must be RuntimeOptionChainStatus or None")
         if self.adr_runtime is not None and not isinstance(self.adr_runtime, RuntimeADRStatus):
             raise TypeError("adr_runtime must be RuntimeADRStatus or None")
+        object.__setattr__(
+            self,
+            "option_paper_execution_style",
+            _normalize_vision_forensic_text(self.option_paper_execution_style, "option_paper_execution_style"),
+        )
+        object.__setattr__(
+            self,
+            "option_paper_selection_policy",
+            _normalize_vision_forensic_text(self.option_paper_selection_policy, "option_paper_selection_policy"),
+        )
+        if isinstance(self.option_paper_preferred_itm_step, bool) or not isinstance(self.option_paper_preferred_itm_step, int) or self.option_paper_preferred_itm_step < 0:
+            raise ValueError("option_paper_preferred_itm_step must be a non-negative integer")
         if self.operational_readiness is not None and not isinstance(self.operational_readiness, OperationalReadinessSnapshot):
             raise TypeError("operational_readiness must be OperationalReadinessSnapshot or None")
         if self.runtime_contract_report is not None and not isinstance(self.runtime_contract_report, RuntimeContractReport):

@@ -122,6 +122,9 @@ class RuntimePanel(QGroupBox):
                 "Analysis Readiness",
                 "Vision Readiness",
                 "Paper Readiness",
+                "Option Paper Style",
+                "Option Selection Policy",
+                "Option Preferred ITM Step",
                 "Journal Persistence",
                 "Broker Read-only Sync",
                 "Primary Blocker",
@@ -209,6 +212,9 @@ class RuntimePanel(QGroupBox):
         self._labels["Analysis Readiness"].setText(formatters.text(view.analysis_readiness))
         self._labels["Vision Readiness"].setText(formatters.text(view.vision_readiness))
         self._labels["Paper Readiness"].setText(formatters.text(view.paper_readiness))
+        self._labels["Option Paper Style"].setText(formatters.text(view.option_paper_execution_style))
+        self._labels["Option Selection Policy"].setText(formatters.text(view.option_paper_selection_policy))
+        self._labels["Option Preferred ITM Step"].setText(formatters.integer(view.option_paper_preferred_itm_step))
         self._labels["Journal Persistence"].setText(formatters.text(view.journal_persistence_status))
         self._labels["Broker Read-only Sync"].setText(formatters.text(view.broker_read_only_sync))
         self._labels["Primary Blocker"].setText(formatters.text(view.primary_blocker))

@@ -23,6 +23,7 @@ from engines.option_paper_execution import (
     OptionPaperExecutionStyle,
     OptionPaperPositionStatus,
     OptionPaperRiskDecision,
+    OptionPaperSelectionPolicy,
 )
 from engines.option_paper_execution.lifecycle import open_option_paper_position, update_option_paper_position
 from engines.option_paper_execution.risk import evaluate_option_paper_risk
@@ -270,7 +271,7 @@ def test_short_option_mtm_profit_on_premium_decay_and_loss_on_stop():
     assert stopped.realized_pnl < 0
 
 
-def test_itm_depth_selection_uses_canonical_strike_ladder_without_hardcoded_interval():
+def test_bullish_put_itm_depth_moves_above_atm_without_hardcoded_interval():
     method = snapshot()
     report = validate_vision_method(method)
     trade = __import__("engines.runtime_adapter", fromlist=["adapt_vision_method_to_trade_candidate"]).adapt_vision_method_to_trade_candidate(method, report)
@@ -279,8 +280,8 @@ def test_itm_depth_selection_uses_canonical_strike_ladder_without_hardcoded_inte
         trade_candidate=trade,
         vision_snapshot=method,
         validation_report=report,
-        option_universe=universe(strikes=(24700, 24800, 24900, 25000, 25100)),
-        option_chain_snapshot=chain_snapshot(strikes=(24700, 24800, 24900, 25000, 25100), invalid_put_strikes=(25000,)),
+        option_universe=universe(strikes=(24700, 24800, 24900, 25000, 25100, 25200, 25300)),
+        option_chain_snapshot=chain_snapshot(strikes=(24700, 24800, 24900, 25000, 25100, 25200, 25300), invalid_put_strikes=(25000,)),
         configuration=option_config(),
         runtime_session_id="NIFTY:2026-08-03",
         trading_date=NOW.date(),
@@ -289,8 +290,8 @@ def test_itm_depth_selection_uses_canonical_strike_ladder_without_hardcoded_inte
         trade_candidate=trade,
         vision_snapshot=method,
         validation_report=report,
-        option_universe=universe(strikes=(24700, 24800, 24900, 25000, 25100)),
-        option_chain_snapshot=chain_snapshot(strikes=(24700, 24800, 24900, 25000, 25100), invalid_put_strikes=(25000, 24900)),
+        option_universe=universe(strikes=(24700, 24800, 24900, 25000, 25100, 25200, 25300)),
+        option_chain_snapshot=chain_snapshot(strikes=(24700, 24800, 24900, 25000, 25100, 25200, 25300), invalid_put_strikes=(25000, 25100)),
         configuration=option_config(),
         runtime_session_id="NIFTY:2026-08-03",
         trading_date=NOW.date(),
@@ -299,19 +300,65 @@ def test_itm_depth_selection_uses_canonical_strike_ladder_without_hardcoded_inte
         trade_candidate=trade,
         vision_snapshot=method,
         validation_report=report,
-        option_universe=universe(strikes=(24700, 24800, 24900, 25000, 25100)),
-        option_chain_snapshot=chain_snapshot(strikes=(24700, 24800, 24900, 25000, 25100), invalid_put_strikes=(25000, 24900, 24800)),
+        option_universe=universe(strikes=(24700, 24800, 24900, 25000, 25100, 25200, 25300)),
+        option_chain_snapshot=chain_snapshot(strikes=(24700, 24800, 24900, 25000, 25100, 25200, 25300), invalid_put_strikes=(25000, 25100, 25200)),
         configuration=option_config(),
         runtime_session_id="NIFTY:2026-08-03",
         trading_date=NOW.date(),
     )
 
     assert one_step.itm_steps == 1
-    assert one_step.strike == 24900.0
+    assert one_step.strike == 25100.0
     assert two_step.itm_steps == 2
-    assert two_step.strike == 24800.0
+    assert two_step.strike == 25200.0
     assert three_step.itm_steps == 3
-    assert three_step.strike == 24700.0
+    assert three_step.strike == 25300.0
+
+
+def test_bearish_call_itm_depth_moves_below_atm():
+    method = bearish_snapshot()
+    report = validate_vision_method(method)
+    trade = __import__("engines.runtime_adapter", fromlist=["adapt_vision_method_to_trade_candidate"]).adapt_vision_method_to_trade_candidate(method, report)
+
+    option_trade = build_directional_option_trade_candidate(
+        trade_candidate=trade,
+        vision_snapshot=method,
+        validation_report=report,
+        option_universe=universe(strikes=(24700, 24800, 24900, 25000, 25100, 25200, 25300)),
+        option_chain_snapshot=chain_snapshot(strikes=(24700, 24800, 24900, 25000, 25100, 25200, 25300), invalid_call_strikes=(25000,)),
+        configuration=option_config(),
+        runtime_session_id="NIFTY:2026-08-03",
+        trading_date=NOW.date(),
+    )
+
+    assert option_trade.option_type is OptionType.CALL
+    assert option_trade.itm_steps == 1
+    assert option_trade.strike == 24900.0
+
+
+def test_preferred_itm_policy_can_select_itm_while_atm_is_valid():
+    method = snapshot()
+    report = validate_vision_method(method)
+    trade = __import__("engines.runtime_adapter", fromlist=["adapt_vision_method_to_trade_candidate"]).adapt_vision_method_to_trade_candidate(method, report)
+
+    option_trade = build_directional_option_trade_candidate(
+        trade_candidate=trade,
+        vision_snapshot=method,
+        validation_report=report,
+        option_universe=universe(strikes=(24900, 25000, 25100, 25200)),
+        option_chain_snapshot=chain_snapshot(strikes=(24900, 25000, 25100, 25200)),
+        configuration=option_config(
+            selection_policy=OptionPaperSelectionPolicy.PREFERRED_ITM_DEPTH,
+            preferred_itm_step=1,
+        ),
+        runtime_session_id="NIFTY:2026-08-03",
+        trading_date=NOW.date(),
+    )
+
+    assert option_trade.strike == 25100.0
+    assert option_trade.itm_steps == 1
+    assert option_trade.moneyness.value == "itm"
+    assert "preferred_itm_depth" in " ".join(option_trade.selection_reasoning)
 
 
 def test_prepare_candidates_stale_expired_and_cross_session_option_data_are_rejected():
@@ -461,7 +508,7 @@ def test_symbol_runtime_blocks_fresh_vision_option_paper_candidate_after_market_
     assert view.option_trade_candidate is None
     assert view.option_paper_risk is None
     assert view.option_paper_position is None
-    assert view.decision_audit.rejected_at == "Vision Method"
+    assert view.decision_audit.rejected_at == "MARKET_CLOSED"
     assert "outside live session" in view.decision_audit.reason
 
 

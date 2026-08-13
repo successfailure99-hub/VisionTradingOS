@@ -29,6 +29,7 @@ from brokers.zerodha.auth import ZerodhaCredentials, ZerodhaSessionManager
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
 from dashboard.presenters import build_runtime_view
+from engines.option_paper_execution import OptionPaperExecutionStyle, OptionPaperSelectionPolicy
 
 
 NOW = datetime(2026, 7, 15, 9, 15, tzinfo=UTC)
@@ -445,6 +446,63 @@ def test_desktop_startup_restores_encrypted_session_without_access_token_environ
     assert runtime_view.broker_session_expires_at == NOW + timedelta(hours=6)
     assert any(row.name == "Broker Session" and row.status == "READY" for row in runtime_view.component_health)
     assert dashboard.live_market_data_runtime.session_manager.session.access_token == "restored_access_token"
+    dashboard.shutdown()
+
+
+def test_desktop_config_parses_directional_option_paper_execution_style():
+    settings = load_desktop_live_configuration(
+        live_env(
+            LIVE_MARKET_DATA_AUTO_CONNECT="false",
+            OPTION_PAPER_EXECUTION_STYLE="directional_option_selling_paper",
+            OPTION_PAPER_SELECTION_POLICY="preferred_itm_depth",
+            OPTION_PAPER_PREFERRED_ITM_STEP="2",
+            OPTION_PAPER_SELECTABLE_ITM_STEPS="0,1,2,3",
+        )
+    )
+
+    config = settings.directional_option_selling_configuration
+    assert config.execution_style is OptionPaperExecutionStyle.DIRECTIONAL_OPTION_SELLING_PAPER
+    assert config.selection_policy is OptionPaperSelectionPolicy.PREFERRED_ITM_DEPTH
+    assert config.preferred_itm_step == 2
+
+
+def test_desktop_config_rejects_invalid_directional_option_paper_execution_style():
+    with pytest.raises(DesktopLiveDataConfigurationError, match="OPTION_PAPER_EXECUTION_STYLE"):
+        load_desktop_live_configuration(
+            live_env(
+                LIVE_MARKET_DATA_AUTO_CONNECT="false",
+                OPTION_PAPER_EXECUTION_STYLE="live_money",
+            )
+        )
+
+
+def test_desktop_composition_exposes_active_option_paper_style_in_runtime_view(tmp_path):
+    store_path = tmp_path / "session.json"
+    env = live_env(
+        ZERODHA_SESSION_STORE_PATH=str(store_path),
+        LIVE_MARKET_DATA_AUTO_CONNECT="false",
+        REFERENCE_DATA_BOOTSTRAP_ENABLED="false",
+        OPTION_PAPER_EXECUTION_STYLE="directional_option_selling_paper",
+        OPTION_PAPER_SELECTION_POLICY="preferred_itm_depth",
+        OPTION_PAPER_PREFERRED_ITM_STEP="1",
+    )
+
+    dashboard = create_dashboard_application(
+        environ=env,
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: NOW),
+        clock=lambda: NOW,
+    )
+    runtime = dashboard.lifecycle.orchestrator.get_runtime("NIFTY")
+    snapshot = runtime.snapshot()
+    runtime_view = build_runtime_view(dashboard.lifecycle.snapshot())
+
+    assert snapshot.option_paper_execution_style == "directional_option_selling_paper"
+    assert snapshot.option_paper_selection_policy == "preferred_itm_depth"
+    assert snapshot.option_paper_preferred_itm_step == 1
+    assert runtime_view.option_paper_execution_style == "directional_option_selling_paper"
+    assert runtime_view.option_paper_selection_policy == "preferred_itm_depth"
+    assert runtime_view.option_paper_preferred_itm_step == 1
     dashboard.shutdown()
 
 
