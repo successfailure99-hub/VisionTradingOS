@@ -131,6 +131,7 @@ from engines.vision_method import (
     insufficient_price_action_trigger_stage_result,
     price_action_trigger_stage_result_from_context,
 )
+from engines.vision_method.runtime_evaluator import assemble_vision_method_runtime
 from engines.vwap.vwap_engine import VWAPEngine
 
 from application.enums import RuntimeInstrument, RuntimeStatus
@@ -419,6 +420,9 @@ class SymbolRuntime:
         self._vision_trade_candidate: TradeCandidate | None = None
         self._vision_strategy_decision_v2: StrategyDecisionV2Snapshot | None = None
         self._last_vision_trade_identity: str | None = None
+        self._processed_vision_decision_identities: set[str] = set()
+        self._vision_live_activation_candle_end: datetime | None = None
+        self._last_closed_candles_by_timeframe: dict[TimeFrame, tuple[Candle, ...]] = {}
         self._vision_method_snapshot: VisionMethodSnapshot | None = None
         self._vision_method_validation_report: VisionMethodValidationReport | None = None
         self._pivot_flight_plan: VisionPivotFlightPlan | None = None
@@ -555,6 +559,7 @@ class SymbolRuntime:
         self._ensure_daily_context_for_session(tick.timestamp)
         self._refresh_adr(tick.timestamp, tick.last_price)
         self._refresh_closed_timeframe_analysis(closed_timeframes, tick.timestamp, tick.last_price)
+        self._process_runtime_vision_decision_candles(closed_timeframes)
         self._process_paper_tick(tick)
         if observe_shadow:
             self.shadow_trading_session_engine.observe_market_event("tick_processed", tick, timestamp=tick.timestamp)
@@ -722,6 +727,7 @@ class SymbolRuntime:
         for timeframe, candle_engine in self.candle_engines.items():
             if timeframe is not self._primary_timeframe:
                 self._last_processed_history_counts[timeframe] = len(candle_engine.get_history(self._core_instrument))
+        self._vision_live_activation_candle_end = self._latest_vision_decision_candle_end()
         if accepted:
             latest = accepted[-1]
             self._restore_session_open_from_history(self._exchange_session_date(latest.end_time))
@@ -1165,6 +1171,9 @@ class SymbolRuntime:
         self._vision_trade_candidate = None
         self._vision_strategy_decision_v2 = None
         self._last_vision_trade_identity = None
+        self._processed_vision_decision_identities = set()
+        self._vision_live_activation_candle_end = None
+        self._last_closed_candles_by_timeframe = {}
         self._vision_method_snapshot = None
         self._vision_method_validation_report = None
         self._pivot_flight_plan = None
@@ -1741,10 +1750,12 @@ class SymbolRuntime:
 
     def _process_closed_candles(self) -> tuple[TimeFrame, ...]:
         closed_timeframes = []
+        self._last_closed_candles_by_timeframe = {}
         for timeframe, candle_engine in self.candle_engines.items():
             history = candle_engine.get_history(self._core_instrument)
             last_count = self._last_processed_history_counts[timeframe]
             new_candles = history[last_count:]
+            self._last_closed_candles_by_timeframe[timeframe] = tuple(new_candles)
             for candle in new_candles:
                 self.price_action_engines[timeframe].process(candle)
                 try:
@@ -1792,6 +1803,87 @@ class SymbolRuntime:
         if timeframes:
             self._latest_analysis_at = timestamp
             self._fuse_multi_timeframe_evidence(timestamp)
+
+    def _process_runtime_vision_decision_candles(self, timeframes: tuple[TimeFrame, ...]) -> None:
+        if self._vision_decision_timeframe is not TimeFrame.FIVE_MINUTES:
+            return
+        if self._vision_decision_timeframe not in timeframes:
+            return
+        candles = self._last_closed_candles_by_timeframe.get(self._vision_decision_timeframe, ())
+        if len(candles) > 1:
+            for candle in candles:
+                self._processed_vision_decision_identities.add(self._vision_decision_identity(candle))
+            self._record_decision_audit(
+                "Vision Method",
+                "Feed recovery closed multiple Vision decision candles at once; catch-up candles were retained as history only.",
+                rejected=True,
+            )
+            return
+        for candle in candles:
+            self._process_runtime_vision_decision_candle(candle)
+
+    def _process_runtime_vision_decision_candle(self, candle: Candle) -> None:
+        if candle.timeframe != self._vision_decision_timeframe.value:
+            raise ValueError("Vision decision source candle timeframe mismatch.")
+        trading_date = self._exchange_session_date(candle.end_time)
+        if trading_date is None:
+            return
+        identity = self._vision_decision_identity(candle)
+        if identity in self._processed_vision_decision_identities:
+            return
+        if candle.end_time.tzinfo is None or candle.end_time.utcoffset() is None:
+            self._processed_vision_decision_identities.add(identity)
+            self._record_decision_audit(
+                "Vision Method",
+                "Runtime-owned Vision Method handoff skipped: source candle timestamp is not timezone-aware.",
+                rejected=True,
+            )
+            return
+        watermark = self._vision_live_activation_candle_end
+        if watermark is not None and candle.end_time <= watermark:
+            self._processed_vision_decision_identities.add(identity)
+            return
+        try:
+            assembly = assemble_vision_method_runtime(
+                self,
+                runtime_snapshot=self.snapshot(),
+                timestamp=candle.end_time,
+            )
+            if assembly.snapshot is None or assembly.report is None:
+                self._record_decision_audit(
+                    "Vision Method",
+                    _vision_assembly_rejection_reason(assembly.failures),
+                    rejected=True,
+                )
+                return
+            self.process_vision_method_paper_trade(assembly.snapshot, assembly.report)
+        except Exception as exc:
+            self._record_decision_audit(
+                "Vision Method",
+                f"Runtime-owned Vision Method handoff failed: {_safe_error(exc)}",
+                rejected=True,
+            )
+            raise
+        finally:
+            self._processed_vision_decision_identities.add(identity)
+
+    def _vision_decision_identity(self, candle: Candle) -> str:
+        trading_date = self._exchange_session_date(candle.end_time)
+        if trading_date is None:
+            raise ValueError("Vision decision source candle has no active trading session.")
+        return ":".join(
+            (
+                self._instrument.value,
+                trading_date.isoformat(),
+                self._vision_decision_timeframe.value,
+                candle.start_time.isoformat(),
+                candle.end_time.isoformat(),
+            )
+        )
+
+    def _latest_vision_decision_candle_end(self) -> datetime | None:
+        history = self.get_candle_history(self._vision_decision_timeframe)
+        return history[-1].end_time if history else None
 
     def _refresh_primary_closed_candle_analysis(self, context: MarketContextState) -> None:
         try:
@@ -3969,6 +4061,13 @@ def _vision_trade_identity(candidate: TradeCandidate) -> str:
             candidate.validation_reference,
         )
     )
+
+
+def _vision_assembly_rejection_reason(failures) -> str:
+    first = next((failure for failure in tuple(failures or ()) if getattr(failure, "validation_message", None)), None)
+    if first is None:
+        return "Runtime-owned Vision Method assembly did not produce a snapshot."
+    return f"Runtime-owned Vision Method assembly incomplete: {first.stage}: {first.validation_message}"
 
 
 def _daily_ohlc_for_levels(daily_ohlc: DailyOHLC, trading_date: date | None) -> DailyOHLC:

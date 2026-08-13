@@ -70,6 +70,7 @@ from engines.vision_method import (
     calculate_vision_method_snapshot,
     validate_vision_method,
 )
+from engines.vision_method.runtime_evaluator import assemble_vision_method_runtime
 
 from .status import VisionMethodLiveRuntimeState, VisionMethodLiveStatus
 from .vision_method_inspector import VisionMethodInspector
@@ -192,307 +193,37 @@ class VisionMethodLiveInspectorBridge:
 
     def _assemble_live(self) -> _LiveAssembly:
         runtime = self._select_runtime()
-        runtime_snapshot = runtime.snapshot()
-        timeframe = _vision_decision_timeframe(runtime, runtime_snapshot)
-        timestamp = _runtime_timestamp(runtime_snapshot)
-        trading_date = _market_session_date(timestamp)
-        observed_at = self._clock()
-        history = tuple(
-            candle
-            for candle in runtime.get_candle_history(timeframe)
-            if candle.start_time.date() == trading_date and candle.end_time <= timestamp
-        )
-        if history:
-            timestamp = _align_timestamp_to_closed_candle_timezone(timestamp, history)
-            trading_date = _market_session_date(timestamp)
-            history = tuple(
-                candle
-                for candle in history
-                if candle.start_time.date() == trading_date and candle.end_time <= timestamp
-            )
-        failures: list[VisionContextAssemblyFailure] = []
-        pivot_flight_plan = getattr(runtime_snapshot, "pivot_flight_plan", None)
-        pivot_opening_assessment = getattr(runtime_snapshot, "pivot_opening_assessment", None)
-        pivot_confluence_context = getattr(runtime_snapshot, "pivot_confluence_context", None)
-        price_action_trigger_context = getattr(runtime_snapshot, "price_action_trigger_context", None)
-        price_action_trigger_stage_result = getattr(runtime_snapshot, "price_action_trigger_stage_result", None)
-        if not history:
-            market_age = _market_age_seconds(runtime_snapshot, timestamp, observed_at=observed_at)
-            if _is_live_market_data_stale(runtime_snapshot, timestamp, observed_at):
-                failures.append(_missing_failure("Market Data", _stale_market_data_reason(timestamp, market_age)))
-            else:
-                failures.append(_missing_failure("Candle Engine", "Closed candle history is unavailable."))
-            return _LiveAssembly(
-                runtime_snapshot=runtime_snapshot,
-                timeframe=timeframe,
-                timestamp=timestamp,
-                trading_date=trading_date,
-                pivot_flight_plan=pivot_flight_plan,
-                pivot_opening_assessment=pivot_opening_assessment,
-                pivot_confluence_context=pivot_confluence_context,
-                price_action_trigger_context=price_action_trigger_context,
-                price_action_trigger_stage_result=price_action_trigger_stage_result,
-                failures=tuple(failures),
-            )
-
-        latest_price = _latest_price(runtime_snapshot, history)
-        previous_price = history[-2].close if len(history) >= 2 else None
-        opening_price = history[0].open
-        cpr = runtime_snapshot.cpr
-        camarilla = runtime_snapshot.camarilla
-        level = None
-        if cpr is None:
-            failures.append(_missing_failure("CPR", "WAITING_DAILY_CONTEXT: Daily CPR levels are unavailable."))
-        elif cpr.trading_date != trading_date:
-            failures.append(_missing_failure("CPR", _waiting_daily_context_reason("CPR", cpr.trading_date, trading_date)))
-        if camarilla is None:
-            failures.append(_missing_failure("Camarilla", "WAITING_DAILY_CONTEXT: Daily Camarilla levels are unavailable."))
-        elif camarilla.trading_date != trading_date:
-            failures.append(_missing_failure("Camarilla", _waiting_daily_context_reason("Camarilla", camarilla.trading_date, trading_date)))
-        if cpr is not None and camarilla is not None and cpr.trading_date == trading_date and camarilla.trading_date == trading_date:
-            previous_day = _previous_day_from_cpr(cpr)
-            adr, vwap = _session_aligned_optional_contexts(runtime_snapshot, trading_date, failures)
-            try:
-                level = assemble_vision_level_context(
-                    VisionLevelContextRequest(
-                        instrument=runtime_snapshot.symbol,
-                        timeframe=timeframe,
-                        trading_date=trading_date,
-                        timestamp=timestamp,
-                        latest_price=latest_price,
-                        opening_price=opening_price,
-                        previous_day=previous_day,
-                        cpr=cpr,
-                        camarilla=camarilla,
-                        adr=adr,
-                        vwap=vwap,
-                        previous_price=previous_price,
-                    ),
-                    instrument=runtime_snapshot.symbol,
-                    timeframe=timeframe,
-                    max_snapshot_age=timedelta(days=1),
-                )
-                self._logger.debug("[VisionMethodLive] LEVEL_CONTEXT available")
-            except Exception as exc:
-                failures.append(_failure("Level Context", exc))
-                self._logger.debug("[VisionMethodLive] LEVEL_CONTEXT failed reason=%r", _safe_error(exc))
-
-        opening_range = None
         try:
-            opening_range = assemble_vision_opening_range_context(
-                VisionOpeningRangeRequest(
-                    instrument=runtime_snapshot.symbol,
-                    timeframe=timeframe,
-                    trading_date=trading_date,
-                    timestamp=timestamp,
-                    candles=history,
-                ),
-                instrument=runtime_snapshot.symbol,
-                timeframe=timeframe,
+            return assemble_vision_method_runtime(
+                runtime,
+                option_analytics_provider=self._option_analytics_provider,
+                observed_at=self._clock(),
+                logger=self._logger,
+                level_assembler=assemble_vision_level_context,
+                opening_range_assembler=assemble_vision_opening_range_context,
+                structure_assembler=assemble_vision_structure_context,
+                liquidity_assembler=assemble_vision_liquidity_context,
+                structure_event_assembler=assemble_vision_structure_event_context,
+                setup_assembler=assemble_vision_setup_qualification_context,
+                option_confirmation_assembler=assemble_vision_option_confirmation_context,
+                calculator=calculate_vision_method_snapshot,
+                validator=validate_vision_method,
             )
-            self._logger.debug("[VisionMethodLive] OPENING_RANGE available")
-        except Exception as exc:
-            failures.append(_failure("Opening Range", exc))
-            opening_range = _fallback_opening_range(timestamp, history, timeframe)
-            self._logger.debug("[VisionMethodLive] OPENING_RANGE failed reason=%r", _safe_error(exc))
-
-        structure = None
-        try:
-            structure = assemble_vision_structure_context(
-                VisionStructureRequest(
-                    instrument=runtime_snapshot.symbol,
-                    timeframe=timeframe,
-                    trading_date=trading_date,
-                    timestamp=timestamp,
-                    candles=history,
-                ),
-                instrument=runtime_snapshot.symbol,
-                timeframe=timeframe,
-            )
-            self._logger.debug("[VisionMethodLive] STRUCTURE available")
-        except Exception as exc:
-            failures.append(_failure("Structure", exc))
-            structure = _fallback_structure()
-            self._logger.debug("[VisionMethodLive] STRUCTURE failed reason=%r", _safe_error(exc))
-
-        liquidity = None
-        try:
-            liquidity = assemble_vision_liquidity_context(
-                VisionLiquidityRequest(
-                    instrument=runtime_snapshot.symbol,
-                    timeframe=timeframe,
-                    trading_date=trading_date,
-                    timestamp=timestamp,
-                    candles=history,
-                ),
-                instrument=runtime_snapshot.symbol,
-                timeframe=timeframe,
-            )
-            self._logger.debug("[VisionMethodLive] LIQUIDITY available")
-        except Exception as exc:
-            failures.append(_failure("Liquidity", exc))
-            liquidity = _fallback_liquidity()
-            self._logger.debug("[VisionMethodLive] LIQUIDITY failed reason=%r", _safe_error(exc))
-
-        structure_events = None
-        if structure is None or structure.quality is VisionLevelQuality.INSUFFICIENT:
-            failures.append(_not_evaluated_failure("Structure Events", "Structure context is unavailable."))
-        else:
-            try:
-                structure_events = assemble_vision_structure_event_context(
-                    VisionStructureEventRequest(
-                        instrument=runtime_snapshot.symbol,
-                        timeframe=timeframe,
-                        trading_date=trading_date,
-                        timestamp=timestamp,
-                        candles=history,
-                        structure_context=structure,
-                        liquidity_context=liquidity if liquidity is not None and liquidity.quality is not VisionLevelQuality.INSUFFICIENT else None,
-                    ),
-                    instrument=runtime_snapshot.symbol,
-                    timeframe=timeframe,
-                )
-                self._logger.debug("[VisionMethodLive] STRUCTURE_EVENTS available")
-            except Exception as exc:
-                failures.append(_failure("Structure Events", exc))
-                structure_events = _fallback_structure_events()
-                self._logger.debug("[VisionMethodLive] STRUCTURE_EVENTS failed reason=%r", _safe_error(exc))
-
-        setup = None
-        if level is None:
-            failures.append(_not_evaluated_failure("Setup Qualification", "Level context is unavailable."))
-        elif opening_range is None or opening_range.quality is VisionLevelQuality.INSUFFICIENT:
-            failures.append(_not_evaluated_failure("Setup Qualification", "Opening range context is unavailable."))
-        elif structure is None or structure.quality is VisionLevelQuality.INSUFFICIENT:
-            failures.append(_not_evaluated_failure("Setup Qualification", "Structure context is unavailable."))
-        elif structure_events is None or structure_events.quality is VisionLevelQuality.INSUFFICIENT:
-            failures.append(_not_evaluated_failure("Setup Qualification", "Structure events context is unavailable."))
-        else:
-            try:
-                setup = assemble_vision_setup_qualification_context(
-                    VisionSetupQualificationRequest(
-                        instrument=runtime_snapshot.symbol,
-                        timeframe=timeframe,
-                        timestamp=timestamp,
-                        level_context=level,
-                        opening_range_context=opening_range,
-                        structure_context=structure,
-                        liquidity_context=liquidity,
-                        structure_event_context=structure_events,
-                    ),
-                    instrument=runtime_snapshot.symbol,
-                    timeframe=timeframe,
-                )
-                self._logger.debug("[VisionMethodLive] SETUP_QUALIFICATION available")
-            except Exception as exc:
-                failures.append(_failure("Setup Qualification", exc))
-                setup = _fallback_setup(failures)
-                self._logger.debug("[VisionMethodLive] SETUP_QUALIFICATION failed reason=%r", _safe_error(exc))
-
-        option_confirmation = None
-        if setup is None:
-            failures.append(_not_evaluated_failure("Option Confirmation", "Setup qualification is unavailable."))
-        elif cpr is not None:
-            option_chain, option_analytics = self._option_inputs(runtime_snapshot)
-            option_expiry = option_chain.expiry_date if option_chain is not None else cpr.trading_date
-            try:
-                option_confirmation = assemble_vision_option_confirmation_context(
-                    VisionOptionConfirmationRequest(
-                        instrument=runtime_snapshot.symbol,
-                        expiry=option_expiry,
-                        timestamp=timestamp,
-                        setup_qualification=setup,
-                        option_chain=option_chain,
-                        analytics=option_analytics,
-                    ),
-                    instrument=runtime_snapshot.symbol,
-                    expiry=option_expiry,
-                    max_snapshot_age=timedelta(days=1),
-                )
-                self._logger.debug("[VisionMethodLive] OPTION_CONFIRMATION available")
-            except Exception as exc:
-                failures.append(_failure("Option Confirmation", exc))
-                option_confirmation = _fallback_option_confirmation(timestamp, failures)
-                self._logger.debug("[VisionMethodLive] OPTION_CONFIRMATION failed reason=%r", _safe_error(exc))
-
-        if (
-            price_action_trigger_stage_result is not None
-            and getattr(getattr(price_action_trigger_stage_result, "status", None), "value", None) == "trigger_assembly_failed"
-        ):
-            failures.append(
-                VisionContextAssemblyFailure(
-                    stage="Price-Action Trigger",
-                    status=VisionContextAssemblyStatus.FAILED,
-                    failure_reason=getattr(price_action_trigger_stage_result, "failure_type", None) or "TriggerAssemblyFailed",
-                    validation_message=getattr(price_action_trigger_stage_result, "failure_reason", None)
-                    or "Price-action trigger assembly failed.",
-                )
-            )
-
-        snapshot = None
-        report = None
-        if (
-            level is not None
-            and opening_range is not None
-            and structure is not None
-            and liquidity is not None
-            and structure_events is not None
-            and setup is not None
-            and option_confirmation is not None
-        ):
-            snapshot = calculate_vision_method_snapshot(
-                VisionMethodCalculationRequest(
-                    instrument=runtime_snapshot.symbol,
-                    timeframe=timeframe,
-                    timestamp=timestamp,
-                    level_context=level,
-                    opening_range_context=opening_range,
-                    structure_context=structure,
-                    liquidity_context=liquidity,
-                    structure_event_context=structure_events,
-                    setup_qualification_context=setup,
-                    option_confirmation_context=option_confirmation,
-                    current_price=history[-1].close,
-                    pivot_flight_plan=pivot_flight_plan,
-                    pivot_opening_assessment=pivot_opening_assessment,
-                    pivot_confluence_context=pivot_confluence_context,
-                    price_action_trigger_context=price_action_trigger_context,
-                    price_action_trigger_stage_result=price_action_trigger_stage_result,
-                    assembly_failures=tuple(failures),
-                ),
-                instrument=runtime_snapshot.symbol,
-                timeframe=timeframe,
-            )
-            self._logger.debug("[VisionMethod] Snapshot generated")
-            report = validate_vision_method(snapshot)
-            self._logger.debug("[VisionMethod] Validation complete")
-            self._logger.debug(
-                "[VisionMethodLive] candidate=%s validation=%s",
-                snapshot.candidate_state.value,
-                report.validation_result.value,
-            )
-
-        return _LiveAssembly(
-            runtime_snapshot=runtime_snapshot,
-            timeframe=timeframe,
-            timestamp=timestamp,
-            trading_date=trading_date,
-            level=level,
-            opening_range=opening_range,
-            structure=structure,
-            liquidity=liquidity,
-            structure_events=structure_events,
-            setup=setup,
-            option_confirmation=option_confirmation,
-            pivot_flight_plan=pivot_flight_plan,
-            pivot_opening_assessment=pivot_opening_assessment,
-            pivot_confluence_context=pivot_confluence_context,
-            price_action_trigger_context=price_action_trigger_context,
-            price_action_trigger_stage_result=price_action_trigger_stage_result,
-            snapshot=snapshot,
-            report=report,
-            failures=tuple(failures),
-        )
+        except RuntimeError as exc:
+            if str(exc) == "No market timestamp is available.":
+                runtime_snapshot = runtime.snapshot()
+                raise _VisionMethodNotReady(
+                    "No market timestamp is available.",
+                    failure=_missing_failure("Market Data", "No market timestamp is available."),
+                    instrument=getattr(getattr(runtime_snapshot, "symbol", None), "value", "-"),
+                    timeframe=str(_vision_decision_timeframe(runtime, runtime_snapshot).value),
+                    timestamp="-",
+                    market_data_age_seconds=None,
+                    available_contexts=(),
+                    runtime_state=VisionMethodLiveRuntimeState.WAITING_FOR_MARKET_DATA,
+                    blocking_stage="MARKET_DATA",
+                ) from exc
+            raise
 
     def _build_snapshot(self) -> tuple[VisionMethodSnapshot, tuple[VisionContextAssemblyFailure, ...]]:
         runtime = self._select_runtime()
