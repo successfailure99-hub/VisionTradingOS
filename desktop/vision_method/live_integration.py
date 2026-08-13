@@ -76,6 +76,7 @@ from .vision_method_inspector import VisionMethodInspector
 
 
 LOGGER = logging.getLogger(__name__)
+LIVE_MARKET_DATA_STALE_SECONDS = 120.0
 
 
 def _default_clock() -> datetime:
@@ -195,6 +196,7 @@ class VisionMethodLiveInspectorBridge:
         timeframe = _vision_decision_timeframe(runtime, runtime_snapshot)
         timestamp = _runtime_timestamp(runtime_snapshot)
         trading_date = _market_session_date(timestamp)
+        observed_at = self._clock()
         history = tuple(
             candle
             for candle in runtime.get_candle_history(timeframe)
@@ -215,7 +217,11 @@ class VisionMethodLiveInspectorBridge:
         price_action_trigger_context = getattr(runtime_snapshot, "price_action_trigger_context", None)
         price_action_trigger_stage_result = getattr(runtime_snapshot, "price_action_trigger_stage_result", None)
         if not history:
-            failures.append(_missing_failure("Candle Engine", "Closed candle history is unavailable."))
+            market_age = _market_age_seconds(runtime_snapshot, timestamp, observed_at=observed_at)
+            if _is_live_market_data_stale(runtime_snapshot, timestamp, observed_at):
+                failures.append(_missing_failure("Market Data", _stale_market_data_reason(timestamp, market_age)))
+            else:
+                failures.append(_missing_failure("Candle Engine", "Closed candle history is unavailable."))
             return _LiveAssembly(
                 runtime_snapshot=runtime_snapshot,
                 timeframe=timeframe,
@@ -739,7 +745,7 @@ class VisionMethodLiveInspectorBridge:
             instrument=getattr(getattr(runtime_snapshot, "symbol", None), "value", "-"),
             timeframe=str(getattr(runtime_snapshot, "timeframe", "-")),
             timestamp=timestamp.isoformat() if hasattr(timestamp, "isoformat") else "-",
-            market_data_age_seconds=_market_age_seconds(runtime_snapshot, timestamp),
+            market_data_age_seconds=_market_age_seconds(runtime_snapshot, timestamp, observed_at=self._clock()),
             available_contexts=available_contexts,
             runtime_state=VisionMethodLiveRuntimeState.COLLECTING_CONTEXT,
             blocking_stage=_stage_label(stage),
@@ -795,6 +801,7 @@ class VisionMethodLiveInspectorBridge:
         first_blocker = next((failure for failure in failures if _assembly_failure_blocks(failure)), None)
         snapshot = assembly.snapshot
         report = assembly.report
+        updated_at = self._clock()
         return VisionMethodLiveStatus(
             instrument=getattr(getattr(assembly.runtime_snapshot, "symbol", None), "value", "-"),
             timeframe=assembly.timeframe.value,
@@ -810,8 +817,8 @@ class VisionMethodLiveInspectorBridge:
             missing_contexts=missing,
             failed_contexts=failed,
             unexpected_error=None,
-            updated_at=self._clock(),
-            market_data_age_seconds=_market_age_seconds(assembly.runtime_snapshot, assembly.timestamp),
+            updated_at=updated_at,
+            market_data_age_seconds=_market_age_seconds(assembly.runtime_snapshot, assembly.timestamp, observed_at=updated_at),
             level_context=assembly.level,
             opening_range_context=assembly.opening_range,
             structure_context=assembly.structure,
@@ -1076,8 +1083,8 @@ def _stage_label(stage: str) -> str:
     return stage.strip().replace(" ", "_").upper()
 
 
-def _market_age_seconds(runtime_snapshot, market_timestamp) -> float | None:
-    updated_at = getattr(runtime_snapshot, "updated_at", None) or getattr(runtime_snapshot, "snapshot_created_at", None)
+def _market_age_seconds(runtime_snapshot, market_timestamp, *, observed_at=None) -> float | None:
+    updated_at = observed_at or getattr(runtime_snapshot, "updated_at", None) or getattr(runtime_snapshot, "snapshot_created_at", None)
     if updated_at is None or market_timestamp is None:
         return None
     if not hasattr(updated_at, "utcoffset") or not hasattr(market_timestamp, "utcoffset"):
@@ -1085,6 +1092,23 @@ def _market_age_seconds(runtime_snapshot, market_timestamp) -> float | None:
     if updated_at.utcoffset() is None or market_timestamp.utcoffset() is None:
         return None
     return max(0.0, (updated_at - market_timestamp).total_seconds())
+
+
+def _is_live_market_data_stale(runtime_snapshot, market_timestamp, observed_at) -> bool:
+    runtime_session = getattr(runtime_snapshot, "runtime_session", None)
+    if getattr(runtime_session, "status", None) != "READY":
+        return False
+    age = _market_age_seconds(runtime_snapshot, market_timestamp, observed_at=observed_at)
+    return age is not None and age > LIVE_MARKET_DATA_STALE_SECONDS
+
+
+def _stale_market_data_reason(market_timestamp, market_age_seconds: float | None) -> str:
+    if market_age_seconds is None:
+        return "Live market data is stale."
+    return (
+        "Live market data is stale. "
+        f"Last market timestamp is {market_timestamp.isoformat()}; age is {market_age_seconds:.0f}s."
+    )
 
 
 def _available_contexts(snapshot: VisionMethodSnapshot) -> tuple[str, ...]:

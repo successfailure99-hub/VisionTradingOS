@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication, QPushButton
 
 from application import ApplicationBootstrap, RuntimeSnapshot
 from application.enums import RuntimeInstrument, RuntimeStatus
+from application.models import RuntimeTradingSession
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
 from core.enums.timeframe import TimeFrame
@@ -373,6 +374,43 @@ def test_live_bridge_early_market_data_without_closed_candle_collects_context():
     assert panel._labels["Live Blocking Stage"].text() == "CANDLE_ENGINE"
     assert panel._labels["Available Contexts"].text() == "Market Data"
     assert "Closed candle history is unavailable" in panel._labels["Blocking Reason"].text()
+
+
+def test_live_bridge_reports_stale_market_data_when_active_feed_stops_before_candle_close():
+    app()
+    stale_tick = datetime(2026, 7, 29, 9, 19, 45, tzinfo=IST)
+    inspector_refresh = datetime(2026, 7, 29, 9, 35, 2, tzinfo=IST)
+    session = RuntimeTradingSession(
+        instrument=RuntimeInstrument.NIFTY,
+        exchange="NSE",
+        market_timestamp=stale_tick,
+        trading_date=stale_tick.date(),
+        previous_completed_trading_date=stale_tick.date() - timedelta(days=1),
+        cpr_trading_date=stale_tick.date(),
+        camarilla_trading_date=stale_tick.date(),
+        adr_trading_date=stale_tick.date(),
+        vwap_trading_date=stale_tick.date(),
+        status="READY",
+    )
+    lifecycle = ApplicationBootstrap().create_application()
+    runtime = _FakeRuntime(
+        _runtime_snapshot(history=(), timestamp=stale_tick, runtime_session=session),
+        (),
+    )
+    object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
+    panel = VisionMethodInspector()
+
+    result = VisionMethodLiveInspectorBridge(lifecycle, panel, clock=lambda: inspector_refresh).refresh()
+
+    assert result.snapshot is None
+    assert result.status.runtime_state is VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+    assert result.status.blocking_stage == "MARKET_DATA"
+    assert result.status.market_data_age_seconds == pytest.approx(917.0)
+    assert "Live market data is stale" in result.status.blocking_reason
+    assert "09:19:45" in result.status.blocking_reason
+    assert panel._labels["Live Blocking Stage"].text() == "MARKET_DATA"
+    assert panel._labels["Market Data Age"].text() == "917s"
+    assert panel._labels["Assembly Failures"].text().startswith("Market Data missing: Live market data is stale.")
 
 
 def test_live_bridge_missing_daily_context_keeps_candle_progress_visible():
@@ -866,6 +904,7 @@ def _runtime_snapshot(
     vwap=_DEFAULT,
     price_action_trigger_context=_DEFAULT,
     price_action_trigger_stage_result=None,
+    runtime_session=None,
 ):
     history = _candles() if history is None else tuple(history)
     return RuntimeSnapshot(
@@ -891,6 +930,7 @@ def _runtime_snapshot(
         latest_closed_candle_at=timestamp,
         latest_analysis_at=timestamp,
         snapshot_created_at=timestamp,
+        runtime_session=runtime_session,
         adr=None if adr is _DEFAULT else adr,
         price_action_trigger_context=trigger(timestamp=timestamp) if price_action_trigger_context is _DEFAULT else price_action_trigger_context,
         price_action_trigger_stage_result=price_action_trigger_stage_result,
