@@ -14,6 +14,7 @@ from core.models.building_candle import INTRADAY_SESSION_OPEN
 from core.models.candle import Candle
 from core.models.daily_ohlc import DailyOHLC
 from core.models.tick import Tick
+from core.time_domain import OPTION_EVIDENCE_TIMESTAMP_TOLERANCE
 from application.execution_runtime_v1 import ExecutionFillPolicy, ExecutionOrderType, ExecutionRuntimeV1, ExecutionRuntimeV1Configuration
 from application.trade_lifecycle_v1 import TradeLifecycleCoordinatorV1, TradeLifecycleV1Request
 from engines.adr.engine import ADREngine
@@ -157,7 +158,7 @@ from application.models import (
 from application.runtime_contract import RuntimeContractContext, RuntimeContractSubject, RuntimeContractValidator, RuntimeIntegrityViolation
 from application.vision_forensics import VisionForensicTrace
 _OPTION_CHAIN_MAX_AGE_SECONDS = 180.0
-_OPTION_CHAIN_TIMESTAMP_TOLERANCE = timedelta(seconds=1)
+_OPTION_CHAIN_TIMESTAMP_TOLERANCE = OPTION_EVIDENCE_TIMESTAMP_TOLERANCE
 _VISION_LIQUIDITY_MIN_CANDLES = 3
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -466,6 +467,10 @@ class SymbolRuntime:
         return self._instrument
 
     @property
+    def exchange_calendar(self) -> ExchangeTradingCalendar:
+        return self._exchange_calendar
+
+    @property
     def status(self) -> RuntimeStatus:
         return self._status
 
@@ -630,7 +635,6 @@ class SymbolRuntime:
             "current_accumulated_volume",
         )
         self._vwap_last_error = None
-        self._observe_market_timestamp(tick.timestamp)
         self._record_asof_context_snapshots()
         return self.snapshot()
 
@@ -833,6 +837,14 @@ class SymbolRuntime:
         premium = self._current_option_close_premium(self._option_paper_position.candidate)
         timestamp = getattr(self.option_chain_engine.snapshot, "timestamp", None)
         if premium is None or not isinstance(timestamp, datetime):
+            return
+        market_timestamp = self._trusted_market_timestamp()
+        if (
+            market_timestamp is not None
+            and self._timestamps_are_comparable(timestamp, market_timestamp)
+            and timestamp - market_timestamp > _OPTION_CHAIN_TIMESTAMP_TOLERANCE
+        ):
+            self._option_chain_last_error = "Option paper mark timestamp exceeds certified option evidence skew tolerance."
             return
         underlying_price = getattr(self.option_chain_engine.snapshot, "underlying_price", None)
         self._option_paper_position = update_option_paper_position(
@@ -3337,6 +3349,7 @@ class SymbolRuntime:
                 ("VisionMethodSnapshot", self._vision_decision_timeframe.value),
                 ("ValidationReport", self._vision_decision_timeframe.value),
                 ("TradeCandidate", self._vision_decision_timeframe.value),
+                ("PaperPosition", self._vision_decision_timeframe.value),
                 ("OptionTradeCandidate", self._vision_decision_timeframe.value),
                 ("OptionPaperRisk", self._vision_decision_timeframe.value),
                 ("OptionPaperPosition", self._vision_decision_timeframe.value),
@@ -3582,17 +3595,17 @@ class SymbolRuntime:
         )
         for object_name, snapshot, producer, consumer in timestamped_children:
             timestamp = self._snapshot_timestamp(snapshot)
-            if (
-                market_timestamp is not None
-                and timestamp is not None
-                and self._timestamps_are_comparable(timestamp, market_timestamp)
-                and timestamp > market_timestamp
-            ):
+            if market_timestamp is None or timestamp is None or not self._timestamps_are_comparable(timestamp, market_timestamp):
+                continue
+            allowed_future = timedelta(0)
+            if object_name == "PaperPosition" and getattr(snapshot, "source", "") == "VISION_METHOD_OPTION_SELLING_PAPER":
+                allowed_future = _OPTION_CHAIN_TIMESTAMP_TOLERANCE
+            if timestamp - market_timestamp > allowed_future:
                 violations.append(
                     self._runtime_integrity_violation(
                         object_name,
                         "Snapshot timestamp is not newer than RuntimeSnapshot timestamp",
-                        f"<= {market_timestamp.isoformat()}",
+                        f"<= {(market_timestamp + allowed_future).isoformat()}",
                         timestamp.isoformat(),
                         timestamp,
                         producer=producer,
@@ -3622,7 +3635,8 @@ class SymbolRuntime:
                 )
             )
 
-        position_timestamp = self._snapshot_timestamp(self._canonical_paper_position())
+        paper_position_snapshot = self._canonical_paper_position()
+        position_timestamp = self._snapshot_timestamp(paper_position_snapshot)
         if (
             strategy_timestamp is not None
             and position_timestamp is not None
@@ -3643,7 +3657,13 @@ class SymbolRuntime:
             )
 
         journal_timestamp = self._snapshot_timestamp(self._journal_persistence_snapshot())
+        option_paper_open_mark = (
+            getattr(paper_position_snapshot, "source", "") == "VISION_METHOD_OPTION_SELLING_PAPER"
+            and str(getattr(paper_position_snapshot, "status", "")).lower() == "open"
+        )
         if (
+            not option_paper_open_mark
+            and
             position_timestamp is not None
             and journal_timestamp is not None
             and self._timestamps_are_comparable(journal_timestamp, position_timestamp)

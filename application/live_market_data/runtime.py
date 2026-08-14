@@ -92,6 +92,10 @@ class LiveMarketDataRuntime:
         return self._websocket_manager
 
     @property
+    def exchange_calendar(self) -> ExchangeTradingCalendar:
+        return self._exchange_calendar
+
+    @property
     def status(self) -> LiveMarketDataRuntimeStatus:
         with self._lock:
             self._sync_status_unlocked()

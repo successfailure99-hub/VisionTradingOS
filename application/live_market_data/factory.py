@@ -101,12 +101,14 @@ class LiveMarketDataRuntimeFactory:
         if ticker_client is not None:
             websocket_kwargs["client"] = ticker_client
         websocket_manager = self._websocket_manager_factory(**websocket_kwargs)
+        exchange_calendar = getattr(lifecycle.orchestrator, "exchange_calendar", None)
         runtime = LiveMarketDataRuntime(
             lifecycle=lifecycle,
             session_manager=session_manager,
             configuration=configuration,
             websocket_manager=websocket_manager,
             clock=self._clock,
+            exchange_calendar=exchange_calendar,
         )
         if configuration.auto_connect:
             runtime.validate()

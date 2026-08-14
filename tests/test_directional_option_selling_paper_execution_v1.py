@@ -700,6 +700,68 @@ def test_symbol_runtime_marks_open_short_option_position_with_buy_to_close_ask()
     assert view.option_paper_position.current_premium == 50.0
 
 
+def test_symbol_runtime_accepts_small_option_mark_lead_without_runtime_contract_failure():
+    item = SymbolRuntime(
+        EventBus(),
+        RuntimeConfiguration(
+            timeframes=("1m", "5m", "15m"),
+            option_expiry_date=EXPIRY,
+            directional_option_selling_configuration=option_config(),
+        ),
+        RuntimeInstrument.NIFTY,
+    )
+    item.start()
+    runtime_tick = __import__("tests.test_vision_paper_trading_integration_v1", fromlist=["tick"]).tick
+    item.process_tick(runtime_tick())
+    item.set_option_universe(universe())
+    item.process_option_chain_runtime(chain_snapshot(put_bid=100.0))
+
+    method = snapshot()
+    report = validate_vision_method(method)
+    item.process_vision_method_paper_trade(method, report)
+    item.process_option_chain_runtime(chain_snapshot(put_bid=80.0, timestamp=NOW + timedelta(milliseconds=175)))
+    view = item.snapshot()
+
+    assert view.runtime_session.market_timestamp == NOW
+    assert view.option_paper_position.updated_at == NOW + timedelta(milliseconds=175)
+    assert view.canonical_paper_position.updated_at == NOW + timedelta(milliseconds=175)
+    assert view.runtime_contract_report.valid is True
+
+
+def test_symbol_runtime_rejects_excessive_future_option_mark_without_advancing_clock_or_position():
+    item = SymbolRuntime(
+        EventBus(),
+        RuntimeConfiguration(
+            timeframes=("1m", "5m", "15m"),
+            option_expiry_date=EXPIRY,
+            directional_option_selling_configuration=option_config(),
+        ),
+        RuntimeInstrument.NIFTY,
+    )
+    item.start()
+    runtime_tick = __import__("tests.test_vision_paper_trading_integration_v1", fromlist=["tick"]).tick
+    item.process_tick(runtime_tick())
+    item.set_option_universe(universe())
+    item.process_option_chain_runtime(chain_snapshot(put_bid=100.0))
+
+    method = snapshot()
+    report = validate_vision_method(method)
+    item.process_vision_method_paper_trade(method, report)
+    before = item.snapshot().option_paper_position
+
+    try:
+        item.process_option_chain_runtime(chain_snapshot(put_bid=80.0, timestamp=NOW + timedelta(seconds=2)))
+    except ValueError as exc:
+        assert "future" in str(exc)
+    else:
+        raise AssertionError("future option mark beyond tolerance must be rejected")
+    after = item.snapshot()
+
+    assert after.runtime_session.market_timestamp == NOW
+    assert after.option_paper_position == before
+    assert after.runtime_contract_report.valid is True
+
+
 def test_symbol_runtime_blocks_fresh_vision_option_paper_candidate_after_market_close():
     item = SymbolRuntime(
         EventBus(),

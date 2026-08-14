@@ -82,7 +82,7 @@ def test_stale_option_chain_timestamp_remains_strict_after_canonical_timestamp_a
         raise AssertionError("stale option-chain snapshots must remain rejected")
 
 
-def test_futures_vwap_timestamp_advances_canonical_runtime_timestamp():
+def test_futures_vwap_timestamp_does_not_advance_canonical_runtime_timestamp():
     runtime = _runtime()
     vwap_time = NOW + timedelta(seconds=3)
 
@@ -102,9 +102,36 @@ def test_futures_vwap_timestamp_advances_canonical_runtime_timestamp():
 
     assert runtime_snapshot.vwap.timestamp == vwap_time
     assert runtime_snapshot.vwap_source.updated_at == vwap_time
-    assert runtime_snapshot.snapshot_created_at == vwap_time
-    assert runtime_snapshot.updated_at == vwap_time
-    assert runtime_snapshot.runtime_session.market_timestamp == vwap_time
+    assert runtime_snapshot.snapshot_created_at == NOW
+    assert runtime_snapshot.updated_at == NOW
+    assert runtime_snapshot.runtime_session.market_timestamp == NOW
+
+
+def test_future_futures_vwap_is_excluded_from_asof_query_until_canonical_time_advances():
+    runtime = _runtime()
+    original_vwap = runtime.snapshot().vwap
+    vwap_time = NOW + timedelta(seconds=3)
+
+    runtime.process_vwap_tick(
+        _tick(vwap_time, volume=25),
+        source_type="Futures Proxy",
+        source_exchange="NFO",
+        trading_symbol="NIFTY26JULFUT",
+        instrument_token=12345,
+        expiry=EXPIRY,
+        live_tick_count=1,
+        last_live_volume=25,
+        last_delta_volume=25,
+        last_live_tick=vwap_time,
+        current_accumulated_volume=25,
+    )
+
+    assert runtime._vwap_as_of(NOW) == original_vwap
+
+    advanced = runtime.process_tick(_tick(vwap_time))
+
+    assert advanced.runtime_session.market_timestamp == vwap_time
+    assert runtime._vwap_as_of(vwap_time).timestamp == vwap_time
 
 
 def test_runtime_session_uses_exchange_local_date_for_aware_market_timestamp():
@@ -135,4 +162,4 @@ def test_vision_live_bridge_uses_canonical_runtime_timestamp_before_latest_tick(
     )
 
     assert runtime_snapshot.latest_tick_at == NOW
-    assert _runtime_timestamp(runtime_snapshot) == vwap_time
+    assert _runtime_timestamp(runtime_snapshot) == NOW

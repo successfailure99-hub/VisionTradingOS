@@ -198,6 +198,31 @@ def test_runtime_contract_reports_timestamp_ordering_and_future_timestamp():
     assert backwards_report.violations[0].reason == "Runtime ordering mismatch"
 
 
+def test_runtime_contract_allows_option_paper_position_within_evidence_skew_tolerance():
+    subject = SimpleNamespace(
+        instrument=RuntimeInstrument.NIFTY,
+        timeframe="5m",
+        updated_at=VISION_NOW + timedelta(milliseconds=175),
+    )
+
+    report = _report_for(subject, object_name="OptionPaperPosition", context=_decision_context())
+
+    assert report.valid is True
+
+
+def test_runtime_contract_rejects_option_paper_position_beyond_evidence_skew_tolerance():
+    subject = SimpleNamespace(
+        instrument=RuntimeInstrument.NIFTY,
+        timeframe="5m",
+        updated_at=VISION_NOW + timedelta(seconds=2),
+    )
+
+    report = _report_for(subject, object_name="OptionPaperPosition", context=_decision_context())
+
+    assert report.valid is False
+    assert report.violations[0].reason == "Future timestamp"
+
+
 def test_runtime_contract_accepts_live_building_candle_interval_boundary():
     runtime_timestamp = datetime(2026, 8, 7, 14, 21, 59, 509494, tzinfo=UTC)
     active_candle = BuildingCandle(

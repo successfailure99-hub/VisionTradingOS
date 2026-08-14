@@ -6,7 +6,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from application import RuntimeConfiguration, RuntimeInstrument
 from application.bootstrap import ApplicationBootstrap
+from application.exchange_calendar import ExchangeHoliday
 from application.live_market_data import LiveMarketDataConfiguration, LiveMarketDataRuntimeFactory, LiveMarketDataRuntimeStatus
 from brokers.zerodha.auth import ZerodhaCredentials, ZerodhaSessionManager
 from brokers.zerodha.market_data import ZerodhaInstrumentSubscription, ZerodhaWebSocketManager
@@ -70,8 +72,8 @@ def session_manager(expires_at=NOW + timedelta(hours=1)):
     return manager
 
 
-def lifecycle(running=True):
-    manager = ApplicationBootstrap().create_application()
+def lifecycle(running=True, runtime_configuration=None):
+    manager = ApplicationBootstrap(runtime_configuration).create_application()
     if running:
         manager.start()
     return manager
@@ -111,6 +113,28 @@ def test_factory_reuses_supplied_objects_and_does_not_auto_connect_by_default():
     assert runtime.websocket_manager.registry.tokens() == (101,)
     assert ticker.connect_calls == 0
     assert runtime.status is LiveMarketDataRuntimeStatus.CREATED
+
+
+def test_factory_passes_orchestrator_exchange_calendar_to_live_runtime():
+    ticker = FakeTickerClient()
+    holiday_now = datetime(2026, 7, 14, 9, 15, tzinfo=UTC)
+    runtime_configuration = RuntimeConfiguration(
+        exchange_holidays=(ExchangeHoliday(Exchange.NSE, holiday_now.date(), "custom-holiday"),),
+    )
+    app_lifecycle = lifecycle(runtime_configuration=runtime_configuration)
+    custom_calendar = app_lifecycle.orchestrator.exchange_calendar
+
+    runtime = LiveMarketDataRuntimeFactory(clock=lambda: holiday_now).create(
+        lifecycle=app_lifecycle,
+        session_manager=session_manager(holiday_now + timedelta(hours=1)),
+        configuration=configuration(),
+        ticker_client=ticker,
+    )
+
+    assert runtime.exchange_calendar is custom_calendar
+    assert app_lifecycle.orchestrator.get_runtime(RuntimeInstrument.NIFTY).exchange_calendar is custom_calendar
+    watchdog = runtime.poll_watchdog()
+    assert watchdog.watchdog_reason == "Exchange is closed for a configured holiday."
 
 
 def test_factory_auto_connect_validates_and_connects_without_stopping_lifecycle():

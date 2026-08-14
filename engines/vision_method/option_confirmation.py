@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from application.enums import RuntimeInstrument
+from core.time_domain import OPTION_EVIDENCE_TIMESTAMP_TOLERANCE
 from engines.option_chain.models import OptionChainSnapshot
 from engines.option_chain_analytics.enums import (
     OptionAnalyticsBias,
@@ -33,7 +34,7 @@ from .models import (
 
 
 DEFAULT_MAX_OPTION_CONFIRMATION_AGE = timedelta(minutes=5)
-DEFAULT_OPTION_CONFIRMATION_TIMESTAMP_TOLERANCE = timedelta(seconds=1)
+DEFAULT_OPTION_CONFIRMATION_TIMESTAMP_TOLERANCE = OPTION_EVIDENCE_TIMESTAMP_TOLERANCE
 
 
 @dataclass(frozen=True, slots=True)
