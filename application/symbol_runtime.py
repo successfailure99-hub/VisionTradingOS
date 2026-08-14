@@ -149,6 +149,7 @@ from application.models import (
     RuntimeOptionChainStatus,
     RuntimePaperPositionSnapshot,
     RuntimeSnapshot,
+    RuntimeSupportingEngineDiagnostic,
     RuntimeTradingSession,
     RuntimeVerificationStage,
     RuntimeVWAPSource,
@@ -425,6 +426,7 @@ class SymbolRuntime:
         self._processed_vision_decision_identities: set[str] = set()
         self._vision_live_activation_candle_end: datetime | None = None
         self._last_closed_candles_by_timeframe: dict[TimeFrame, tuple[Candle, ...]] = {}
+        self._supporting_engine_failures: dict[tuple[str, TimeFrame], RuntimeSupportingEngineDiagnostic] = {}
         self._vision_method_snapshot: VisionMethodSnapshot | None = None
         self._vision_method_validation_report: VisionMethodValidationReport | None = None
         self._vision_decision_provenance = "LIVE"
@@ -561,6 +563,7 @@ class SymbolRuntime:
         self._observe_market_timestamp(tick.timestamp)
         self._latest_tick_at = tick.timestamp
         self._ensure_daily_context_for_session(tick.timestamp)
+        self._refresh_pivot_opening_contexts(tick.timestamp)
         self._refresh_adr(tick.timestamp, tick.last_price)
         self._refresh_closed_timeframe_analysis(closed_timeframes, tick.timestamp, tick.last_price)
         self._process_runtime_vision_decision_candles(closed_timeframes)
@@ -697,32 +700,38 @@ class SymbolRuntime:
                 self.price_action_engine.process(candle)
                 try:
                     self.moving_average_context_engine.process(candle)
-                except Exception:
-                    pass
+                    self._clear_supporting_engine_failure("Moving Average Context", self._primary_timeframe, candle.end_time)
+                except Exception as exc:
+                    self._record_supporting_engine_failure("Moving Average Context", self._primary_timeframe, exc, candle.end_time)
                 try:
                     self.momentum_context_engine.process(candle)
-                except Exception:
-                    pass
+                    self._clear_supporting_engine_failure("Momentum Context", self._primary_timeframe, candle.end_time)
+                except Exception as exc:
+                    self._record_supporting_engine_failure("Momentum Context", self._primary_timeframe, exc, candle.end_time)
                 try:
                     self.volume_context_engine.process(candle)
-                except Exception:
-                    pass
+                    self._clear_supporting_engine_failure("Volume Context", self._primary_timeframe, candle.end_time)
+                except Exception as exc:
+                    self._record_supporting_engine_failure("Volume Context", self._primary_timeframe, exc, candle.end_time)
                 self._seed_vwap_from_candle(candle)
         else:
             for candle in accepted:
                 self.price_action_engine.process(candle)
                 try:
                     self.moving_average_context_engine.process(candle)
-                except Exception:
-                    pass
+                    self._clear_supporting_engine_failure("Moving Average Context", self._primary_timeframe, candle.end_time)
+                except Exception as exc:
+                    self._record_supporting_engine_failure("Moving Average Context", self._primary_timeframe, exc, candle.end_time)
                 try:
                     self.momentum_context_engine.process(candle)
-                except Exception:
-                    pass
+                    self._clear_supporting_engine_failure("Momentum Context", self._primary_timeframe, candle.end_time)
+                except Exception as exc:
+                    self._record_supporting_engine_failure("Momentum Context", self._primary_timeframe, exc, candle.end_time)
                 try:
                     self.volume_context_engine.process(candle)
-                except Exception:
-                    pass
+                    self._clear_supporting_engine_failure("Volume Context", self._primary_timeframe, candle.end_time)
+                except Exception as exc:
+                    self._record_supporting_engine_failure("Volume Context", self._primary_timeframe, exc, candle.end_time)
                 self._seed_vwap_from_candle(candle)
 
         self._last_processed_history_counts[self._primary_timeframe] = len(
@@ -737,6 +746,7 @@ class SymbolRuntime:
             self._restore_session_open_from_history(self._exchange_session_date(latest.end_time))
             self._refresh_adr(latest.end_time, latest.close)
             self._observe_market_timestamp(latest.end_time)
+            self._refresh_pivot_opening_contexts(latest.end_time)
         return accepted
 
     def get_candle_history(self, timeframe: str | TimeFrame | None = None) -> tuple[Candle, ...]:
@@ -1179,6 +1189,7 @@ class SymbolRuntime:
         self._processed_vision_decision_identities = set()
         self._vision_live_activation_candle_end = None
         self._last_closed_candles_by_timeframe = {}
+        self._supporting_engine_failures = {}
         self._vision_method_snapshot = None
         self._vision_method_validation_report = None
         self._vision_decision_provenance = "LIVE"
@@ -1214,21 +1225,6 @@ class SymbolRuntime:
         base_candle_readiness = self._base_candle_readiness(primary_candle_history, latest_candle, market_timestamp, runtime_session, recovery_state)
         vision_history_readiness = self._vision_decision_history_readiness(vision_decision_history, market_timestamp, runtime_session, recovery_state)
         liquidity_input_readiness = self._liquidity_input_readiness(vision_decision_history, market_timestamp, runtime_session, recovery_state)
-        pivot_flight_plan = self._current_pivot_flight_plan(market_timestamp, runtime_session)
-        pivot_opening_assessment = self._current_pivot_opening_assessment(market_timestamp, runtime_session, pivot_flight_plan)
-        pivot_confluence_context = self._current_pivot_confluence_context(
-            market_timestamp,
-            runtime_session,
-            latest_candle,
-            pivot_flight_plan,
-            pivot_opening_assessment,
-        )
-        price_action_trigger_context = self._current_price_action_trigger_context(
-            market_timestamp,
-            runtime_session,
-            pivot_confluence_context,
-            pivot_opening_assessment,
-        )
         vwap = self.vwap_engine.get_latest(self._core_instrument)
         adr = self.adr_engine.state
         price_action = self.price_action_engine.state
@@ -1308,10 +1304,10 @@ class SymbolRuntime:
             vision_method_snapshot=self._vision_method_snapshot,
             vision_method_validation_report=self._vision_method_validation_report,
             vision_decision_provenance=self._vision_decision_provenance,
-            pivot_flight_plan=pivot_flight_plan,
-            pivot_opening_assessment=pivot_opening_assessment,
-            pivot_confluence_context=pivot_confluence_context,
-            price_action_trigger_context=price_action_trigger_context,
+            pivot_flight_plan=self._pivot_flight_plan,
+            pivot_opening_assessment=self._pivot_opening_assessment,
+            pivot_confluence_context=self._pivot_confluence_context,
+            price_action_trigger_context=self._price_action_trigger_context,
             price_action_trigger_stage_result=self._price_action_trigger_stage_result,
             vision_trade_candidate=self._vision_trade_candidate,
             option_trade_candidate=self._option_trade_candidate,
@@ -1514,6 +1510,11 @@ class SymbolRuntime:
             self._pivot_opening_assessment = None
             self._pivot_opening_assessment_identity = None
         return self._pivot_opening_assessment
+
+    def _refresh_pivot_opening_contexts(self, market_timestamp: datetime | None) -> None:
+        runtime_session = self._runtime_trading_session(market_timestamp)
+        flight_plan = self._current_pivot_flight_plan(market_timestamp, runtime_session)
+        self._current_pivot_opening_assessment(market_timestamp, runtime_session, flight_plan)
 
     def _current_pivot_confluence_context(
         self,
@@ -1772,22 +1773,91 @@ class SymbolRuntime:
                 self.price_action_engines[timeframe].process(candle)
                 try:
                     self.moving_average_context_engines[timeframe].process(candle)
-                except Exception:
-                    pass
+                    self._clear_supporting_engine_failure("Moving Average Context", timeframe, candle.end_time)
+                except Exception as exc:
+                    self._record_supporting_engine_failure("Moving Average Context", timeframe, exc, candle.end_time)
                 try:
                     self.momentum_context_engines[timeframe].process(candle)
-                except Exception:
-                    pass
+                    self._clear_supporting_engine_failure("Momentum Context", timeframe, candle.end_time)
+                except Exception as exc:
+                    self._record_supporting_engine_failure("Momentum Context", timeframe, exc, candle.end_time)
                 try:
                     self.volume_context_engines[timeframe].process(candle)
-                except Exception:
-                    pass
+                    self._clear_supporting_engine_failure("Volume Context", timeframe, candle.end_time)
+                except Exception as exc:
+                    self._record_supporting_engine_failure("Volume Context", timeframe, exc, candle.end_time)
             self._last_processed_history_counts[timeframe] = len(history)
             if new_candles:
                 if timeframe is self._primary_timeframe:
                     self._latest_closed_candle_at = new_candles[-1].end_time
                 closed_timeframes.append(timeframe)
         return tuple(closed_timeframes)
+
+    def _record_supporting_engine_failure(
+        self,
+        engine_name: str,
+        timeframe: TimeFrame,
+        exc: Exception,
+        observed_at: datetime,
+    ) -> None:
+        key = (engine_name, timeframe)
+        observed_at = _session_authority_timestamp(observed_at)
+        sanitized = _safe_error(exc)
+        existing = self._supporting_engine_failures.get(key)
+        first_seen = existing.first_seen if existing is not None else observed_at
+        occurrence_count = existing.occurrence_count + 1 if existing is not None else 1
+        self._supporting_engine_failures[key] = RuntimeSupportingEngineDiagnostic(
+            component=engine_name,
+            timeframe=timeframe,
+            status="DEGRADED",
+            first_seen=first_seen,
+            last_seen=observed_at,
+            occurrence_count=occurrence_count,
+            error_class=exc.__class__.__name__,
+            sanitized_error=sanitized,
+            blocking=False,
+            recovered_at=None,
+        )
+
+    def _clear_supporting_engine_failure(self, engine_name: str, timeframe: TimeFrame, observed_at: datetime) -> None:
+        key = (engine_name, timeframe)
+        observed_at = _session_authority_timestamp(observed_at)
+        existing = self._supporting_engine_failures.get(key)
+        if existing is None:
+            return
+        self._supporting_engine_failures[key] = RuntimeSupportingEngineDiagnostic(
+            component=engine_name,
+            timeframe=timeframe,
+            status="RECOVERED",
+            first_seen=existing.first_seen,
+            last_seen=observed_at,
+            occurrence_count=existing.occurrence_count,
+            error_class=existing.error_class,
+            sanitized_error=existing.sanitized_error,
+            blocking=False,
+            recovered_at=observed_at,
+        )
+
+    def _supporting_engine_status(self) -> tuple[str, ...]:
+        if not self._supporting_engine_failures:
+            return ("READY",)
+        return tuple(
+            self._format_supporting_engine_diagnostic(self._supporting_engine_failures[key])
+            for key in sorted(self._supporting_engine_failures, key=lambda item: (item[0], item[1].value))
+        )
+
+    def _supporting_engine_diagnostics(self) -> tuple[RuntimeSupportingEngineDiagnostic, ...]:
+        return tuple(
+            self._supporting_engine_failures[key]
+            for key in sorted(self._supporting_engine_failures, key=lambda item: (item[0], item[1].value))
+        )
+
+    @staticmethod
+    def _format_supporting_engine_diagnostic(diagnostic: RuntimeSupportingEngineDiagnostic) -> str:
+        return (
+            f"{diagnostic.status} {diagnostic.component} {diagnostic.timeframe.value}: "
+            f"{diagnostic.sanitized_error}"
+        )
 
     def _refresh_closed_timeframe_analysis(
         self,
@@ -1805,13 +1875,16 @@ class SymbolRuntime:
                     session_low=session_low,
                     timeframe=timeframe,
                 )
-            except Exception:
+                self._clear_supporting_engine_failure("Market Context", timeframe, timestamp)
+            except Exception as exc:
+                self._record_supporting_engine_failure("Market Context", timeframe, exc, timestamp)
                 continue
 
             try:
                 self._assemble_tradingview_evidence(timestamp, current_price, timeframe=timeframe)
-            except Exception:
-                pass
+                self._clear_supporting_engine_failure("TradingView Evidence", timeframe, timestamp)
+            except Exception as exc:
+                self._record_supporting_engine_failure("TradingView Evidence", timeframe, exc, timestamp)
         if timeframes:
             self._latest_analysis_at = timestamp
             self._fuse_multi_timeframe_evidence(timestamp)
@@ -1823,13 +1896,14 @@ class SymbolRuntime:
             return
         candles = self._last_closed_candles_by_timeframe.get(self._vision_decision_timeframe, ())
         if len(candles) > 1:
-            for candle in candles:
+            for candle in candles[:-1]:
                 self._processed_vision_decision_identities.add(self._vision_decision_identity(candle))
             self._record_decision_audit(
                 "HISTORICAL_CATCHUP",
-                "Feed recovery closed multiple Vision decision candles at once; recovered decision candles were retained as history only.",
+                "Feed recovery closed multiple Vision decision candles at once; catch-up candles were retained as history only.",
                 rejected=True,
             )
+            self._process_runtime_vision_decision_candle(candles[-1], allow_trade=False, provenance="RECOVERY_CONTEXT")
             return
         for candle in candles:
             self._process_runtime_vision_decision_candle(candle)
@@ -1868,6 +1942,7 @@ class SymbolRuntime:
                     rejected=True,
                 )
                 return
+            self._publish_vision_extension_contexts(assembly)
             self._vision_decision_provenance = provenance
             if not allow_trade:
                 self._observe_vision_method_recovery_context(assembly.snapshot, assembly.report)
@@ -1882,6 +1957,17 @@ class SymbolRuntime:
             raise
         finally:
             self._processed_vision_decision_identities.add(identity)
+
+    def _publish_vision_extension_contexts(self, assembly) -> None:
+        self._pivot_flight_plan = assembly.pivot_flight_plan
+        self._pivot_opening_assessment = assembly.pivot_opening_assessment
+        self._pivot_confluence_context = assembly.pivot_confluence_context
+        self._price_action_trigger_context = assembly.price_action_trigger_context
+        self._price_action_trigger_stage_result = assembly.price_action_trigger_stage_result
+        self._pivot_flight_plan_identity = None
+        self._pivot_opening_assessment_identity = None
+        self._pivot_confluence_identity = None
+        self._price_action_trigger_identity = None
 
     def _observe_vision_method_recovery_context(
         self,
@@ -3781,6 +3867,8 @@ class SymbolRuntime:
             last_validation=getattr(getattr(validation, "validation_result", None), "value", "-"),
             market_timestamp=market_timestamp,
             trading_date=runtime_session.trading_date,
+            supporting_engine_status=self._supporting_engine_status(),
+            supporting_engine_diagnostics=self._supporting_engine_diagnostics(),
         )
 
     def _build_risk_management_v2_input(self, strategy) -> RiskManagementV2Input:

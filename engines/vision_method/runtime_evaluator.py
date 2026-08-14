@@ -36,6 +36,8 @@ from engines.vision_method import (
     VisionOptionConfirmation,
     VisionOptionConfirmationContext,
     VisionOptionConfirmationRequest,
+    VisionPivotConfluenceRequest,
+    VisionPriceActionTriggerRequest,
     VisionRangeLocation,
     VisionReversalState,
     VisionSetupQuality,
@@ -57,7 +59,12 @@ from engines.vision_method import (
     assemble_vision_setup_qualification_context,
     assemble_vision_structure_context,
     assemble_vision_structure_event_context,
+    build_pivot_confluence_context,
+    build_price_action_trigger_context,
     calculate_vision_method_snapshot,
+    failed_price_action_trigger_stage_result,
+    insufficient_price_action_trigger_stage_result,
+    price_action_trigger_stage_result_from_context,
     validate_vision_method,
 )
 
@@ -135,11 +142,18 @@ def assemble_vision_method_runtime(
         )
 
     failures: list[VisionContextAssemblyFailure] = []
-    pivot_flight_plan = getattr(runtime_snapshot, "pivot_flight_plan", None)
-    pivot_opening_assessment = getattr(runtime_snapshot, "pivot_opening_assessment", None)
-    pivot_confluence_context = getattr(runtime_snapshot, "pivot_confluence_context", None)
-    price_action_trigger_context = getattr(runtime_snapshot, "price_action_trigger_context", None)
-    price_action_trigger_stage_result = getattr(runtime_snapshot, "price_action_trigger_stage_result", None)
+    pivot_flight_plan = None
+    pivot_opening_assessment = None
+    pivot_confluence_context = None
+    price_action_trigger_context = None
+    price_action_trigger_stage_result = None
+    runtime_owns_vision_extensions = hasattr(runtime, "_current_pivot_flight_plan")
+    if not runtime_owns_vision_extensions:
+        pivot_flight_plan = getattr(runtime_snapshot, "pivot_flight_plan", None)
+        pivot_opening_assessment = getattr(runtime_snapshot, "pivot_opening_assessment", None)
+        pivot_confluence_context = getattr(runtime_snapshot, "pivot_confluence_context", None)
+        price_action_trigger_context = getattr(runtime_snapshot, "price_action_trigger_context", None)
+        price_action_trigger_stage_result = getattr(runtime_snapshot, "price_action_trigger_stage_result", None)
 
     if not history:
         market_age = _market_age_seconds(runtime_snapshot, timestamp, observed_at=observed_at)
@@ -340,6 +354,76 @@ def assemble_vision_method_runtime(
             option_confirmation = _fallback_option_confirmation(timestamp, failures)
             log.debug("[VisionMethodRuntime] OPTION_CONFIRMATION failed reason=%r", _safe_error(exc))
 
+    if runtime_owns_vision_extensions:
+        pivot_flight_plan = _current_pivot_flight_plan(runtime, timestamp, runtime_snapshot)
+        pivot_opening_assessment = _current_pivot_opening_assessment(runtime, timestamp, runtime_snapshot, pivot_flight_plan)
+    if runtime_owns_vision_extensions and level is not None:
+        try:
+            pivot_confluence_context = build_pivot_confluence_context(
+                VisionPivotConfluenceRequest(
+                    instrument=runtime_snapshot.symbol,
+                    timeframe=timeframe,
+                    trading_date=trading_date,
+                    timestamp=timestamp,
+                    current_price=history[-1].close,
+                    level_context=level,
+                    opening_range_context=opening_range,
+                    structure_context=structure,
+                    liquidity_context=liquidity,
+                    pivot_flight_plan=pivot_flight_plan,
+                    pivot_opening_assessment=pivot_opening_assessment,
+                )
+            )
+            log.debug("[VisionMethodRuntime] PIVOT_CONFLUENCE available")
+        except Exception as exc:
+            failures.append(_failure("Pivot Confluence", exc))
+            log.debug("[VisionMethodRuntime] PIVOT_CONFLUENCE failed reason=%r", _safe_error(exc))
+
+    trigger_timestamp = _trigger_stage_timestamp(timestamp)
+    trigger_generation = _trigger_snapshot_generation(runtime_snapshot.symbol, timeframe, trigger_timestamp)
+    source_candle = history[-1] if history else None
+    source_reference = _trigger_candle_reference(source_candle)
+    if runtime_owns_vision_extensions and level is not None and trigger_timestamp is not None and pivot_confluence_context is None:
+        price_action_trigger_stage_result = insufficient_price_action_trigger_stage_result(
+            reason="Pivot confluence context unavailable.",
+            decision_timestamp=trigger_timestamp,
+            source_candle_reference=source_reference,
+            snapshot_generation=trigger_generation,
+        )
+    elif runtime_owns_vision_extensions and trigger_timestamp is not None and pivot_confluence_context is not None:
+        try:
+            price_action_trigger_context = build_price_action_trigger_context(
+                VisionPriceActionTriggerRequest(
+                    instrument=runtime_snapshot.symbol,
+                    timeframe=timeframe,
+                    trading_date=trading_date,
+                    timestamp=timestamp,
+                    candles=history,
+                    pivot_confluence_context=pivot_confluence_context,
+                    opening_range_context=opening_range,
+                    structure_context=structure,
+                    liquidity_context=liquidity,
+                    structure_event_context=structure_events,
+                    pivot_opening_assessment=pivot_opening_assessment,
+                    previous_context=getattr(runtime, "_price_action_trigger_context", None),
+                )
+            )
+            price_action_trigger_stage_result = price_action_trigger_stage_result_from_context(
+                price_action_trigger_context,
+                snapshot_generation=trigger_generation,
+            )
+            log.debug("[VisionMethodRuntime] PRICE_ACTION_TRIGGER available")
+        except Exception as exc:
+            price_action_trigger_stage_result = failed_price_action_trigger_stage_result(
+                exc=exc,
+                decision_timestamp=trigger_timestamp,
+                source_candle_reference=source_reference,
+                trigger_zone_reference=_trigger_zone_reference(pivot_confluence_context),
+                snapshot_generation=trigger_generation,
+            )
+            price_action_trigger_context = None
+            log.debug("[VisionMethodRuntime] PRICE_ACTION_TRIGGER failed reason=%r", _safe_error(exc))
+
     if (
         price_action_trigger_stage_result is not None
         and getattr(getattr(price_action_trigger_stage_result, "status", None), "value", None) == "trigger_assembly_failed"
@@ -413,6 +497,56 @@ def assemble_vision_method_runtime(
         report=report,
         failures=tuple(failures),
     )
+
+
+def _current_pivot_flight_plan(runtime, timestamp, runtime_snapshot):
+    session = getattr(runtime_snapshot, "runtime_session", None)
+    builder = getattr(runtime, "_current_pivot_flight_plan", None)
+    if session is None or builder is None:
+        return None
+    try:
+        return builder(timestamp, session)
+    except Exception:
+        return None
+
+
+def _current_pivot_opening_assessment(runtime, timestamp, runtime_snapshot, pivot_flight_plan):
+    session = getattr(runtime_snapshot, "runtime_session", None)
+    builder = getattr(runtime, "_current_pivot_opening_assessment", None)
+    if session is None or builder is None or pivot_flight_plan is None:
+        return None
+    try:
+        return builder(timestamp, session, pivot_flight_plan)
+    except Exception:
+        return None
+
+
+def _trigger_stage_timestamp(timestamp: datetime | None) -> datetime | None:
+    if timestamp is None:
+        return None
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        return timestamp
+    return timestamp.astimezone(timestamp.tzinfo)
+
+
+def _trigger_snapshot_generation(instrument, timeframe: TimeFrame, timestamp: datetime | None) -> str:
+    stamp = timestamp.isoformat() if timestamp is not None else "unknown"
+    return f"{instrument.value}:{timeframe.value}:{stamp}"
+
+
+def _trigger_candle_reference(candle) -> str:
+    if candle is None:
+        return "-"
+    return f"{candle.timeframe}:{candle.start_time.isoformat()}:{candle.end_time.isoformat()}"
+
+
+def _trigger_zone_reference(context) -> str:
+    if context is None:
+        return "-"
+    zones = getattr(context, "hot_zones", ()) or ()
+    if not zones:
+        return "-"
+    return getattr(zones[0], "zone_reference", None) or getattr(zones[0], "label", "-")
 
 
 def vision_decision_timeframe(runtime, runtime_snapshot) -> TimeFrame:

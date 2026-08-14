@@ -42,6 +42,7 @@ class CountingLifecycle(ApplicationLifecycleManager):
 class FakeLiveRuntime(LiveMarketDataRuntime):
     def __init__(self):
         self.snapshot_calls = 0
+        self.poll_calls = 0
         self.start_calls = 0
         self.stop_calls = 0
 
@@ -62,6 +63,7 @@ class FakeLiveRuntime(LiveMarketDataRuntime):
         )
 
     def poll_watchdog(self):
+        self.poll_calls += 1
         return self.snapshot()
 
     def start(self):
@@ -109,6 +111,7 @@ def test_refresh_with_runtime_calls_each_snapshot_once_and_stores_combined_view(
     view = window.refresh()
     assert lifecycle.snapshot_calls == 1
     assert runtime.snapshot_calls == 1
+    assert runtime.poll_calls == 0
     assert window.current_view() is view
     assert view.live_market_data.available is True
 

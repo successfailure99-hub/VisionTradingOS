@@ -34,6 +34,8 @@ def test_invalid_api_key_and_auto_connect_rejected():
         LiveMarketDataConfiguration("api", (sub(),), auto_connect="yes")
     with pytest.raises(ValueError):
         LiveMarketDataConfiguration("api", (sub(),), stale_data_seconds=0)
+    with pytest.raises(ValueError):
+        LiveMarketDataConfiguration("api", (sub(),), watchdog_interval_seconds=0)
 
 
 def test_subscriptions_required_unique_ordered_and_tupled():
@@ -55,15 +57,24 @@ def test_subscriptions_required_unique_ordered_and_tupled():
 def test_no_secret_fields_or_hardcoded_token_requirement():
     names = {field.name for field in fields(LiveMarketDataConfiguration)}
 
-    assert names == {"api_key", "subscriptions", "auto_connect", "stale_data_seconds", "feed_trace_path"}
+    assert names == {
+        "api_key",
+        "subscriptions",
+        "auto_connect",
+        "stale_data_seconds",
+        "watchdog_interval_seconds",
+        "feed_trace_path",
+    }
     assert "api_secret" not in names
     assert "access_token" not in names
     configuration = LiveMarketDataConfiguration(
         "api",
         (sub(987654321),),
         stale_data_seconds=30,
+        watchdog_interval_seconds=10,
         feed_trace_path="trace.jsonl",
     )
     assert configuration.subscriptions[0].instrument_token == 987654321
     assert configuration.stale_data_seconds == 30
+    assert configuration.watchdog_interval_seconds == 10.0
     assert configuration.feed_trace_path == Path("trace.jsonl")

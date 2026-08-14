@@ -62,7 +62,7 @@ def sub(instrument=Instrument.NIFTY, token=101):
 
 
 def config(subscription=sub(), **overrides):
-    values = {"api_key": "api_key_secret", "subscriptions": (subscription,)}
+    values = {"api_key": "api_key_secret", "subscriptions": (subscription,), "watchdog_interval_seconds": 3600.0}
     values.update(overrides)
     return LiveMarketDataConfiguration(**values)
 
@@ -140,11 +140,14 @@ def test_successful_validate_start_stop_restart_and_counters():
     assert ticker.connect_calls == 0
     assert subject.start().status is LiveMarketDataRuntimeStatus.STARTING
     assert ticker.connect_calls == 1
+    assert subject.watchdog_worker_running is True
     assert subject.start().start_count == 1
+    assert subject.watchdog_worker_start_count == 1
     ticker.callbacks["on_connect"](None, {})
     assert subject.snapshot().status is LiveMarketDataRuntimeStatus.RUNNING
     assert subject.stop().status is LiveMarketDataRuntimeStatus.STOPPED
     assert ticker.close_calls == 1
+    assert subject.watchdog_worker_running is False
     assert subject.stop().stop_count == 1
     assert subject.lifecycle.is_running() is True
     assert subject.session_manager.is_authenticated() is True
@@ -233,6 +236,32 @@ def test_watchdog_detects_silent_stall_drives_retry_and_requires_fresh_tick(tmp_
     assert "FRESH_TICK_CONFIRMED" in trace
     assert "api_key_secret" not in trace
     assert "access_secret" not in trace
+
+
+def test_watchdog_worker_drives_retry_without_dashboard_refresh(tmp_path):
+    current = [datetime(2026, 7, 15, 4, 0, tzinfo=UTC)]
+    subject, ticker = runtime(
+        session=auth(current[0] + timedelta(hours=1)),
+        configuration=config(stale_data_seconds=120, feed_trace_path=tmp_path / "feed.jsonl"),
+        clock=lambda: current[0],
+    )
+    subject.start()
+    ticker.callbacks["on_connect"](None, {})
+    ticker.callbacks["on_ticks"](None, (raw_tick(current[0], price=25000.0, volume=100),))
+
+    subject._watchdog_worker.tick_once()
+    current[0] = current[0] + timedelta(seconds=121)
+    subject._watchdog_worker.tick_once()
+
+    assert subject.snapshot().watchdog_state is LiveFeedWatchdogState.RECONNECT_SCHEDULED
+    assert subject.websocket_manager.snapshot().status is ZerodhaWebSocketStatus.RECONNECT_WAIT
+    assert ticker.connect_calls == 1
+
+    current[0] = current[0] + timedelta(seconds=2)
+    subject._watchdog_worker.tick_once()
+
+    assert ticker.connect_calls == 2
+    assert subject.snapshot().watchdog_state is LiveFeedWatchdogState.RECONNECTING
 
 
 def test_watchdog_does_not_recover_outside_active_session(tmp_path):

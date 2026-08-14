@@ -19,6 +19,7 @@ class LiveMarketDataConfiguration:
     subscriptions: tuple[ZerodhaInstrumentSubscription, ...]
     auto_connect: bool = False
     stale_data_seconds: int = 120
+    watchdog_interval_seconds: float = 5.0
     feed_trace_path: Path | None = None
 
     def __post_init__(self) -> None:
@@ -33,6 +34,13 @@ class LiveMarketDataConfiguration:
             raise TypeError("stale_data_seconds must be an integer")
         if self.stale_data_seconds <= 0:
             raise ValueError("stale_data_seconds must be positive")
+        if isinstance(self.watchdog_interval_seconds, bool) or not isinstance(
+            self.watchdog_interval_seconds, (int, float)
+        ):
+            raise TypeError("watchdog_interval_seconds must be numeric")
+        if self.watchdog_interval_seconds <= 0:
+            raise ValueError("watchdog_interval_seconds must be positive")
+        object.__setattr__(self, "watchdog_interval_seconds", float(self.watchdog_interval_seconds))
         if self.feed_trace_path is not None:
             object.__setattr__(self, "feed_trace_path", Path(self.feed_trace_path))
         subscriptions = tuple(self.subscriptions)

@@ -7,6 +7,7 @@ from threading import RLock
 
 from application.enums import RuntimeStatus
 from application.exchange_calendar import DEFAULT_EXCHANGE_CALENDAR, ExchangeSessionPhase
+from application.feed_watchdog_worker import LiveFeedWatchdogWorker
 from application.lifecycle_manager import ApplicationLifecycleManager
 from application.live_market_data.configuration import LiveMarketDataConfiguration
 from application.live_market_data.enums import LiveFeedWatchdogState, LiveMarketDataRuntimeStatus
@@ -62,6 +63,10 @@ class LiveMarketDataRuntime:
         self._trace = FeedIncidentTrace(
             configuration.feed_trace_path or DEFAULT_FEED_TRACE_PATH,
             redactions=(configuration.api_key, getattr(session_manager.session, "access_token", None)),
+        )
+        self._watchdog_worker = LiveFeedWatchdogWorker(
+            self.poll_watchdog,
+            interval_seconds=configuration.watchdog_interval_seconds,
         )
         self._validate_session_state()
         self._validate_registry_matches_configuration()
@@ -120,10 +125,12 @@ class LiveMarketDataRuntime:
             self._last_started_at = self._now()
             self._last_error = None
             self._record_trace_unlocked("FEED_RUNTIME_STARTED")
+            self._watchdog_worker.start()
             self._sync_status_unlocked()
             return self._snapshot_unlocked()
 
     def stop(self) -> LiveMarketDataRuntimeSnapshot:
+        self._watchdog_worker.stop()
         with self._lock:
             self._sync_status_unlocked()
             if self._status in {
@@ -162,6 +169,14 @@ class LiveMarketDataRuntime:
         with self._lock:
             self._sync_status_unlocked()
             return self._snapshot_unlocked()
+
+    @property
+    def watchdog_worker_running(self) -> bool:
+        return self._watchdog_worker.running
+
+    @property
+    def watchdog_worker_start_count(self) -> int:
+        return self._watchdog_worker.start_count
 
     def poll_watchdog(self, *, instrument: Instrument = Instrument.NIFTY) -> LiveMarketDataRuntimeSnapshot:
         with self._lock:

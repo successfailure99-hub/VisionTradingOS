@@ -282,6 +282,52 @@ def _normalize_runtime_timeframes(
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeSupportingEngineDiagnostic:
+    component: str
+    timeframe: TimeFrame
+    status: str
+    first_seen: datetime
+    last_seen: datetime
+    occurrence_count: int
+    error_class: str
+    sanitized_error: str
+    blocking: bool = False
+    recovered_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.component, str) or not self.component.strip():
+            raise ValueError("component must be a non-empty string")
+        object.__setattr__(self, "component", self.component.strip())
+        if not isinstance(self.timeframe, TimeFrame):
+            raise TypeError("timeframe must be TimeFrame")
+        if self.status not in {"READY", "DEGRADED", "RECOVERED"}:
+            raise ValueError("status must be READY, DEGRADED, or RECOVERED")
+        for field_name in ("first_seen", "last_seen"):
+            value = getattr(self, field_name)
+            if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError(f"{field_name} must be timezone-aware datetime")
+        if self.last_seen < self.first_seen:
+            raise ValueError("last_seen cannot be before first_seen")
+        if isinstance(self.occurrence_count, bool) or not isinstance(self.occurrence_count, int):
+            raise TypeError("occurrence_count must be an integer")
+        if self.occurrence_count <= 0:
+            raise ValueError("occurrence_count must be positive")
+        if not isinstance(self.error_class, str) or not self.error_class.strip():
+            raise ValueError("error_class must be a non-empty string")
+        object.__setattr__(self, "error_class", self.error_class.strip())
+        if not isinstance(self.sanitized_error, str) or not self.sanitized_error.strip():
+            raise ValueError("sanitized_error must be a non-empty string")
+        object.__setattr__(self, "sanitized_error", self.sanitized_error.strip())
+        if not isinstance(self.blocking, bool):
+            raise TypeError("blocking must be bool")
+        if self.recovered_at is not None:
+            if not isinstance(self.recovered_at, datetime) or self.recovered_at.tzinfo is None or self.recovered_at.utcoffset() is None:
+                raise ValueError("recovered_at must be timezone-aware datetime or None")
+            if self.recovered_at < self.first_seen:
+                raise ValueError("recovered_at cannot be before first_seen")
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeDiagnostics:
     current_stage: str
     blocking_stage: str
@@ -292,6 +338,8 @@ class RuntimeDiagnostics:
     last_validation: str
     market_timestamp: datetime | None = None
     trading_date: date | None = None
+    supporting_engine_status: tuple[str, ...] = ()
+    supporting_engine_diagnostics: tuple[RuntimeSupportingEngineDiagnostic, ...] = ()
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -311,6 +359,14 @@ class RuntimeDiagnostics:
             raise TypeError("market_timestamp must be datetime or None")
         if self.trading_date is not None and (isinstance(self.trading_date, datetime) or not isinstance(self.trading_date, date)):
             raise TypeError("trading_date must be date or None")
+        statuses = tuple(self.supporting_engine_status)
+        if any(not isinstance(item, str) or not item.strip() for item in statuses):
+            raise ValueError("supporting_engine_status must contain non-empty text values")
+        object.__setattr__(self, "supporting_engine_status", tuple(item.strip() for item in statuses))
+        diagnostics = tuple(self.supporting_engine_diagnostics)
+        if any(not isinstance(item, RuntimeSupportingEngineDiagnostic) for item in diagnostics):
+            raise TypeError("supporting_engine_diagnostics must contain RuntimeSupportingEngineDiagnostic values")
+        object.__setattr__(self, "supporting_engine_diagnostics", diagnostics)
 
 
 @dataclass(frozen=True, slots=True)

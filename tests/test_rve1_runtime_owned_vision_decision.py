@@ -145,6 +145,111 @@ def test_historical_warmup_does_not_replay_vision_decisions(monkeypatch):
     assert item.snapshot().vision_trade_candidate is None
 
 
+def test_runtime_snapshot_is_read_only_for_vision_extension_builders(monkeypatch):
+    item = runtime()
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("RuntimeSnapshot must not build Vision extension contexts")
+
+    monkeypatch.setattr(item, "_current_pivot_flight_plan", forbidden)
+    monkeypatch.setattr(item, "_current_pivot_opening_assessment", forbidden)
+    monkeypatch.setattr(item, "_current_pivot_confluence_context", forbidden)
+    monkeypatch.setattr(item, "_current_price_action_trigger_context", forbidden)
+
+    view = item.snapshot()
+
+    assert view.pivot_flight_plan is None
+    assert view.pivot_opening_assessment is None
+    assert view.pivot_confluence_context is None
+    assert view.price_action_trigger_context is None
+
+
+def test_supporting_engine_failures_are_visible_without_blocking_candles(monkeypatch):
+    item = runtime()
+
+    def fail_supporting_engine(_candle):
+        raise ValueError("moving average source unavailable")
+
+    monkeypatch.setattr(item.moving_average_context_engines[TimeFrame.ONE_MINUTE], "process", fail_supporting_engine)
+
+    item.process_tick(tick(START, price=100.0))
+    item.process_tick(tick(START + timedelta(minutes=1), price=101.0))
+
+    view = item.snapshot()
+
+    assert view.latest_closed_candle_at == START + timedelta(minutes=1)
+    assert any(
+        item == "DEGRADED Moving Average Context 1m: moving average source unavailable"
+        for item in view.runtime_diagnostics.supporting_engine_status
+    )
+    diagnostic = next(
+        item
+        for item in view.runtime_diagnostics.supporting_engine_diagnostics
+        if item.component == "Moving Average Context" and item.timeframe is TimeFrame.ONE_MINUTE
+    )
+    assert diagnostic.status == "DEGRADED"
+    assert diagnostic.occurrence_count == 1
+    assert diagnostic.blocking is False
+
+
+def test_warmup_supporting_engine_failures_are_visible(monkeypatch):
+    item = runtime()
+
+    def fail_supporting_engine(_candle):
+        raise RuntimeError("warmup moving average unavailable")
+
+    monkeypatch.setattr(item.moving_average_context_engine, "process", fail_supporting_engine)
+
+    item.warm_up_candles((candle(0),))
+
+    view = item.snapshot()
+
+    assert any(
+        status == "DEGRADED Moving Average Context 1m: warmup moving average unavailable"
+        for status in view.runtime_diagnostics.supporting_engine_status
+    )
+
+
+def test_market_context_failure_is_visible_without_blocking_closed_candle(monkeypatch):
+    item = runtime()
+
+    def fail_market_context(**_kwargs):
+        raise ValueError("market context source unavailable")
+
+    monkeypatch.setattr(item, "build_market_context", fail_market_context)
+
+    item.process_tick(tick(START, price=100.0))
+    item.process_tick(tick(START + timedelta(minutes=1), price=101.0))
+
+    view = item.snapshot()
+
+    assert view.latest_closed_candle_at == START + timedelta(minutes=1)
+    assert any(
+        status == "DEGRADED Market Context 1m: market context source unavailable"
+        for status in view.runtime_diagnostics.supporting_engine_status
+    )
+
+
+def test_tradingview_evidence_failure_is_visible_without_blocking_closed_candle(monkeypatch):
+    item = runtime()
+
+    def fail_tradingview_evidence(*_args, **_kwargs):
+        raise ValueError("tradingview evidence unavailable")
+
+    monkeypatch.setattr(item, "_assemble_tradingview_evidence", fail_tradingview_evidence)
+
+    item.process_tick(tick(START, price=100.0))
+    item.process_tick(tick(START + timedelta(minutes=1), price=101.0))
+
+    view = item.snapshot()
+
+    assert view.latest_closed_candle_at == START + timedelta(minutes=1)
+    assert any(
+        status == "DEGRADED TradingView Evidence 1m: tradingview evidence unavailable"
+        for status in view.runtime_diagnostics.supporting_engine_status
+    )
+
+
 def test_mid_session_warmup_processes_only_next_new_5m_close(monkeypatch):
     calls = []
     install_fake_evaluator(monkeypatch, calls)
@@ -165,8 +270,23 @@ def test_feed_recovery_catchup_candles_do_not_create_fake_decisions(monkeypatch)
 
     item.process_tick(tick(START, price=100.0))
     item.process_tick(tick(START + timedelta(minutes=20), price=104.0))
+
+    assert calls == [START + timedelta(minutes=20)]
+    assert item.snapshot().vision_trade_candidate.timestamp == START + timedelta(minutes=20)
+    assert item.snapshot().vision_decision_provenance == "RECOVERY_CONTEXT"
+
     item.process_tick(tick(START + timedelta(minutes=25), price=105.0))
 
-    assert calls == [START + timedelta(minutes=25)]
+    assert calls == [START + timedelta(minutes=20), START + timedelta(minutes=25)]
     assert item.snapshot().vision_trade_candidate.timestamp == START + timedelta(minutes=25)
+    assert item.snapshot().vision_decision_provenance == "LIVE"
 
+    item.process_tick(tick(START + timedelta(minutes=30), price=106.0))
+
+    assert calls == [
+        START + timedelta(minutes=20),
+        START + timedelta(minutes=25),
+        START + timedelta(minutes=30),
+    ]
+    assert item.snapshot().vision_trade_candidate.timestamp == START + timedelta(minutes=30)
+    assert item.snapshot().vision_decision_provenance == "LIVE"

@@ -403,7 +403,7 @@ def test_duplicate_refresh_and_reconnect_do_not_duplicate_vision_position():
     assert second.paper_trading.position is None
 
 
-def test_multi_candle_recovery_keeps_catchup_history_without_fake_trade_decision():
+def test_multi_candle_recovery_keeps_catchup_history_and_refreshes_latest_context_without_trade():
     item = runtime()
     item._vision_decision_timeframe = TimeFrame.FIVE_MINUTES
     first = candle(NOW.replace(hour=9, minute=15), NOW.replace(hour=9, minute=20), close=100.0)
@@ -421,8 +421,8 @@ def test_multi_candle_recovery_keeps_catchup_history_without_fake_trade_decision
 
     assert item._vision_decision_identity(first) in item._processed_vision_decision_identities
     assert item._vision_decision_identity(second) in item._processed_vision_decision_identities
-    assert item._vision_decision_identity(latest) in item._processed_vision_decision_identities
-    assert calls == []
+    assert item._vision_decision_identity(latest) not in item._processed_vision_decision_identities
+    assert calls == [(latest, False, "RECOVERY_CONTEXT")]
     assert item._decision_audit.rejected_at == "HISTORICAL_CATCHUP"
 
 

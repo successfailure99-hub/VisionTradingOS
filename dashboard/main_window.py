@@ -175,7 +175,7 @@ class VisionMainWindow(QMainWindow):
         lifecycle_snapshot = self._lifecycle.snapshot()
         self._last_lifecycle_snapshot = lifecycle_snapshot
         live_snapshot = (
-            self._live_market_data_runtime.poll_watchdog()
+            self._live_market_data_runtime.snapshot()
             if self._live_market_data_runtime is not None
             else None
         )
