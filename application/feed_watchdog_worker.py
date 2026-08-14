@@ -4,7 +4,7 @@ Application-owned worker for bounded live-feed watchdog polling.
 
 from __future__ import annotations
 
-from threading import Event, RLock, Thread
+from threading import Event, RLock, Thread, current_thread
 from typing import Callable
 
 
@@ -55,6 +55,8 @@ class LiveFeedWatchdogWorker:
             if thread is None:
                 return
             self._stop_event.set()
+        if thread is current_thread():
+            return
         thread.join(timeout=timeout)
         with self._lock:
             if thread is self._thread and not thread.is_alive():

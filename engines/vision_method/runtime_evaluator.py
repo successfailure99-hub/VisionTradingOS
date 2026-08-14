@@ -10,6 +10,7 @@ from core.enums.timeframe import TimeFrame
 from core.models.daily_ohlc import DailyOHLC
 from engines.option_chain.models import OptionChainSnapshot
 from engines.option_chain_analytics.models import OptionChainAnalyticsSnapshot
+from engines.vision_method.option_confirmation import DEFAULT_MAX_OPTION_CONFIRMATION_AGE
 from engines.vision_method import (
     VisionBOS,
     VisionBreakerBlock,
@@ -71,6 +72,7 @@ from engines.vision_method import (
 
 LOGGER = logging.getLogger(__name__)
 LIVE_MARKET_DATA_STALE_SECONDS = 120.0
+VWAP_MAX_SNAPSHOT_AGE = timedelta(minutes=5)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +103,7 @@ def assemble_vision_method_runtime(
     *,
     runtime_snapshot=None,
     timestamp: datetime | None = None,
+    decision_source_candle=None,
     option_analytics_provider=None,
     observed_at: datetime | None = None,
     logger: logging.Logger | None = None,
@@ -124,7 +127,8 @@ def assemble_vision_method_runtime(
     log = logger or LOGGER
     runtime_snapshot = runtime.snapshot() if runtime_snapshot is None else runtime_snapshot
     timeframe = vision_decision_timeframe(runtime, runtime_snapshot)
-    timestamp = timestamp or _runtime_timestamp(runtime_snapshot)
+    source_candle = decision_source_candle
+    timestamp = timestamp or getattr(source_candle, "end_time", None) or _runtime_timestamp(runtime_snapshot)
     trading_date = _market_session_date(timestamp)
     observed_at = observed_at or _default_clock()
     history = tuple(
@@ -174,7 +178,7 @@ def assemble_vision_method_runtime(
             failures=tuple(failures),
         )
 
-    latest_price = _latest_price(runtime_snapshot, history)
+    latest_price = _latest_price(runtime_snapshot, history, as_of_timestamp=timestamp, decision_source_candle=source_candle)
     previous_price = history[-2].close if len(history) >= 2 else None
     opening_price = history[0].open
     cpr = runtime_snapshot.cpr
@@ -190,7 +194,7 @@ def assemble_vision_method_runtime(
         failures.append(_missing_failure("Camarilla", _waiting_daily_context_reason("Camarilla", camarilla.trading_date, trading_date)))
     if cpr is not None and camarilla is not None and cpr.trading_date == trading_date and camarilla.trading_date == trading_date:
         previous_day = _previous_day_from_cpr(cpr)
-        adr, vwap = _session_aligned_optional_contexts(runtime_snapshot, trading_date, failures)
+        adr, vwap = _session_aligned_optional_contexts(runtime_snapshot, trading_date, timestamp, failures)
         try:
             level = level_assembler(
                 VisionLevelContextRequest(
@@ -333,6 +337,7 @@ def assemble_vision_method_runtime(
         failures.append(_not_evaluated_failure("Option Confirmation", "Setup qualification is unavailable."))
     elif cpr is not None:
         option_chain, option_analytics = _option_inputs(runtime_snapshot, option_analytics_provider)
+        option_chain, option_analytics = _fresh_option_inputs(option_chain, option_analytics, timestamp, failures)
         option_expiry = option_chain.expiry_date if option_chain is not None else cpr.trading_date
         try:
             option_confirmation = option_confirmation_assembler(
@@ -346,7 +351,7 @@ def assemble_vision_method_runtime(
                 ),
                 instrument=runtime_snapshot.symbol,
                 expiry=option_expiry,
-                max_snapshot_age=timedelta(days=1),
+                max_snapshot_age=DEFAULT_MAX_OPTION_CONFIRMATION_AGE,
             )
             log.debug("[VisionMethodRuntime] OPTION_CONFIRMATION available")
         except Exception as exc:
@@ -594,8 +599,10 @@ def _align_timestamp_to_closed_candle_timezone(timestamp, history) -> object:
     return timestamp.astimezone(candle_zone)
 
 
-def _latest_price(runtime_snapshot, history) -> float:
-    if runtime_snapshot.latest_tick is not None:
+def _latest_price(runtime_snapshot, history, *, as_of_timestamp: datetime, decision_source_candle=None) -> float:
+    if decision_source_candle is not None and getattr(decision_source_candle, "end_time", None) == as_of_timestamp:
+        return decision_source_candle.close
+    if runtime_snapshot.latest_tick is not None and runtime_snapshot.latest_tick.timestamp <= as_of_timestamp:
         return runtime_snapshot.latest_tick.last_price
     return history[-1].close
 
@@ -623,6 +630,31 @@ def _option_inputs(
         raise TypeError("option provider must return OptionChainSnapshot or None.")
     if analytics is not None and not isinstance(analytics, OptionChainAnalyticsSnapshot):
         raise TypeError("option provider must return OptionChainAnalyticsSnapshot or None.")
+    return option_chain, analytics
+
+
+def _fresh_option_inputs(
+    option_chain: OptionChainSnapshot | None,
+    analytics: OptionChainAnalyticsSnapshot | None,
+    as_of_timestamp: datetime,
+    failures: list[VisionContextAssemblyFailure],
+) -> tuple[OptionChainSnapshot | None, OptionChainAnalyticsSnapshot | None]:
+    if option_chain is not None and option_chain.timestamp > as_of_timestamp:
+        failures.append(_missing_failure("Option Confirmation", "Option chain snapshot is newer than the Vision decision timestamp."))
+        option_chain = None
+        analytics = None
+    if analytics is not None and analytics.timestamp > as_of_timestamp:
+        failures.append(_missing_failure("Option Confirmation", "Option analytics snapshot is newer than the Vision decision timestamp."))
+        option_chain = None
+        analytics = None
+    if option_chain is not None and as_of_timestamp - option_chain.timestamp > DEFAULT_MAX_OPTION_CONFIRMATION_AGE:
+        failures.append(_missing_failure("Option Confirmation", "Option chain snapshot is stale for the Vision decision timestamp."))
+        option_chain = None
+        analytics = None
+    if analytics is not None and as_of_timestamp - analytics.timestamp > DEFAULT_MAX_OPTION_CONFIRMATION_AGE:
+        failures.append(_missing_failure("Option Confirmation", "Option analytics snapshot is stale for the Vision decision timestamp."))
+        option_chain = None
+        analytics = None
     return option_chain, analytics
 
 
@@ -661,15 +693,25 @@ def _waiting_daily_context_reason(name: str, context_date, trading_date) -> str:
 def _session_aligned_optional_contexts(
     runtime_snapshot,
     trading_date,
+    as_of_timestamp,
     failures: list[VisionContextAssemblyFailure],
 ):
     adr = runtime_snapshot.adr
     if adr is not None and adr.trading_date != trading_date:
         failures.append(_missing_failure("ADR", _waiting_daily_context_reason("ADR", adr.trading_date, trading_date)))
         adr = None
+    elif adr is not None and getattr(adr, "timestamp", as_of_timestamp) > as_of_timestamp:
+        failures.append(_missing_failure("ADR", "ADR snapshot is newer than the Vision decision timestamp."))
+        adr = None
     vwap = runtime_snapshot.vwap
     if vwap is not None and vwap.trading_date != trading_date:
         failures.append(_missing_failure("VWAP", _waiting_daily_context_reason("VWAP", vwap.trading_date, trading_date)))
+        vwap = None
+    elif vwap is not None and getattr(vwap, "timestamp", as_of_timestamp) > as_of_timestamp:
+        failures.append(_missing_failure("VWAP", "VWAP snapshot is newer than the Vision decision timestamp."))
+        vwap = None
+    elif vwap is not None and as_of_timestamp - getattr(vwap, "timestamp", as_of_timestamp) > VWAP_MAX_SNAPSHOT_AGE:
+        failures.append(_missing_failure("VWAP", "VWAP snapshot is stale for the Vision decision timestamp."))
         vwap = None
     return adr, vwap
 

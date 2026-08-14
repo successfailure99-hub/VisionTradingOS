@@ -481,6 +481,58 @@ def test_process_raw_ticks_delivers_incremental_volume_after_duplicate_suppressi
     assert [tick.volume for tick in result.normalized_ticks] == [100, 100, 115, 115]
 
 
+def test_cumulative_volume_baseline_resets_by_trading_session_without_breaking_same_day_reconnect():
+    delivered = []
+    subject = manager(subscriptions=(sub(101),), consumer=delivered.append)
+    day_one = NOW
+    day_two = NOW + timedelta(days=1)
+
+    first = raw_at(day_one, 101, 25000.0)
+    first["volume"] = 25_000_000
+    lower_same_day = raw_at(day_one + timedelta(minutes=1), 101, 25001.0)
+    lower_same_day["volume"] = 24_999_000
+    reset_next_day = raw_at(day_two, 101, 25002.0)
+    reset_next_day["volume"] = 500_000
+    higher_next_day = raw_at(day_two + timedelta(minutes=1), 101, 25003.0)
+    higher_next_day["volume"] = 525_000
+
+    subject.process_raw_ticks((first, lower_same_day, reset_next_day, higher_next_day))
+
+    assert [tick.volume for tick in delivered] == [25_000_000, 0, 500_000, 25_000]
+
+
+def test_late_stale_socket_close_after_new_connection_does_not_mutate_new_generation():
+    client = FakeTickerClient()
+    current = [NOW]
+    subject = manager(
+        client,
+        (sub(101),),
+        clock=lambda: current[0],
+        reconnect_initial_delay_seconds=1,
+        reconnect_max_delay_seconds=5,
+    )
+    subject.connect()
+    client.callbacks["on_connect"](None, {})
+
+    subject.recycle_stale_connection("silent live feed stall detected")
+    current[0] = NOW + timedelta(seconds=1)
+    subject.retry_connect_if_due()
+    client.callbacks["on_connect"](None, {})
+    reconnected = subject.snapshot()
+
+    client.callbacks["on_close"](None, 1000, "late old stale socket close")
+    after_late_close = subject.snapshot()
+
+    assert after_late_close.status is ZerodhaWebSocketStatus.CONNECTED
+    assert after_late_close.retry_scheduled == reconnected.retry_scheduled
+    assert after_late_close.disconnection_count == reconnected.disconnection_count
+
+    client.callbacks["on_close"](None, 1006, "current socket closed")
+
+    assert subject.snapshot().status is ZerodhaWebSocketStatus.RECONNECT_WAIT
+    assert subject.snapshot().retry_scheduled == reconnected.retry_scheduled + 1
+
+
 def test_snapshot_immutable_no_secret_fields_same_client_callbacks_once_and_rlock():
     client = FakeTickerClient()
     subject = manager(client, (sub(101),))

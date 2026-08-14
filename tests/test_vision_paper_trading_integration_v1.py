@@ -426,6 +426,42 @@ def test_multi_candle_recovery_keeps_catchup_history_and_refreshes_latest_contex
     assert item._decision_audit.rejected_at == "HISTORICAL_CATCHUP"
 
 
+def test_single_stale_recovered_vision_candle_is_non_trading_recovery_context():
+    item = runtime()
+    item._vision_decision_timeframe = TimeFrame.FIVE_MINUTES
+    stale = candle(NOW.replace(hour=9, minute=15), NOW.replace(hour=9, minute=20), close=100.0)
+    item._last_tick = tick(timestamp=stale.end_time + item._base_timeframe.duration + timedelta(seconds=1))
+    item._last_closed_candles_by_timeframe[item._vision_decision_timeframe] = (stale,)
+    calls = []
+
+    def spy(candle_item, *, allow_trade=True, provenance="LIVE"):
+        calls.append((candle_item, allow_trade, provenance))
+
+    item._process_runtime_vision_decision_candle = spy
+
+    item._process_runtime_vision_decision_candles((item._vision_decision_timeframe,))
+
+    assert calls == [(stale, False, "RECOVERY_CONTEXT")]
+
+
+def test_boundary_tick_closed_vision_candle_remains_live_context():
+    item = runtime()
+    item._vision_decision_timeframe = TimeFrame.FIVE_MINUTES
+    live = candle(NOW.replace(hour=10, minute=0), NOW.replace(hour=10, minute=5), close=100.0)
+    item._last_tick = tick(timestamp=live.end_time + timedelta(seconds=1))
+    item._last_closed_candles_by_timeframe[item._vision_decision_timeframe] = (live,)
+    calls = []
+
+    def spy(candle_item, *, allow_trade=True, provenance="LIVE"):
+        calls.append((candle_item, allow_trade, provenance))
+
+    item._process_runtime_vision_decision_candle = spy
+
+    item._process_runtime_vision_decision_candles((item._vision_decision_timeframe,))
+
+    assert calls == [(live, True, "LIVE")]
+
+
 def test_non_actionable_candidate_has_no_canonical_paper_position():
     item = runtime()
     process(item, replace(snapshot(), candidate_state=VisionCandidateState.WAIT))

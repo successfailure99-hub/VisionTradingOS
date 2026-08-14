@@ -158,6 +158,22 @@ def test_successful_validate_start_stop_restart_and_counters():
     assert subject.websocket_manager.registry.tokens() == (101,)
 
 
+def test_restart_restarts_watchdog_once_and_keeps_runtime_active():
+    subject, ticker = runtime()
+    subject.start()
+    ticker.callbacks["on_connect"](None, {})
+    assert subject.watchdog_worker_running is True
+    first_start_count = subject.watchdog_worker_start_count
+
+    restarted = subject.restart()
+
+    assert restarted.status is LiveMarketDataRuntimeStatus.STARTING
+    assert subject.watchdog_worker_running is True
+    assert subject.watchdog_worker_start_count == first_start_count + 1
+    assert ticker.close_calls == 1
+    assert ticker.connect_calls == 2
+
+
 def test_websocket_status_mapping_and_snapshot_safety():
     subject, ticker = runtime()
     subject.validate()

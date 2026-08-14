@@ -322,6 +322,17 @@ def test_snapshot_does_not_restore_option_position_from_checkpoint(monkeypatch):
     item.snapshot()
 
 
+def test_repeated_snapshot_does_not_mutate_previous_runtime_timestamp():
+    item = runtime()
+    item.process_tick(tick(START, price=100.0))
+    observed = item._previous_runtime_snapshot_timestamp
+
+    item.snapshot()
+    item.snapshot()
+
+    assert item._previous_runtime_snapshot_timestamp == observed
+
+
 def test_mid_session_warmup_processes_only_next_new_5m_close(monkeypatch):
     calls = []
     install_fake_evaluator(monkeypatch, calls)

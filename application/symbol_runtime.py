@@ -1245,7 +1245,6 @@ class SymbolRuntime:
             option_chain_snapshot=option_chain_snapshot,
             option_chain_analytics=option_chain_analytics,
         )
-        self._previous_runtime_snapshot_timestamp = market_timestamp
         return RuntimeSnapshot(
             symbol=self._instrument,
             timeframe=self._primary_timeframe.value,
@@ -1908,7 +1907,10 @@ class SymbolRuntime:
             self._process_runtime_vision_decision_candle(candles[-1], allow_trade=False, provenance="RECOVERY_CONTEXT")
             return
         for candle in candles:
-            self._process_runtime_vision_decision_candle(candle)
+            if self._is_recovery_closed_vision_candle(candle):
+                self._process_runtime_vision_decision_candle(candle, allow_trade=False, provenance="RECOVERY_CONTEXT")
+            else:
+                self._process_runtime_vision_decision_candle(candle)
 
     def _process_runtime_vision_decision_candle(self, candle: Candle, *, allow_trade: bool = True, provenance: str = "LIVE") -> None:
         if candle.timeframe != self._vision_decision_timeframe.value:
@@ -1936,6 +1938,7 @@ class SymbolRuntime:
                 self,
                 runtime_snapshot=self.snapshot(),
                 timestamp=candle.end_time,
+                decision_source_candle=candle,
             )
             if assembly.snapshot is None or assembly.report is None:
                 self._record_decision_audit(
@@ -2516,9 +2519,18 @@ class SymbolRuntime:
         if not isinstance(timestamp, datetime):
             return self._market_timestamp(None)
         if self._canonical_market_timestamp is None or timestamp > self._canonical_market_timestamp:
+            self._previous_runtime_snapshot_timestamp = self._canonical_market_timestamp
             self._canonical_market_timestamp = timestamp
         self._updated_at = self._canonical_market_timestamp
         return self._canonical_market_timestamp
+
+    def _is_recovery_closed_vision_candle(self, candle: Candle) -> bool:
+        tick_timestamp = getattr(self._last_tick, "timestamp", None)
+        if not isinstance(tick_timestamp, datetime):
+            return False
+        if tick_timestamp <= candle.end_time:
+            return False
+        return tick_timestamp - candle.end_time > self._base_timeframe.duration
 
     def _candidate_market_timestamp(self, timestamp: datetime | None) -> datetime | None:
         current = self._market_timestamp(None)

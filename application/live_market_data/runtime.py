@@ -156,14 +156,13 @@ class LiveMarketDataRuntime:
             return self._snapshot_unlocked()
 
     def restart(self) -> LiveMarketDataRuntimeSnapshot:
-        with self._lock:
-            websocket = self._websocket_manager
-            self.stop()
-            self.validate()
-            snapshot = self.start()
-            if self._websocket_manager is not websocket:
-                raise RuntimeError("websocket manager changed during restart")
-            return snapshot
+        websocket = self._websocket_manager
+        self.stop()
+        self.validate()
+        snapshot = self.start()
+        if self._websocket_manager is not websocket:
+            raise RuntimeError("websocket manager changed during restart")
+        return snapshot
 
     def snapshot(self) -> LiveMarketDataRuntimeSnapshot:
         with self._lock:
