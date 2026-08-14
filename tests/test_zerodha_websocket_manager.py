@@ -91,6 +91,12 @@ def raw(token=101, price=25000.0):
     }
 
 
+def raw_at(timestamp, token=101, price=25000.0):
+    value = raw(token, price)
+    value["exchange_timestamp"] = timestamp
+    return value
+
+
 def test_initial_state_constructor_and_expired_session():
     client = FakeTickerClient()
     subject = manager(client)
@@ -360,6 +366,95 @@ def test_process_raw_ticks_serialized_delivery_counts_and_errors():
     assert subject.snapshot().latest_tick_latency_ms is not None
     assert subject.snapshot().max_tick_latency_ms is not None
     assert subject.status is ZerodhaWebSocketStatus.CREATED
+
+
+def test_successful_delivery_updates_per_token_market_timestamp_after_consumer_success():
+    delivered = []
+    subject = manager(
+        subscriptions=(sub(101, Instrument.NIFTY), sub(102, Instrument.BANKNIFTY)),
+        consumer=delivered.append,
+    )
+    nifty_time = NOW
+    bank_time = NOW + timedelta(seconds=1)
+
+    subject.process_raw_ticks((raw_at(nifty_time, 101, 25000.0), raw_at(bank_time, 102, 52000.0)))
+    snapshot = subject.snapshot()
+
+    assert snapshot.last_delivered_market_timestamp(101) == nifty_time
+    assert snapshot.last_delivered_market_timestamp(102) == bank_time
+    assert subject.last_delivered_market_timestamp(101) == nifty_time
+    assert tuple(snapshot.last_delivered_market_timestamp_by_token) == ((101, nifty_time), (102, bank_time))
+
+
+def test_consumer_failure_and_duplicate_suppression_do_not_advance_delivered_timestamp():
+    delivered = []
+
+    def consumer(tick):
+        delivered.append(tick)
+        if tick.last_price == 25001.0:
+            raise RuntimeError("consumer failed after normalization")
+
+    subject = manager(subscriptions=(sub(101),), consumer=consumer)
+    first_time = NOW
+    failed_time = NOW + timedelta(seconds=1)
+    duplicate_time = first_time
+
+    subject.process_raw_ticks((raw_at(first_time, 101, 25000.0),))
+    subject.process_raw_ticks((raw_at(duplicate_time, 101, 25000.0),))
+    subject.process_raw_ticks((raw_at(failed_time, 101, 25001.0),))
+
+    snapshot = subject.snapshot()
+    assert snapshot.last_tick_at == failed_time
+    assert snapshot.last_delivered_market_timestamp(101) == first_time
+    assert subject.last_delivered_market_timestamp(101) == first_time
+    assert snapshot.delivered_tick_count == 1
+    assert snapshot.rejected_tick_count == 1
+
+
+def test_recycle_stale_connection_closes_socket_once_and_remains_recoverable():
+    client = FakeTickerClient()
+    client.invoke_close_callback_on_close = True
+    subject = manager(client, (sub(101),))
+    subject.connect()
+    client.callbacks["on_connect"](None, {})
+
+    snapshot = subject.recycle_stale_connection("silent live feed stall detected")
+
+    assert client.close_calls == 1
+    assert snapshot.status is ZerodhaWebSocketStatus.RECONNECT_WAIT
+    assert snapshot.disconnection_count == 1
+    assert snapshot.retry_scheduled == 1
+    client.callbacks["on_close"](None, 1000, "late duplicate close")
+    assert subject.snapshot().disconnection_count == 1
+    assert subject.snapshot().retry_scheduled == 1
+
+
+def test_recycle_stale_connection_reconnects_and_restores_subscriptions_and_mode():
+    client = FakeTickerClient()
+    current = [NOW]
+    subject = manager(
+        client,
+        (sub(101),),
+        clock=lambda: current[0],
+        reconnect_initial_delay_seconds=2,
+        reconnect_max_delay_seconds=5,
+    )
+    subject.connect()
+    client.callbacks["on_connect"](None, {})
+
+    subject.recycle_stale_connection("silent live feed stall detected")
+    subject.retry_connect_if_due()
+    assert client.connect_calls == [True]
+
+    current[0] = NOW + timedelta(seconds=2)
+    subject.retry_connect_if_due()
+    client.callbacks["on_connect"](None, {})
+
+    assert client.close_calls == 1
+    assert client.connect_calls == [True, True]
+    assert client.subscribed == [[101], [101]]
+    assert ("full", [101]) in client.modes
+    assert subject.snapshot().status is ZerodhaWebSocketStatus.CONNECTED
 
 
 def test_process_raw_ticks_delivers_incremental_volume_after_duplicate_suppression():

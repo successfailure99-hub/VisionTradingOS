@@ -498,6 +498,7 @@ class SymbolRuntime:
         self.trade_lifecycle_v1.start()
         self.trade_journal_v1_engine.start()
         self._paper_recovery = self.trade_journal_v1_engine.load_checkpoint(expected_instrument=self._core_instrument)
+        self._restore_option_paper_position_from_checkpoint()
         self.execution_policy_engine.start()
         self.trade_authorization_engine.start()
         self.paper_execution_coordinator.start()
@@ -533,6 +534,7 @@ class SymbolRuntime:
         if tick.symbol is not self._core_instrument:
             raise ValueError("Tick instrument does not match SymbolRuntime.")
         self._capture_session_open_from_tick(tick)
+        self._restore_option_paper_position_from_checkpoint()
         for engine in self.candle_engines.values():
             engine.on_tick(tick)
         if not self._ready_futures_proxy():
@@ -2010,12 +2012,22 @@ class SymbolRuntime:
         return history[-1].end_time if history else None
 
     def _refresh_primary_closed_candle_analysis(self, context: MarketContextState) -> None:
+        observed_at = (
+            getattr(context, "updated_at", None)
+            or self._latest_analysis_at
+            or self._latest_closed_candle_at
+            or getattr(self._last_tick, "timestamp", None)
+        )
         try:
             reasoning = self.run_ai_reasoning(context)
             self.run_strategy(context, reasoning)
-        except Exception:
+            if isinstance(observed_at, datetime):
+                self._clear_supporting_engine_failure("Legacy AI/Strategy", self._primary_timeframe, observed_at)
+        except Exception as exc:
             # Downstream dashboard analysis must never reject an otherwise valid
             # market-data tick; engines keep their previous deterministic state.
+            if isinstance(observed_at, datetime):
+                self._record_supporting_engine_failure("Legacy AI/Strategy", self._primary_timeframe, exc, observed_at)
             return
 
     def _assemble_tradingview_evidence(
@@ -2062,8 +2074,10 @@ class SymbolRuntime:
             setup = self.setup_classification_engine.process(fusion, market_state, timestamp=timestamp)
             explanation = self.chart_explanation_engine.process(fusion, market_state, setup, timestamp=timestamp)
             self.ai_reasoning_v2_engine.process(fusion, market_state, setup, explanation, timestamp=timestamp)
-        except Exception:
-            self._record_decision_audit("AI", "AI Reasoning V2 runtime handoff failed.")
+            self._clear_supporting_engine_failure("Multi-Timeframe Intelligence", self._primary_timeframe, timestamp)
+        except Exception as exc:
+            self._record_supporting_engine_failure("Multi-Timeframe Intelligence", self._primary_timeframe, exc, timestamp)
+            self._record_decision_audit("AI", f"AI Reasoning V2 runtime handoff failed: {_safe_error(exc)}")
             return
 
     def _process_v2_execution_chain(self, reasoning) -> None:
@@ -2906,7 +2920,6 @@ class SymbolRuntime:
         return lifecycle.position_snapshot.active_position
 
     def _canonical_paper_position(self) -> RuntimePaperPositionSnapshot | None:
-        self._restore_option_paper_position_from_checkpoint()
         if self._option_paper_position is not None:
             position = self._option_paper_position
             risk = self._option_paper_risk

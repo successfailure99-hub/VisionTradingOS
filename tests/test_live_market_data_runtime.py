@@ -210,6 +210,7 @@ def test_watchdog_detects_silent_stall_drives_retry_and_requires_fresh_tick(tmp_
     assert stale.watchdog_state is LiveFeedWatchdogState.RECONNECT_SCHEDULED
     assert stale.watchdog_blocks_decisions is True
     assert subject.websocket_manager.snapshot().status is ZerodhaWebSocketStatus.RECONNECT_WAIT
+    assert ticker.close_calls == 1
 
     before_due = subject.poll_watchdog()
     assert ticker.connect_calls == 1
@@ -236,6 +237,74 @@ def test_watchdog_detects_silent_stall_drives_retry_and_requires_fresh_tick(tmp_
     assert "FRESH_TICK_CONFIRMED" in trace
     assert "api_key_secret" not in trace
     assert "access_secret" not in trace
+
+
+def test_watchdog_uses_successfully_delivered_nifty_timestamp_not_other_tokens(tmp_path):
+    current = [datetime(2026, 7, 15, 4, 0, tzinfo=UTC)]
+    delivered = []
+    app = lifecycle()
+    session = auth(current[0] + timedelta(hours=1))
+    configuration = config(
+        subscriptions=(sub(Instrument.NIFTY, 101), sub(Instrument.BANKNIFTY, 102)),
+        stale_data_seconds=120,
+        feed_trace_path=tmp_path / "feed.jsonl",
+    )
+    ticker = FakeTickerClient()
+    websocket = ZerodhaWebSocketManager(
+        api_key=configuration.api_key,
+        session=session.session,
+        tick_consumer=delivered.append,
+        subscriptions=configuration.subscriptions,
+        client=ticker,
+        clock=lambda: current[0],
+    )
+    subject = LiveMarketDataRuntime(
+        lifecycle=app,
+        session_manager=session,
+        configuration=configuration,
+        websocket_manager=websocket,
+        clock=lambda: current[0],
+    )
+    websocket.connect()
+    ticker.callbacks["on_connect"](None, {})
+
+    ticker.callbacks["on_ticks"](None, (raw_tick(current[0], price=52000.0, volume=100) | {"instrument_token": 102},))
+    waiting = subject.poll_watchdog()
+
+    assert delivered
+    assert websocket.snapshot().last_delivered_market_timestamp(102) == current[0]
+    assert websocket.snapshot().last_delivered_market_timestamp(101) is None
+    assert waiting.watchdog_state is LiveFeedWatchdogState.WAITING_FIRST_TICK
+    assert waiting.last_delivered_market_timestamp is None
+
+
+def test_watchdog_treats_normalized_but_undelivered_nifty_as_stale(tmp_path):
+    current = [datetime(2026, 7, 15, 4, 0, tzinfo=UTC)]
+    should_fail = [False]
+
+    def consumer(tick):
+        if should_fail[0]:
+            raise RuntimeError("runtime consumer unavailable")
+
+    subject, ticker = runtime(
+        session=auth(current[0] + timedelta(hours=1)),
+        configuration=config(stale_data_seconds=120, feed_trace_path=tmp_path / "feed.jsonl"),
+        clock=lambda: current[0],
+    )
+    subject.websocket_manager._tick_consumer = consumer
+    subject.start()
+    ticker.callbacks["on_connect"](None, {})
+    ticker.callbacks["on_ticks"](None, (raw_tick(current[0], price=25000.0, volume=100),))
+    assert subject.poll_watchdog().watchdog_state is LiveFeedWatchdogState.HEALTHY
+
+    should_fail[0] = True
+    current[0] = current[0] + timedelta(seconds=121)
+    ticker.callbacks["on_ticks"](None, (raw_tick(current[0], price=25001.0, volume=101),))
+    stale = subject.poll_watchdog()
+
+    assert subject.websocket_manager.snapshot().last_tick_at == current[0]
+    assert stale.watchdog_state is LiveFeedWatchdogState.RECONNECT_SCHEDULED
+    assert stale.last_delivered_market_timestamp == datetime(2026, 7, 15, 4, 0, tzinfo=UTC)
 
 
 def test_watchdog_worker_drives_retry_without_dashboard_refresh(tmp_path):

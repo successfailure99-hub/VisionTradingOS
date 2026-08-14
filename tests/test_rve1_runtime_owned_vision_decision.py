@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 from application import RuntimeConfiguration, RuntimeInstrument, SymbolRuntime
 from application import symbol_runtime as symbol_runtime_module
@@ -248,6 +249,77 @@ def test_tradingview_evidence_failure_is_visible_without_blocking_closed_candle(
         status == "DEGRADED TradingView Evidence 1m: tradingview evidence unavailable"
         for status in view.runtime_diagnostics.supporting_engine_status
     )
+
+
+def test_legacy_primary_ai_strategy_failure_is_visible_and_non_blocking(monkeypatch):
+    item = runtime()
+
+    def fail_ai(_context):
+        raise RuntimeError("legacy ai unavailable")
+
+    monkeypatch.setattr(item, "run_ai_reasoning", fail_ai)
+
+    item._refresh_primary_closed_candle_analysis(SimpleNamespace(updated_at=START))
+    view = item.snapshot()
+
+    assert any(
+        status == "DEGRADED Legacy AI/Strategy 1m: legacy ai unavailable"
+        for status in view.runtime_diagnostics.supporting_engine_status
+    )
+    assert view.runtime_diagnostics.supporting_engine_diagnostics[0].blocking is False
+
+
+def test_legacy_primary_ai_strategy_recovery_is_visible(monkeypatch):
+    item = runtime()
+    monkeypatch.setattr(item, "run_ai_reasoning", lambda _context: (_ for _ in ()).throw(RuntimeError("legacy ai unavailable")))
+    item._refresh_primary_closed_candle_analysis(SimpleNamespace(updated_at=START))
+
+    monkeypatch.setattr(item, "run_ai_reasoning", lambda _context: object())
+    monkeypatch.setattr(item, "run_strategy", lambda _context, _reasoning: None)
+    item._refresh_primary_closed_candle_analysis(SimpleNamespace(updated_at=START + timedelta(minutes=1)))
+
+    diagnostic = next(
+        item
+        for item in item.snapshot().runtime_diagnostics.supporting_engine_diagnostics
+        if item.component == "Legacy AI/Strategy"
+    )
+    assert diagnostic.status == "RECOVERED"
+    assert diagnostic.recovered_at == START + timedelta(minutes=1)
+
+
+def test_multi_timeframe_runtime_failure_preserves_sanitized_reason(monkeypatch):
+    item = runtime()
+    fake_evidence = object()
+    for timeframe in item.tradingview_evidence_engines:
+        item.tradingview_evidence_engines[timeframe] = SimpleNamespace(
+            snapshot=lambda fake_evidence=fake_evidence: SimpleNamespace(last_evidence=fake_evidence)
+        )
+
+    def fail_fusion(_snapshots, *, timestamp):
+        raise ValueError("fusion source unavailable")
+
+    monkeypatch.setattr(item.multi_timeframe_evidence_fusion_engine, "fuse", fail_fusion)
+
+    item._last_tick = tick(START)
+    item._fuse_multi_timeframe_evidence(START)
+    view = item.snapshot()
+
+    assert any(
+        status == "DEGRADED Multi-Timeframe Intelligence 1m: fusion source unavailable"
+        for status in view.runtime_diagnostics.supporting_engine_status
+    )
+    assert view.decision_audit.reason == "AI Reasoning V2 runtime handoff failed: fusion source unavailable"
+
+
+def test_snapshot_does_not_restore_option_position_from_checkpoint(monkeypatch):
+    item = runtime()
+
+    def forbidden_restore():
+        raise AssertionError("snapshot must not restore option paper checkpoint")
+
+    monkeypatch.setattr(item, "_restore_option_paper_position_from_checkpoint", forbidden_restore)
+
+    item.snapshot()
 
 
 def test_mid_session_warmup_processes_only_next_new_5m_close(monkeypatch):

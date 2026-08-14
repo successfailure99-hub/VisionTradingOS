@@ -183,7 +183,14 @@ class LiveMarketDataRuntime:
             now = self._now()
             websocket = self._websocket_manager.snapshot()
             session = DEFAULT_EXCHANGE_CALENDAR.resolve_active_session(now, Exchange.NSE)
-            last_market_timestamp = websocket.last_tick_at
+            subscription = self._subscription_for_instrument(instrument)
+            if subscription is None:
+                self._watchdog_state = LiveFeedWatchdogState.RECOVERY_FAILED
+                self._watchdog_reason = f"No configured {instrument.value} live market-data subscription."
+                self._last_error = self._watchdog_reason
+                self._sync_status_unlocked()
+                return self._snapshot_unlocked()
+            last_market_timestamp = websocket.last_delivered_market_timestamp(subscription.instrument_token)
             if last_market_timestamp is not None:
                 self._last_delivered_market_timestamp = last_market_timestamp
             if session.phase is not ExchangeSessionPhase.OPEN:
@@ -232,7 +239,7 @@ class LiveMarketDataRuntime:
                 self._stale_baseline_market_timestamp = last_market_timestamp
                 self._recovery_attempt += 1
                 self._record_trace_unlocked("STALL_DETECTED", websocket=websocket, instrument=instrument)
-                self._websocket_manager.schedule_reconnect("silent live feed stall detected")
+                self._websocket_manager.recycle_stale_connection("silent live feed stall detected")
                 self._watchdog_state = LiveFeedWatchdogState.RECONNECT_SCHEDULED
                 self._watchdog_reason = "Silent live feed stall detected; reconnect scheduled."
                 self._record_trace_unlocked("RECONNECT_SCHEDULED", websocket=websocket, instrument=instrument)
@@ -275,6 +282,9 @@ class LiveMarketDataRuntime:
     def _validate_registry_matches_configuration(self) -> None:
         if self._websocket_manager.registry.all() != self._configuration.subscriptions:
             raise ValueError("WebSocket registry must exactly match live market-data configuration")
+
+    def _subscription_for_instrument(self, instrument: Instrument):
+        return next((item for item in self._configuration.subscriptions if item.instrument is instrument), None)
 
     def _sync_status_unlocked(self) -> None:
         websocket = self._websocket_manager.snapshot()
@@ -368,7 +378,9 @@ class LiveMarketDataRuntime:
                 instrument_token=None if subscription is None else subscription.instrument_token,
                 exchange_timestamp=websocket.tick_exchange_timestamp,
                 normalized_timestamp=websocket.tick_normalized_at,
-                last_delivered_market_timestamp=websocket.last_tick_at,
+                last_delivered_market_timestamp=None
+                if subscription is None
+                else websocket.last_delivered_market_timestamp(subscription.instrument_token),
                 raw_count=websocket.raw_tick_count,
                 normalized_count=websocket.normalized_tick_count,
                 delivered_count=websocket.delivered_tick_count,

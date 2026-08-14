@@ -225,9 +225,8 @@ def test_runtime_restores_option_paper_checkpoint_as_canonical_option_position(t
         expected_instrument=Instrument.NIFTY,
         trading_date=NOW.date(),
     )
-    item._last_tick = tick(timestamp=NOW)
 
-    runtime = item.snapshot()
+    runtime = item.process_tick(tick(timestamp=NOW))
 
     assert item._option_paper_position.position_id == opened.position_id
     assert runtime.option_paper_position.position_id == opened.position_id

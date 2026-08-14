@@ -113,7 +113,9 @@ class ZerodhaWebSocketManager:
         self._max_tick_latency_ms: float | None = None
         self._last_delivered_cumulative_volume_by_token: dict[int, int] = {}
         self._last_delivered_raw_tick_by_token: dict[int, Tick] = {}
+        self._last_delivered_market_timestamp_by_token: dict[int, datetime] = {}
         self._subscriptions_applied_for_connection = False
+        self._expected_stale_recycle_close = False
         self._client.set_callbacks(
             on_connect=self._on_connect,
             on_ticks=self._on_ticks,
@@ -167,6 +169,25 @@ class ZerodhaWebSocketManager:
             if self._status in {ZerodhaWebSocketStatus.DISCONNECTING, ZerodhaWebSocketStatus.STOPPED}:
                 return self.snapshot()
             self._record_error_unlocked(RuntimeError(reason))
+            self._schedule_reconnect_unlocked()
+            return self.snapshot()
+
+    def recycle_stale_connection(self, reason: str = "silent live feed stall detected") -> ZerodhaWebSocketSnapshot:
+        with self._lock:
+            if self._status in {ZerodhaWebSocketStatus.DISCONNECTING, ZerodhaWebSocketStatus.STOPPED}:
+                return self.snapshot()
+            if self._status is ZerodhaWebSocketStatus.RECONNECT_WAIT:
+                return self.snapshot()
+            self._record_error_unlocked(RuntimeError(reason))
+            self._expected_stale_recycle_close = True
+            self._subscriptions_applied_for_connection = False
+            should_close = self._status in {ZerodhaWebSocketStatus.CONNECTED, ZerodhaWebSocketStatus.CONNECTING}
+            if should_close:
+                try:
+                    self._client.close()
+                except Exception as exc:
+                    self._record_error_unlocked(exc)
+            self._account_disconnect()
             self._schedule_reconnect_unlocked()
             return self.snapshot()
 
@@ -303,6 +324,7 @@ class ZerodhaWebSocketManager:
                     self._max_tick_latency_ms = max(self._max_tick_latency_ms or 0.0, latency_ms)
                     self._last_delivered_raw_tick_by_token[token] = tick
                     self._last_delivered_cumulative_volume_by_token[token] = cumulative_volume
+                    self._last_delivered_market_timestamp_by_token[token] = tick.timestamp
                     delivered_ticks.append(delivered_tick)
                     self._delivered_tick_count += 1
                 except Exception as exc:
@@ -385,17 +407,25 @@ class ZerodhaWebSocketManager:
                 runtime_processed_at=self._runtime_processed_at,
                 latest_tick_latency_ms=self._latest_tick_latency_ms,
                 max_tick_latency_ms=self._max_tick_latency_ms,
+                last_delivered_market_timestamp_by_token=tuple(self._last_delivered_market_timestamp_by_token.items()),
             )
 
     def is_connected(self) -> bool:
         with self._lock:
             return self._status is ZerodhaWebSocketStatus.CONNECTED
 
+    def last_delivered_market_timestamp(self, instrument_token: int) -> datetime | None:
+        with self._lock:
+            if isinstance(instrument_token, bool) or not isinstance(instrument_token, int) or instrument_token <= 0:
+                raise ValueError("instrument_token must be a positive integer")
+            return self._last_delivered_market_timestamp_by_token.get(instrument_token)
+
     def _on_connect(self, ws, response) -> None:
         with self._lock:
             if self._status is ZerodhaWebSocketStatus.CONNECTED and self._subscriptions_applied_for_connection:
                 return
             self._status = ZerodhaWebSocketStatus.CONNECTED
+            self._expected_stale_recycle_close = False
             self._connection_count += 1
             self._successful_connections += 1
             self._disconnect_count_available = True
@@ -423,6 +453,11 @@ class ZerodhaWebSocketManager:
     def _on_close(self, ws, code, reason) -> None:
         with self._lock:
             self._disconnect_callbacks += 1
+            if self._expected_stale_recycle_close:
+                self._account_disconnect()
+                self._record_error_unlocked(RuntimeError(f"Expected stale WebSocket closed: {code} {reason}"))
+                self._schedule_reconnect_unlocked()
+                return
             if self._status in {ZerodhaWebSocketStatus.DISCONNECTING, ZerodhaWebSocketStatus.STOPPED}:
                 self._status = ZerodhaWebSocketStatus.STOPPED
                 self._clear_retry_unlocked()

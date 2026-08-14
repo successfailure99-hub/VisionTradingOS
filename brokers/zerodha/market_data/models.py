@@ -84,6 +84,7 @@ class ZerodhaWebSocketSnapshot:
     runtime_processed_at: datetime | None = None
     latest_tick_latency_ms: float | None = None
     max_tick_latency_ms: float | None = None
+    last_delivered_market_timestamp_by_token: tuple[tuple[int, datetime], ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, ZerodhaWebSocketStatus):
@@ -128,6 +129,26 @@ class ZerodhaWebSocketSnapshot:
             value = getattr(self, name)
             if value is not None and (not isinstance(value, (int, float)) or value < 0):
                 raise ValueError(f"{name} must be a non-negative number or None")
+        delivered = tuple(self.last_delivered_market_timestamp_by_token)
+        normalized_delivered = []
+        for token, timestamp in delivered:
+            if isinstance(token, bool) or not isinstance(token, int) or token <= 0:
+                raise ValueError("last_delivered_market_timestamp_by_token tokens must be positive integers")
+            _require_aware(timestamp, "last_delivered_market_timestamp_by_token timestamp")
+            normalized_delivered.append((token, timestamp))
+        object.__setattr__(
+            self,
+            "last_delivered_market_timestamp_by_token",
+            tuple(sorted(normalized_delivered, key=lambda item: item[0])),
+        )
+
+    def last_delivered_market_timestamp(self, instrument_token: int) -> datetime | None:
+        if isinstance(instrument_token, bool) or not isinstance(instrument_token, int) or instrument_token <= 0:
+            raise ValueError("instrument_token must be a positive integer")
+        for token, timestamp in self.last_delivered_market_timestamp_by_token:
+            if token == instrument_token:
+                return timestamp
+        return None
 
 
 @dataclass(frozen=True, slots=True)
