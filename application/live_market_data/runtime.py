@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from threading import RLock
 
 from application.enums import RuntimeStatus
-from application.exchange_calendar import DEFAULT_EXCHANGE_CALENDAR, ExchangeSessionPhase
+from application.exchange_calendar import DEFAULT_EXCHANGE_CALENDAR, ExchangeSessionPhase, ExchangeTradingCalendar
 from application.feed_watchdog_worker import LiveFeedWatchdogWorker
 from application.lifecycle_manager import ApplicationLifecycleManager
 from application.live_market_data.configuration import LiveMarketDataConfiguration
@@ -32,6 +32,7 @@ class LiveMarketDataRuntime:
         configuration: LiveMarketDataConfiguration,
         websocket_manager: ZerodhaWebSocketManager,
         clock=None,
+        exchange_calendar: ExchangeTradingCalendar | None = None,
     ):
         if not isinstance(lifecycle, ApplicationLifecycleManager):
             raise TypeError("lifecycle must be ApplicationLifecycleManager")
@@ -41,11 +42,14 @@ class LiveMarketDataRuntime:
             raise TypeError("configuration must be LiveMarketDataConfiguration")
         if not isinstance(websocket_manager, ZerodhaWebSocketManager):
             raise TypeError("websocket_manager must be ZerodhaWebSocketManager")
+        if exchange_calendar is not None and not isinstance(exchange_calendar, ExchangeTradingCalendar):
+            raise TypeError("exchange_calendar must be ExchangeTradingCalendar")
         self._lifecycle = lifecycle
         self._session_manager = session_manager
         self._configuration = configuration
         self._websocket_manager = websocket_manager
         self._clock = clock or _default_clock
+        self._exchange_calendar = exchange_calendar or DEFAULT_EXCHANGE_CALENDAR
         self._lock = RLock()
         self._status = LiveMarketDataRuntimeStatus.CREATED
         self._start_count = 0
@@ -181,8 +185,9 @@ class LiveMarketDataRuntime:
         with self._lock:
             now = self._now()
             websocket = self._websocket_manager.snapshot()
-            session = DEFAULT_EXCHANGE_CALENDAR.resolve_active_session(now, Exchange.NSE)
+            session = self._exchange_calendar.resolve_active_session(now, Exchange.NSE)
             subscription = self._subscription_for_instrument(instrument)
+            recovered_this_cycle = False
             if subscription is None:
                 self._watchdog_state = LiveFeedWatchdogState.RECOVERY_FAILED
                 self._watchdog_reason = f"No configured {instrument.value} live market-data subscription."
@@ -224,6 +229,7 @@ class LiveMarketDataRuntime:
                     self._watchdog_reason = "Fresh market tick confirmed after reconnect."
                     self._stale_baseline_market_timestamp = None
                     self._stale_detected_at = None
+                    recovered_this_cycle = True
                     self._record_trace_unlocked("FRESH_TICK_CONFIRMED", websocket=websocket, instrument=instrument)
                 else:
                     self._watchdog_state = LiveFeedWatchdogState.VERIFYING_FRESH_TICK
@@ -244,7 +250,7 @@ class LiveMarketDataRuntime:
                 self._record_trace_unlocked("RECONNECT_SCHEDULED", websocket=websocket, instrument=instrument)
                 self._sync_status_unlocked()
                 return self._snapshot_unlocked()
-            if self._watchdog_state is not LiveFeedWatchdogState.RECOVERED:
+            if not recovered_this_cycle:
                 self._watchdog_state = LiveFeedWatchdogState.HEALTHY
                 self._watchdog_reason = "Accepted market ticks are advancing."
             if self._last_progress_trace_delivered_count != websocket.delivered_tick_count:
@@ -363,7 +369,7 @@ class LiveMarketDataRuntime:
     ) -> None:
         websocket = websocket or self._websocket_manager.snapshot()
         now = self._now()
-        session = DEFAULT_EXCHANGE_CALENDAR.resolve_active_session(now, Exchange.NSE)
+        session = self._exchange_calendar.resolve_active_session(now, Exchange.NSE)
         subscription = next((item for item in self._configuration.subscriptions if item.instrument is instrument), None)
         self._trace.record(
             FeedIncidentTraceEvent(

@@ -684,13 +684,15 @@ def test_symbol_runtime_marks_open_short_option_position_with_buy_to_close_ask()
         RuntimeInstrument.NIFTY,
     )
     item.start()
-    item._last_tick = __import__("tests.test_vision_paper_trading_integration_v1", fromlist=["tick"]).tick()
+    runtime_tick = __import__("tests.test_vision_paper_trading_integration_v1", fromlist=["tick"]).tick
+    item.process_tick(runtime_tick())
     item.set_option_universe(universe())
     item.process_option_chain_runtime(chain_snapshot(put_bid=100.0))
 
     method = snapshot()
     report = validate_vision_method(method)
     item.process_vision_method_paper_trade(method, report)
+    item.process_tick(runtime_tick(timestamp=NOW + timedelta(minutes=1)))
     item.process_option_chain_runtime(chain_snapshot(put_bid=49.0, timestamp=NOW + timedelta(minutes=1)))
     view = item.snapshot()
 
@@ -910,13 +912,17 @@ def test_symbol_runtime_option_paper_close_is_journaled_and_forensic_linked(tmp_
     )
     item.trade_journal_v1_engine = _journal_engine(tmp_path)
     item.start()
+    runtime_tick = __import__("tests.test_vision_paper_trading_integration_v1", fromlist=["tick"]).tick
+    item.process_tick(runtime_tick())
     item.set_option_universe(universe())
     item.process_option_chain_runtime(chain_snapshot(put_bid=100.0))
     method = snapshot()
     report = validate_vision_method(method)
 
     item.process_vision_method_paper_trade(method, report)
+    item.process_tick(runtime_tick(timestamp=NOW + timedelta(minutes=1)))
     item.process_option_chain_runtime(chain_snapshot(put_bid=49.0, timestamp=NOW + timedelta(minutes=1)))
+    item.process_tick(runtime_tick(timestamp=NOW + timedelta(minutes=2)))
     item.process_option_chain_runtime(chain_snapshot(put_bid=48.0, timestamp=NOW + timedelta(minutes=2)))
     view = item.snapshot()
     records = item.trade_journal_v1_engine.durable_records()

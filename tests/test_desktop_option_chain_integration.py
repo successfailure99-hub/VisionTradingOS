@@ -317,7 +317,7 @@ def test_naive_zerodha_spot_timestamp_is_localized_and_option_chain_progresses()
 
 
 def test_malformed_sensex_timestamp_does_not_stop_nifty_or_disconnect_callback():
-    dashboard, ticker = create_dashboard()
+    dashboard, ticker = create_dashboard(clock=lambda: datetime(2026, 7, 15, 4, 6, 15, tzinfo=UTC))
     ticker.callbacks["on_connect"](None, {})
 
     ticker.callbacks["on_ticks"](

@@ -89,13 +89,15 @@ def test_canonical_option_chain_snapshot_and_analytics_are_exposed_on_runtime_sn
     assert stages["Option Analytics"].status == "READY"
 
 
-def test_option_chain_newer_feed_timestamp_advances_runtime_and_stale_timestamps_are_rejected():
+def test_option_chain_newer_feed_timestamp_within_tolerance_does_not_advance_runtime_and_stale_timestamps_are_rejected():
     runtime = _runtime()
     newer = runtime.process_option_chain_runtime(
-        _snapshot(NOW + timedelta(seconds=1)),
-        _analytics(_snapshot(NOW + timedelta(seconds=1))),
+        _snapshot(NOW + timedelta(milliseconds=175)),
+        _analytics(_snapshot(NOW + timedelta(milliseconds=175))),
     )
-    assert newer.snapshot_created_at == NOW + timedelta(seconds=1)
+    assert newer.snapshot_created_at == NOW
+    assert newer.option_chain_runtime.synchronization_status == "SYNCHRONIZED"
+    assert newer.option_chain_runtime.latency_ms == pytest.approx(175.0)
 
     runtime.process_tick(_tick(NOW + timedelta(minutes=5)))
     with pytest.raises(ValueError, match="stale"):
@@ -112,7 +114,7 @@ def test_option_chain_subsecond_async_arrival_is_synchronized_not_blocked():
     view = build_option_chain_view(runtime_snapshot)
 
     assert runtime_snapshot.latest_tick_at == NOW
-    assert runtime_snapshot.snapshot_created_at == option_time
+    assert runtime_snapshot.snapshot_created_at == NOW
     assert runtime_snapshot.option_chain_snapshot.timestamp == option_time
     assert runtime_snapshot.option_chain_analytics.timestamp == option_time
     assert runtime_snapshot.option_chain_runtime.latency_ms == pytest.approx(175.0)

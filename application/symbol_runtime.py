@@ -444,6 +444,10 @@ class SymbolRuntime:
         self._session_opening_trading_date: date | None = None
         self._vision_ai_explanation: str | None = None
         self._option_chain_analytics: OptionChainAnalyticsSnapshot | None = None
+        self._vwap_history: tuple[object, ...] = ()
+        self._adr_history: tuple[object, ...] = ()
+        self._option_chain_snapshot_history: tuple[OptionChainSnapshot, ...] = ()
+        self._option_chain_analytics_history: tuple[OptionChainAnalyticsSnapshot, ...] = ()
         self._option_chain_last_error: str | None = None
         self._option_universe = None
         self._option_trade_candidate: OptionTradeCandidate | None = None
@@ -567,6 +571,7 @@ class SymbolRuntime:
         self._ensure_daily_context_for_session(tick.timestamp)
         self._refresh_pivot_opening_contexts(tick.timestamp)
         self._refresh_adr(tick.timestamp, tick.last_price)
+        self._record_asof_context_snapshots()
         self._refresh_closed_timeframe_analysis(closed_timeframes, tick.timestamp, tick.last_price)
         self._process_runtime_vision_decision_candles(closed_timeframes)
         self._process_paper_tick(tick)
@@ -626,6 +631,7 @@ class SymbolRuntime:
         )
         self._vwap_last_error = None
         self._observe_market_timestamp(tick.timestamp)
+        self._record_asof_context_snapshots()
         return self.snapshot()
 
     def mark_vwap_unavailable(
@@ -748,6 +754,7 @@ class SymbolRuntime:
             self._restore_session_open_from_history(self._exchange_session_date(latest.end_time))
             self._refresh_adr(latest.end_time, latest.close)
             self._observe_market_timestamp(latest.end_time)
+            self._record_asof_context_snapshots()
             self._refresh_pivot_opening_contexts(latest.end_time)
         return accepted
 
@@ -774,7 +781,9 @@ class SymbolRuntime:
 
     def process_option_chain(self, snapshot: OptionChainSnapshot) -> OptionChainState:
         self._require_running()
-        market_timestamp = self._candidate_market_timestamp(getattr(snapshot, "timestamp", None))
+        market_timestamp = self._trusted_market_timestamp()
+        if market_timestamp is None:
+            raise ValueError("Canonical market timestamp is unavailable for OptionChainSnapshot validation.")
         self._validate_option_chain_snapshot(snapshot, market_timestamp)
         try:
             state = self.option_chain_engine.process(snapshot)
@@ -782,7 +791,10 @@ class SymbolRuntime:
             self._option_chain_last_error = _safe_error(exc)
             raise
         self._option_chain_last_error = None
-        self._observe_market_timestamp(state.timestamp)
+        self._option_chain_snapshot_history = self._append_asof_history(
+            self._option_chain_snapshot_history,
+            self.option_chain_engine.snapshot,
+        )
         return state
 
     def set_option_universe(self, universe) -> None:
@@ -803,11 +815,16 @@ class SymbolRuntime:
 
     def process_option_chain_analytics(self, analytics: OptionChainAnalyticsSnapshot) -> OptionChainAnalyticsSnapshot:
         self._require_running()
-        market_timestamp = self._candidate_market_timestamp(getattr(analytics, "timestamp", None))
+        market_timestamp = self._trusted_market_timestamp()
+        if market_timestamp is None:
+            raise ValueError("Canonical market timestamp is unavailable for OptionChainAnalyticsSnapshot validation.")
         self._validate_option_chain_analytics(analytics, market_timestamp)
         self._option_chain_analytics = analytics
         self._option_chain_last_error = None
-        self._observe_market_timestamp(analytics.timestamp)
+        self._option_chain_analytics_history = self._append_asof_history(
+            self._option_chain_analytics_history,
+            analytics,
+        )
         return analytics
 
     def _process_option_paper_market_update(self) -> None:
@@ -1208,6 +1225,10 @@ class SymbolRuntime:
         self._session_opening_timestamp = None
         self._session_opening_trading_date = None
         self._vision_ai_explanation = None
+        self._vwap_history = ()
+        self._adr_history = ()
+        self._option_chain_snapshot_history = ()
+        self._option_chain_analytics_history = ()
         self._option_trade_candidate = None
         self._option_selection_diagnostics = ()
         self._option_paper_risk = None
@@ -1382,6 +1403,7 @@ class SymbolRuntime:
         except (TypeError, ValueError):
             self._pivot_flight_plan = None
             self._pivot_flight_plan_identity = None
+            raise
         return self._pivot_flight_plan
 
     def _capture_session_open_from_tick(self, tick: Tick) -> None:
@@ -1489,8 +1511,8 @@ class SymbolRuntime:
                     previous_day=previous_day,
                     cpr=self.cpr,
                     camarilla=self.camarilla,
-                    adr=self.adr_engine.state,
-                    vwap=self.vwap_engine.get_latest(self._core_instrument),
+                    adr=self._adr_as_of(timestamp),
+                    vwap=self._vwap_as_of(timestamp),
                 ),
                 instrument=self._instrument,
                 timeframe=self._vision_decision_timeframe,
@@ -1510,12 +1532,16 @@ class SymbolRuntime:
         except (TypeError, ValueError):
             self._pivot_opening_assessment = None
             self._pivot_opening_assessment_identity = None
+            raise
         return self._pivot_opening_assessment
 
     def _refresh_pivot_opening_contexts(self, market_timestamp: datetime | None) -> None:
         runtime_session = self._runtime_trading_session(market_timestamp)
-        flight_plan = self._current_pivot_flight_plan(market_timestamp, runtime_session)
-        self._current_pivot_opening_assessment(market_timestamp, runtime_session, flight_plan)
+        try:
+            flight_plan = self._current_pivot_flight_plan(market_timestamp, runtime_session)
+            self._current_pivot_opening_assessment(market_timestamp, runtime_session, flight_plan)
+        except (TypeError, ValueError):
+            return
 
     def _current_pivot_confluence_context(
         self,
@@ -1554,8 +1580,8 @@ class SymbolRuntime:
             self.cpr,
             self.camarilla,
             previous_day,
-            self.adr_engine.state,
-            self.vwap_engine.get_latest(self._core_instrument),
+            self._adr_as_of(timestamp),
+            self._vwap_as_of(timestamp),
             getattr(source_snapshot, "opening_range_context", None),
             getattr(source_snapshot, "structure_context", None),
             getattr(source_snapshot, "liquidity_context", None),
@@ -2503,9 +2529,6 @@ class SymbolRuntime:
                 self._latest_closed_candle_at,
                 self._latest_tick_at,
                 getattr(self._last_tick, "timestamp", None),
-                getattr(self.vwap_engine.get_latest(self._core_instrument), "timestamp", None),
-                getattr(self.option_chain_engine.snapshot, "timestamp", None),
-                getattr(self._option_chain_analytics, "timestamp", None),
                 self._updated_at,
             )
             if isinstance(value, datetime)
@@ -2537,6 +2560,108 @@ class SymbolRuntime:
         if isinstance(timestamp, datetime) and (current is None or timestamp > current):
             return timestamp
         return current
+
+    def _trusted_market_timestamp(self) -> datetime | None:
+        market_events = tuple(
+            value
+            for value in (
+                self._canonical_market_timestamp,
+                self._latest_closed_candle_at,
+                self._latest_tick_at,
+                getattr(self._last_tick, "timestamp", None),
+            )
+            if isinstance(value, datetime)
+        )
+        return max(market_events) if market_events else None
+
+    def _record_asof_context_snapshots(self) -> None:
+        vwap = self.vwap_engine.get_latest(self._core_instrument)
+        adr = self.adr_engine.state
+        if vwap is not None:
+            self._vwap_history = self._append_asof_history(self._vwap_history, vwap)
+        if adr is not None:
+            self._adr_history = self._append_asof_history(self._adr_history, adr)
+
+    def _append_asof_history(self, history: tuple, snapshot, *, limit: int = 512) -> tuple:
+        if snapshot is None:
+            return history
+        timestamp = getattr(snapshot, "timestamp", None)
+        identity = (
+            timestamp,
+            getattr(snapshot, "trading_date", None),
+            getattr(snapshot, "expiry_date", None),
+            getattr(snapshot, "expiry", None),
+        )
+        existing = tuple(
+            item
+            for item in history
+            if (
+                getattr(item, "timestamp", None),
+                getattr(item, "trading_date", None),
+                getattr(item, "expiry_date", None),
+                getattr(item, "expiry", None),
+            )
+            != identity
+        )
+        return (existing + (snapshot,))[-limit:]
+
+    def _snapshot_as_of(
+        self,
+        history: tuple,
+        timestamp: datetime | None,
+        *,
+        trading_date: date | None = None,
+        current=None,
+    ):
+        candidates = []
+        if current is not None:
+            candidates.append(current)
+        candidates.extend(history)
+        valid = []
+        for item in candidates:
+            item_timestamp = getattr(item, "timestamp", None)
+            if timestamp is not None and isinstance(item_timestamp, datetime) and item_timestamp > timestamp:
+                continue
+            item_trading_date = getattr(item, "trading_date", None)
+            if trading_date is not None and item_trading_date is not None and item_trading_date != trading_date:
+                continue
+            if item not in valid:
+                valid.append(item)
+        if not valid:
+            return None
+        return max(valid, key=lambda item: getattr(item, "timestamp", datetime.min.replace(tzinfo=IST)))
+
+    def _vwap_as_of(self, timestamp: datetime | None):
+        trading_date = self._exchange_session_date(timestamp) if isinstance(timestamp, datetime) else None
+        return self._snapshot_as_of(
+            self._vwap_history,
+            timestamp,
+            trading_date=trading_date,
+            current=self.vwap_engine.get_latest(self._core_instrument),
+        )
+
+    def _adr_as_of(self, timestamp: datetime | None):
+        trading_date = self._exchange_session_date(timestamp) if isinstance(timestamp, datetime) else None
+        return self._snapshot_as_of(
+            self._adr_history,
+            timestamp,
+            trading_date=trading_date,
+            current=self.adr_engine.state,
+        )
+
+    def _option_chain_as_of(self, timestamp: datetime | None):
+        return self._snapshot_as_of(
+            self._option_chain_snapshot_history,
+            timestamp,
+            current=self.option_chain_engine.snapshot,
+        )
+
+    def _option_analytics_as_of(self, timestamp: datetime | None):
+        return self._snapshot_as_of(
+            self._option_chain_analytics_history,
+            timestamp,
+            current=self._option_chain_analytics,
+        )
 
     def _runtime_trading_session(self, market_timestamp: datetime | None) -> RuntimeTradingSession:
         exchange_session = None
@@ -4135,6 +4260,7 @@ class SymbolRuntime:
             open_interest=0,
         )
         self.vwap_engine.on_tick(tick)
+        self._record_asof_context_snapshots()
         if not self._ready_futures_proxy():
             self._vwap_source_type = "Spot"
             self._vwap_source_exchange = tick.exchange.value

@@ -37,9 +37,9 @@ def _runtime():
     return item
 
 
-def test_option_chain_newer_feed_timestamp_advances_canonical_runtime_timestamp():
+def test_option_chain_newer_feed_timestamp_does_not_advance_canonical_runtime_timestamp():
     runtime = _runtime()
-    option_time = NOW + timedelta(seconds=2)
+    option_time = NOW + timedelta(milliseconds=175)
     option_snapshot = _snapshot(option_time)
     analytics = _analytics(option_snapshot)
 
@@ -47,10 +47,27 @@ def test_option_chain_newer_feed_timestamp_advances_canonical_runtime_timestamp(
 
     assert runtime_snapshot.option_chain_snapshot == option_snapshot
     assert runtime_snapshot.option_chain_analytics == analytics
-    assert runtime_snapshot.snapshot_created_at == option_time
-    assert runtime_snapshot.updated_at == option_time
-    assert runtime_snapshot.runtime_session.market_timestamp == option_time
+    assert runtime_snapshot.snapshot_created_at == NOW
+    assert runtime_snapshot.updated_at == NOW
+    assert runtime_snapshot.runtime_session.market_timestamp == NOW
     assert runtime_snapshot.option_chain_runtime.age_seconds == 0.0
+    assert runtime_snapshot.option_chain_runtime.latency_ms == 175.0
+
+
+def test_option_chain_beyond_timestamp_tolerance_is_rejected_without_clock_poisoning():
+    runtime = _runtime()
+    option_time = NOW + timedelta(seconds=2)
+
+    try:
+        runtime.process_option_chain(_snapshot(option_time))
+    except ValueError as exc:
+        assert "future" in str(exc)
+    else:
+        raise AssertionError("future option-chain snapshots must remain rejected")
+
+    runtime_snapshot = runtime.snapshot()
+    assert runtime_snapshot.snapshot_created_at == NOW
+    assert runtime_snapshot.runtime_session.market_timestamp == NOW
 
 
 def test_stale_option_chain_timestamp_remains_strict_after_canonical_timestamp_advances():

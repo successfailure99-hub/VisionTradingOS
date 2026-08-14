@@ -194,7 +194,7 @@ def assemble_vision_method_runtime(
         failures.append(_missing_failure("Camarilla", _waiting_daily_context_reason("Camarilla", camarilla.trading_date, trading_date)))
     if cpr is not None and camarilla is not None and cpr.trading_date == trading_date and camarilla.trading_date == trading_date:
         previous_day = _previous_day_from_cpr(cpr)
-        adr, vwap = _session_aligned_optional_contexts(runtime_snapshot, trading_date, timestamp, failures)
+        adr, vwap = _session_aligned_optional_contexts(runtime, runtime_snapshot, trading_date, timestamp, failures)
         try:
             level = level_assembler(
                 VisionLevelContextRequest(
@@ -336,7 +336,7 @@ def assemble_vision_method_runtime(
     if setup is None:
         failures.append(_not_evaluated_failure("Option Confirmation", "Setup qualification is unavailable."))
     elif cpr is not None:
-        option_chain, option_analytics = _option_inputs(runtime_snapshot, option_analytics_provider)
+        option_chain, option_analytics = _option_inputs(runtime, runtime_snapshot, option_analytics_provider, timestamp)
         option_chain, option_analytics = _fresh_option_inputs(option_chain, option_analytics, timestamp, failures)
         option_expiry = option_chain.expiry_date if option_chain is not None else cpr.trading_date
         try:
@@ -360,8 +360,14 @@ def assemble_vision_method_runtime(
             log.debug("[VisionMethodRuntime] OPTION_CONFIRMATION failed reason=%r", _safe_error(exc))
 
     if runtime_owns_vision_extensions:
-        pivot_flight_plan = _current_pivot_flight_plan(runtime, timestamp, runtime_snapshot)
-        pivot_opening_assessment = _current_pivot_opening_assessment(runtime, timestamp, runtime_snapshot, pivot_flight_plan)
+        pivot_flight_plan = _current_pivot_flight_plan(runtime, timestamp, runtime_snapshot, failures)
+        pivot_opening_assessment = _current_pivot_opening_assessment(
+            runtime,
+            timestamp,
+            runtime_snapshot,
+            pivot_flight_plan,
+            failures,
+        )
     if runtime_owns_vision_extensions and level is not None:
         try:
             pivot_confluence_context = build_pivot_confluence_context(
@@ -504,25 +510,27 @@ def assemble_vision_method_runtime(
     )
 
 
-def _current_pivot_flight_plan(runtime, timestamp, runtime_snapshot):
+def _current_pivot_flight_plan(runtime, timestamp, runtime_snapshot, failures):
     session = getattr(runtime_snapshot, "runtime_session", None)
     builder = getattr(runtime, "_current_pivot_flight_plan", None)
     if session is None or builder is None:
         return None
     try:
         return builder(timestamp, session)
-    except Exception:
+    except Exception as exc:
+        failures.append(_failure("Pivot Flight Plan", exc))
         return None
 
 
-def _current_pivot_opening_assessment(runtime, timestamp, runtime_snapshot, pivot_flight_plan):
+def _current_pivot_opening_assessment(runtime, timestamp, runtime_snapshot, pivot_flight_plan, failures):
     session = getattr(runtime_snapshot, "runtime_session", None)
     builder = getattr(runtime, "_current_pivot_opening_assessment", None)
     if session is None or builder is None or pivot_flight_plan is None:
         return None
     try:
         return builder(timestamp, session, pivot_flight_plan)
-    except Exception:
+    except Exception as exc:
+        failures.append(_failure("Pivot Opening Assessment", exc))
         return None
 
 
@@ -619,11 +627,21 @@ def _previous_day_from_cpr(cpr) -> DailyOHLC:
 
 
 def _option_inputs(
+    runtime,
     runtime_snapshot,
     option_analytics_provider,
+    as_of_timestamp: datetime,
 ) -> tuple[OptionChainSnapshot | None, OptionChainAnalyticsSnapshot | None]:
-    option_chain = getattr(runtime_snapshot, "option_chain_snapshot", None)
-    analytics = getattr(runtime_snapshot, "option_chain_analytics", None)
+    option_chain = None
+    analytics = None
+    option_chain_as_of = getattr(runtime, "_option_chain_as_of", None)
+    analytics_as_of = getattr(runtime, "_option_analytics_as_of", None)
+    if callable(option_chain_as_of):
+        option_chain = option_chain_as_of(as_of_timestamp)
+    if callable(analytics_as_of):
+        analytics = analytics_as_of(as_of_timestamp)
+    option_chain = option_chain or getattr(runtime_snapshot, "option_chain_snapshot", None)
+    analytics = analytics or getattr(runtime_snapshot, "option_chain_analytics", None)
     if option_chain is None and analytics is None and option_analytics_provider is not None:
         option_chain, analytics = option_analytics_provider(runtime_snapshot.symbol)
     if option_chain is not None and not isinstance(option_chain, OptionChainSnapshot):
@@ -691,19 +709,22 @@ def _waiting_daily_context_reason(name: str, context_date, trading_date) -> str:
 
 
 def _session_aligned_optional_contexts(
+    runtime,
     runtime_snapshot,
     trading_date,
     as_of_timestamp,
     failures: list[VisionContextAssemblyFailure],
 ):
-    adr = runtime_snapshot.adr
+    adr_as_of = getattr(runtime, "_adr_as_of", None)
+    vwap_as_of = getattr(runtime, "_vwap_as_of", None)
+    adr = adr_as_of(as_of_timestamp) if callable(adr_as_of) else runtime_snapshot.adr
     if adr is not None and adr.trading_date != trading_date:
         failures.append(_missing_failure("ADR", _waiting_daily_context_reason("ADR", adr.trading_date, trading_date)))
         adr = None
     elif adr is not None and getattr(adr, "timestamp", as_of_timestamp) > as_of_timestamp:
         failures.append(_missing_failure("ADR", "ADR snapshot is newer than the Vision decision timestamp."))
         adr = None
-    vwap = runtime_snapshot.vwap
+    vwap = vwap_as_of(as_of_timestamp) if callable(vwap_as_of) else runtime_snapshot.vwap
     if vwap is not None and vwap.trading_date != trading_date:
         failures.append(_missing_failure("VWAP", _waiting_daily_context_reason("VWAP", vwap.trading_date, trading_date)))
         vwap = None

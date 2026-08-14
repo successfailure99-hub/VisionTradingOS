@@ -2,12 +2,13 @@
 Tests for live market-data runtime lifecycle.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from threading import RLock
 
 import pytest
 
 from application.bootstrap import ApplicationBootstrap
+from application.exchange_calendar import ExchangeHoliday, ExchangeTradingCalendar
 from application.live_market_data import LiveFeedWatchdogState, LiveMarketDataConfiguration, LiveMarketDataRuntime, LiveMarketDataRuntimeStatus
 from brokers.zerodha.auth import ZerodhaCredentials, ZerodhaSessionManager
 from brokers.zerodha.market_data import ZerodhaInstrumentSubscription, ZerodhaWebSocketStatus, ZerodhaWebSocketManager
@@ -81,7 +82,7 @@ def lifecycle(running=True):
     return manager
 
 
-def runtime(app=None, session=None, configuration=None, ticker=None, clock=None):
+def runtime(app=None, session=None, configuration=None, ticker=None, clock=None, exchange_calendar=None):
     app = app or lifecycle()
     session = session or auth()
     configuration = configuration or config()
@@ -101,6 +102,7 @@ def runtime(app=None, session=None, configuration=None, ticker=None, clock=None)
         configuration=configuration,
         websocket_manager=websocket,
         clock=clock,
+        exchange_calendar=exchange_calendar,
     ), ticker
 
 
@@ -247,12 +249,38 @@ def test_watchdog_detects_silent_stall_drives_retry_and_requires_fresh_tick(tmp_
     assert recovered.watchdog_state is LiveFeedWatchdogState.RECOVERED
     assert recovered.watchdog_blocks_decisions is False
 
+    healthy_after_recovery = subject.poll_watchdog()
+    assert healthy_after_recovery.watchdog_state is LiveFeedWatchdogState.HEALTHY
+    assert healthy_after_recovery.watchdog_blocks_decisions is False
+
     trace = (tmp_path / "feed.jsonl").read_text(encoding="utf-8")
     assert "STALL_DETECTED" in trace
     assert "RECONNECT_SCHEDULED" in trace
     assert "FRESH_TICK_CONFIRMED" in trace
     assert "api_key_secret" not in trace
     assert "access_secret" not in trace
+
+
+def test_watchdog_uses_injected_exchange_calendar_for_market_closed_state(tmp_path):
+    current = [datetime(2026, 7, 15, 4, 0, tzinfo=UTC)]
+    subject, ticker = runtime(
+        session=auth(current[0] + timedelta(hours=1)),
+        configuration=config(feed_trace_path=tmp_path / "feed.jsonl"),
+        clock=lambda: current[0],
+        exchange_calendar=ExchangeTradingCalendar(
+            (
+                ExchangeHoliday(Exchange.NSE, date(2026, 7, 15), "Injected Holiday"),
+            )
+        ),
+    )
+    subject.start()
+    ticker.callbacks["on_connect"](None, {})
+    ticker.callbacks["on_ticks"](None, (raw_tick(current[0], price=25000.0, volume=100),))
+
+    snapshot = subject.poll_watchdog()
+
+    assert snapshot.watchdog_state is LiveFeedWatchdogState.MARKET_CLOSED
+    assert snapshot.watchdog_reason == "Exchange is closed for a configured holiday."
 
 
 def test_watchdog_uses_successfully_delivered_nifty_timestamp_not_other_tokens(tmp_path):
