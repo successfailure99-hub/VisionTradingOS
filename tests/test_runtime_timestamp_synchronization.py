@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 from application import RuntimeConfiguration, RuntimeInstrument, SymbolRuntime
 from core.enums.exchange import Exchange
@@ -163,3 +164,19 @@ def test_vision_live_bridge_uses_canonical_runtime_timestamp_before_latest_tick(
 
     assert runtime_snapshot.latest_tick_at == NOW
     assert _runtime_timestamp(runtime_snapshot) == NOW
+
+
+def test_only_trusted_market_producers_observe_canonical_market_timestamp():
+    source = Path("application/symbol_runtime.py").read_text()
+    allowed_contexts = (
+        "self._observe_market_timestamp(tick.timestamp)",
+        "self._observe_market_timestamp(latest.end_time)",
+    )
+
+    observed_calls = [
+        line.strip()
+        for line in source.splitlines()
+        if "_observe_market_timestamp(" in line and not line.strip().startswith("def ")
+    ]
+
+    assert observed_calls == list(allowed_contexts)

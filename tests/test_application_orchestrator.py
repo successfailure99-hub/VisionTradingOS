@@ -48,7 +48,7 @@ from engines.market_context.models import MarketContextState
 from engines.order_management.enums import OrderSide, OrderType, ProductType
 from engines.order_management.models import OrderRequest
 from engines.risk.enums import RiskDecision
-from engines.risk.models import AccountRiskState, RiskPolicy, TradeRiskPlan
+from engines.risk.models import AccountRiskState, RiskPolicy, RiskSnapshot, TradeRiskPlan
 from engines.strategy.enums import (
     BlockReason,
     EntryReference,
@@ -405,6 +405,59 @@ def test_create_order_constructs_snapshot_from_stored_risk_state():
     assert order.quantity == 10
     assert order.risk_entry_price == 100.0
     assert orchestrator.get_runtime("nifty").snapshot().latest_order == order
+
+
+def test_secondary_runtime_outputs_cannot_advance_canonical_market_clock():
+    orchestrator = ApplicationOrchestrator(EventBus())
+    orchestrator.start()
+    orchestrator.process_tick(tick(timestamp=TS, price=100.0))
+    runtime = orchestrator.get_runtime("NIFTY")
+    future = TS + timedelta(hours=4)
+
+    def assert_market_clock_unchanged():
+        snapshot = runtime.snapshot()
+        assert snapshot.runtime_session.market_timestamp == TS
+        assert snapshot.updated_at == TS
+
+    context = orchestrator.build_market_context(
+        "NIFTY",
+        timestamp=future,
+        current_price=100.0,
+        session_high=112.0,
+        session_low=91.0,
+    )
+    assert context.timestamp == future
+    assert_market_clock_unchanged()
+
+    ai = runtime.run_ai_reasoning(context)
+    assert ai.timestamp == future
+    assert_market_clock_unchanged()
+
+    strategy = runtime.run_strategy(context, ai)
+    assert strategy.timestamp == future
+    assert_market_clock_unchanged()
+
+    risk = runtime.run_risk(policy=policy(), account=account(), trade_plan=trade_plan())
+    assert risk.timestamp == future
+    assert_market_clock_unchanged()
+
+    runtime.risk_engine.process(
+        RiskSnapshot(
+            symbol="NIFTY",
+            timeframe="1m",
+            timestamp=future,
+            strategy=eligible_strategy(future),
+            policy=policy(),
+            account=account(),
+            trade_plan=trade_plan(),
+        )
+    )
+    order = runtime.create_order(order_request(timestamp=future))
+    assert order.updated_at == future
+    assert_market_clock_unchanged()
+
+    genuine_tick = orchestrator.process_tick(tick(timestamp=TS + timedelta(minutes=1), price=101.0))
+    assert genuine_tick.runtime_session.market_timestamp == TS + timedelta(minutes=1)
 
 
 def test_reset_all_preserves_created_running_and_stopped_status():

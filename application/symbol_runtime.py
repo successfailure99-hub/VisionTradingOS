@@ -888,13 +888,11 @@ class SymbolRuntime:
             camarilla=camarilla,
         )
         state = self.market_context_engines[lane].process(snapshot)
-        self._observe_market_timestamp(state.timestamp)
         return state
 
     def run_ai_reasoning(self, context: MarketContextState | None = None):
         self._require_running()
         state = self.ai_reasoning_engine.process(context or self.market_context_engine.state)
-        self._observe_market_timestamp(state.timestamp)
         return state
 
     def run_strategy(self, context: MarketContextState | None = None, reasoning=None) -> StrategyDecisionState:
@@ -933,7 +931,6 @@ class SymbolRuntime:
                 strategy=state,
                 ai_reasoning=ai_reasoning,
             )
-        self._observe_market_timestamp(state.timestamp)
         return state
 
     def calibrate_ai_confidence(self, request: ConfidenceCalibrationRequest):
@@ -943,7 +940,6 @@ class SymbolRuntime:
         if request.instrument != self._instrument:
             raise ValueError("Confidence calibration request instrument does not match SymbolRuntime.")
         result = self.confidence_calibration_engine.calibrate(request)
-        self._observe_market_timestamp(result.timestamp)
         return result
 
     def get_confidence_result(self, calibration_id: str):
@@ -976,7 +972,6 @@ class SymbolRuntime:
             trade_plan=trade_plan,
         )
         state = self.risk_engine.process(snapshot)
-        self._observe_market_timestamp(state.timestamp)
         return state
 
     def create_order(self, request: OrderRequest) -> OrderState:
@@ -992,7 +987,6 @@ class SymbolRuntime:
             request=request,
         )
         state = self.order_engine.create(snapshot)
-        self._observe_market_timestamp(state.updated_at)
         return state
 
     def evaluate_execution_policy(self, request: ExecutionRequest) -> TradeExecutionPlan:
@@ -1000,7 +994,6 @@ class SymbolRuntime:
         if request.instrument != self._instrument.value:
             raise ValueError("ExecutionRequest instrument does not match SymbolRuntime.")
         plan = self.execution_policy_engine.evaluate(request)
-        self._observe_market_timestamp(plan.created_at)
         return plan
 
     def authorize_trade_decision(self, request: TradeAuthorizationRequest):
@@ -1010,7 +1003,6 @@ class SymbolRuntime:
         if request.instrument != self._instrument:
             raise ValueError("Trade authorization request instrument does not match SymbolRuntime.")
         result = self.trade_authorization_engine.authorize(request)
-        self._observe_market_timestamp(result.timestamp)
         return result
 
     def get_trade_authorization_result(self, authorization_id: str):
@@ -1029,7 +1021,6 @@ class SymbolRuntime:
             raise ValueError("TradingView evidence request instrument does not match SymbolRuntime.")
         engine = self._tradingview_evidence_engine_for(request.timeframe)
         result = engine.map_evidence(request)
-        self._observe_market_timestamp(result.timestamp)
         return result
 
     def get_tradingview_evidence(self, evidence_id: str, timeframe: str | TimeFrame | None = None):
@@ -1078,13 +1069,11 @@ class SymbolRuntime:
         if request.instrument != self._instrument.value:
             raise ValueError("PaperExecutionRequest instrument does not match SymbolRuntime.")
         receipt = self.paper_execution_coordinator.execute(request)
-        self._observe_market_timestamp(receipt.updated_at)
         return receipt
 
     def cancel_paper_execution(self, receipt_id: str, *, timestamp, reason: str = "cancelled") -> PaperExecutionReceipt:
         self._require_running()
         receipt = self.paper_execution_coordinator.cancel(receipt_id, timestamp=timestamp, reason=reason)
-        self._observe_market_timestamp(receipt.updated_at)
         return receipt
 
     def reconcile_paper_execution(self, request: ExecutionReconciliationRequest) -> ExecutionReconciliationReport:
@@ -1094,13 +1083,11 @@ class SymbolRuntime:
         if request.instrument != self._instrument.value:
             raise ValueError("ExecutionReconciliationRequest instrument does not match SymbolRuntime.")
         report = self.execution_reconciliation_engine.reconcile(request)
-        self._observe_market_timestamp(report.created_at)
         return report
 
     def reconcile_paper_execution_receipt(self, receipt_id: str, *, timestamp) -> ExecutionReconciliationReport:
         self._require_running()
         report = self.execution_reconciliation_engine.reconcile_receipt(receipt_id, timestamp=timestamp)
-        self._observe_market_timestamp(report.created_at)
         return report
 
     def start_shadow_session(self, request: ShadowTradingSessionRequest):
@@ -1126,19 +1113,16 @@ class SymbolRuntime:
     def apply_order_command(self, command: OrderCommand) -> OrderState:
         self._require_running()
         state = self.order_engine.apply(command)
-        self._observe_market_timestamp(state.updated_at)
         return state
 
     def apply_position_fill(self, fill: PositionFill) -> PositionState:
         self._require_running()
         state = self.position_engine.process_fill(fill)
-        self._observe_market_timestamp(state.updated_at)
         return state
 
     def apply_position_mark(self, mark: PositionMark) -> PositionState:
         self._require_running()
         state = self.position_engine.process_mark(mark)
-        self._observe_market_timestamp(state.updated_at)
         return state
 
     def reset(self) -> None:
@@ -2551,6 +2535,7 @@ class SymbolRuntime:
         return candle_end if isinstance(candle_end, datetime) else None
 
     def _observe_market_timestamp(self, timestamp: datetime | None) -> datetime | None:
+        """Advance canonical market time from trusted underlying market/candle producers only."""
         if not isinstance(timestamp, datetime):
             return self._market_timestamp(None)
         if self._canonical_market_timestamp is None or timestamp > self._canonical_market_timestamp:
