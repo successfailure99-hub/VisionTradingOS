@@ -89,6 +89,10 @@ class VisionMainWindow(QMainWindow):
             "dashboard_render_ms": 0.0,
             "runtime_supervisor_ms": 0.0,
             "vision_method_bridge_ms": 0.0,
+            "queued_tab_render_ms": 0.0,
+            "vision_visual_render_ms": 0.0,
+            "scroll_restore_count": 0,
+            "dirty_panel_count": 0,
             "ui_responsiveness": "HEALTHY",
             "tab_change_p50_ms": 0.0,
             "tab_change_p95_ms": 0.0,
@@ -101,6 +105,7 @@ class VisionMainWindow(QMainWindow):
             "last_network_io_detected": False,
             "last_calculator_invoked": False,
             "last_heavy_operation_detected": False,
+            "last_panel_render_skipped": False,
             "last_panel_prepare_ms": 0.0,
             "last_panel_update_ms": 0.0,
             "last_snapshot_generation_id": "-",
@@ -115,6 +120,9 @@ class VisionMainWindow(QMainWindow):
         self._settings = settings or QSettings("VisionTradingOS", "Dashboard")
         self._favorite_sections = tuple(str(item) for item in (self._settings.value("favorites", []) or ()))
         self._pending_state_restore = True
+        self._queued_tab_render = False
+        self._queued_tab_started = 0.0
+        self._queued_tab_target = "-"
         self._runtime_panel = RuntimePanel()
         self._live_market_data_panel = LiveMarketDataPanel()
         self._backtest_panel = BacktestPanel(command_target=lifecycle.orchestrator)
@@ -159,7 +167,7 @@ class VisionMainWindow(QMainWindow):
         if self._deterministic_backtest_driver is not None:
             self._deterministic_backtest_driver.poll()
         bridge_started = perf_counter()
-        self._vision_method_bridge.refresh()
+        self._vision_method_bridge.refresh(render_visual=self._is_vision_method_visible())
         self._record_duration("vision_method_bridge_ms", bridge_started)
         view = self._build_view()
         supervisor_started = perf_counter()
@@ -244,15 +252,34 @@ class VisionMainWindow(QMainWindow):
         self._diagnostics["last_calculator_invoked"] = False
         self._diagnostics["last_heavy_operation_detected"] = False
         self._diagnostics["last_panel_prepare_ms"] = 0.0
-        started = perf_counter()
+        self._schedule_visible_panel_render(perf_counter(), target)
+
+    def _schedule_visible_panel_render(self, started: float, target: str) -> None:
+        self._queued_tab_started = started
+        self._queued_tab_target = target
+        if self._rendering or self._queued_tab_render:
+            return
+        self._queued_tab_render = True
+        QTimer.singleShot(0, self._run_queued_tab_render)
+
+    def _run_queued_tab_render(self) -> None:
+        if not self._queued_tab_render:
+            return
+        started = self._queued_tab_started or perf_counter()
+        target = self._queued_tab_target
+        self._queued_tab_render = False
+        if self._current_view is None:
+            return
         update_started = perf_counter()
         self._render_visible_panels(self._current_view)
         self._record_duration("last_panel_update_ms", update_started)
+        self._record_duration("queued_tab_render_ms", update_started)
         self._record_duration("visible_panel_switch_ms", started)
         self._record_tab_change(started)
         self._last_active_panel_name = target
 
     def _render_visible_panels(self, view: DashboardView) -> None:
+        self._diagnostics["dirty_panel_count"] = self._dirty_panel_count(view)
         if self._main_tabs.currentWidget() is self._system_area:
             current_system = self._system_tabs.currentWidget()
             if current_system is self._system_tabs.widget(0):
@@ -263,6 +290,9 @@ class VisionMainWindow(QMainWindow):
                 self._render_cached(("system", "Backtest"), view.backtest, self._backtest_panel.render)
             return
         if self._main_tabs.currentWidget() is self._vision_method_area:
+            started = perf_counter()
+            self._vision_method_bridge.render_latest()
+            self._record_duration("vision_visual_render_ms", started)
             self._last_active_panel_name = "Vision Method"
             return
         if self._tabs.currentIndex() < 0:
@@ -485,10 +515,54 @@ class VisionMainWindow(QMainWindow):
         self._diagnostics["last_panel_key"] = "/".join(key)
         self._sync_generation_diagnostics(value)
         if self._panel_render_cache.get(key) == value:
+            self._diagnostics["last_panel_render_skipped"] = True
             return
-        self._diagnostics["last_widget_rebuilt"] = True
-        renderer(value)
+        self._diagnostics["last_panel_render_skipped"] = False
+        self._render_preserving_scroll(renderer, value)
         self._panel_render_cache[key] = value
+
+    def _render_preserving_scroll(self, renderer, value) -> None:
+        owner = getattr(renderer, "__self__", None)
+        scroll = self._scroll_area_for_widget(owner)
+        previous_position = scroll.verticalScrollBar().value() if scroll is not None else None
+        renderer(value)
+        if scroll is not None and previous_position is not None:
+            bar = scroll.verticalScrollBar()
+            bar.setValue(min(previous_position, bar.maximum()))
+            self._diagnostics["scroll_restore_count"] = int(self._diagnostics["scroll_restore_count"]) + 1
+
+    def _scroll_area_for_widget(self, widget) -> QScrollArea | None:
+        current = widget
+        while current is not None:
+            if isinstance(current, QScrollArea):
+                return current
+            current = current.parentWidget() if hasattr(current, "parentWidget") else None
+        return None
+
+    def _dirty_panel_count(self, view: DashboardView) -> int:
+        return sum(1 for key, value in self._panel_values(view) if self._panel_render_cache.get(key) != value)
+
+    def _panel_values(self, view: DashboardView):
+        yield ("system", "Runtime"), view.runtime
+        yield ("system", "Live Feed"), view.live_market_data
+        yield ("system", "Backtest"), view.backtest
+        analytics = {item.symbol: item for item in view.analytics}
+        for collection, section in (
+            (view.markets, "Market"),
+            (view.price_actions, "Price Action"),
+            (view.option_chains, "Option Chain"),
+            (view.ai, "AI"),
+            (view.strategies, "Strategy"),
+            (view.positions, "Position"),
+            (view.journals, "Journal"),
+        ):
+            for item in collection:
+                yield (item.symbol, section), item
+                if section == "Journal" and item.symbol in analytics:
+                    yield (item.symbol, "Analytics"), analytics[item.symbol]
+
+    def _is_vision_method_visible(self) -> bool:
+        return self._main_tabs.currentWidget() is self._vision_method_area
 
     def _active_panel_name(self) -> str:
         if self._main_tabs.currentWidget() is self._system_area:
@@ -708,10 +782,14 @@ class VisionMainWindow(QMainWindow):
             if isinstance(payload, tuple):
                 status_text, kind, tooltip = payload
                 self._health_badges[name].set_status_text(status_text, kind=kind)
-                self._health_badges[name].setToolTip(tooltip)
+                self._set_tooltip_if_changed(self._health_badges[name], tooltip)
             else:
                 self._health_badges[name].set_status_text(payload)
-                self._health_badges[name].setToolTip(tooltips[name])
+                self._set_tooltip_if_changed(self._health_badges[name], tooltips[name])
+
+    def _set_tooltip_if_changed(self, widget: QWidget, tooltip: str) -> None:
+        if widget.toolTip() != tooltip:
+            widget.setToolTip(tooltip)
 
 
 def _runtime_header_status(view: DashboardView) -> str:

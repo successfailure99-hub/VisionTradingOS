@@ -296,6 +296,7 @@ def test_cached_tab_change_renders_without_runtime_snapshot_supervisor_or_bridge
     monkeypatch.setattr(window._instrument_panels["NIFTY"]["price_action"], "render", count_market)
 
     window._instrument_panels["NIFTY"]["sections"].setCurrentIndex(1)
+    app().processEvents()
 
     assert calls == {"snapshot": 0, "bridge": 0, "supervisor": 0, "market": 1}
     assert window.diagnostics()["tab_change_ms"] >= 0.0
@@ -351,6 +352,7 @@ def test_hidden_panel_activation_uses_latest_prepared_view_without_refresh(monke
 
     sections = window._instrument_panels[first.markets[0].symbol]["sections"]
     sections.setCurrentIndex(2)
+    app().processEvents()
 
     option_panel = window._instrument_panels[first.markets[0].symbol]["option_chain"]
     assert calls["snapshot"] == 0
@@ -368,6 +370,7 @@ def test_repeated_tab_switches_reuse_prepared_view_and_keep_ui_responsive(monkey
     sections = window._instrument_panels["NIFTY"]["sections"]
     for index in range(140):
         sections.setCurrentIndex(index % sections.count())
+    app().processEvents()
 
     diagnostics = window.diagnostics()
     assert calls["snapshot"] == 0

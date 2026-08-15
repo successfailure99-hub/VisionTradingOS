@@ -814,9 +814,14 @@ def test_main_window_refresh_updates_live_vision_method_inspector():
 
     view = window.refresh()
 
+    assert window._vision_method_bridge.last_report is not None
+    assert window._vision_method_inspector._labels["Instrument"].text() == "-"
+    window._main_tabs.setCurrentWidget(window._vision_method_area)
+    app().processEvents()
+    window._render_current_view()
+
     assert window._vision_method_inspector._labels["Instrument"].text() == "NIFTY"
     assert window._vision_method_inspector._labels["Candidate State"].text() != "-"
-    assert window._vision_method_bridge.last_report is not None
     runtime_snapshot = lifecycle.orchestrator.snapshot().runtime_snapshots[0]
     assert runtime_snapshot.vision_method_snapshot is None
     assert runtime_snapshot.vision_method_validation_report is None

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QGroupBox, QVBoxLayout
 
 from dashboard import formatters
 from dashboard.models import DashboardStrategyView
-from dashboard.widgets import FieldGrid, StatusBadge
+from dashboard.widgets import FieldGrid, StatusBadge, set_label_text
 
 
 class StrategyPanel(QGroupBox):
@@ -77,4 +77,4 @@ class StrategyPanel(QGroupBox):
             if isinstance(self._labels[field], StatusBadge):
                 self._labels[field].set_status_text(value)
             else:
-                self._labels[field].setText(formatters.text(value))
+                set_label_text(self._labels[field], value)

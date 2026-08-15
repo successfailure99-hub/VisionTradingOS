@@ -166,6 +166,7 @@ def test_long_ai_explanation_remains_accessible_inside_scroll_area():
     panels = window._instrument_panels["NIFTY"]
     sections = panels["sections"]
     sections.setCurrentIndex(3)
+    app().processEvents()
     explanation = long_wrapped_text()
     panels["ai"].render(
         DashboardAIView(
@@ -221,6 +222,7 @@ def test_long_strategy_block_reason_remains_accessible_inside_scroll_area():
     panels = window._instrument_panels["NIFTY"]
     sections = panels["sections"]
     sections.setCurrentIndex(4)
+    app().processEvents()
     block_reason = long_wrapped_text()
     panels["strategy"].render(
         DashboardStrategyView(

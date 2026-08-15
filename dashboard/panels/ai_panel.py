@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QGroupBox, QLabel, QVBoxLayout
 
 from dashboard import formatters
 from dashboard.models import DashboardAIView
-from dashboard.widgets import FieldGrid, StatusBadge
+from dashboard.widgets import FieldGrid, StatusBadge, set_label_text
 
 
 class AIPanel(QGroupBox):
@@ -34,14 +34,14 @@ class AIPanel(QGroupBox):
             self._labels[field].setWordWrap(True)
 
     def render(self, view: DashboardAIView) -> None:
-        self._labels["Summary"].setText(formatters.text(view.market_summary))
+        set_label_text(self._labels["Summary"], view.market_summary)
         self._labels["Confidence"].set_status_text(view.confidence)
         self._labels["Agreement"].set_status_text(view.agreement)
-        self._labels["Conflict"].setText(formatters.text(view.conflict))
+        set_label_text(self._labels["Conflict"], view.conflict)
         self._labels["Suitability"].set_status_text(view.trading_suitability)
-        self._labels["Snapshot Generation"].setText(formatters.text(view.snapshot_generation_id))
-        self._labels["Snapshot Created At"].setText(formatters.timestamp(view.snapshot_created_at))
-        self._labels["Runtime Market Timestamp"].setText(formatters.timestamp(view.runtime_market_timestamp))
-        self._labels["Vision Decision Timestamp"].setText(formatters.timestamp(view.vision_decision_timestamp))
-        self._labels["Missing"].setText(formatters.joined(view.missing_information))
-        self._labels["Explanation"].setText(formatters.text(view.explanation))
+        set_label_text(self._labels["Snapshot Generation"], view.snapshot_generation_id)
+        set_label_text(self._labels["Snapshot Created At"], formatters.timestamp(view.snapshot_created_at))
+        set_label_text(self._labels["Runtime Market Timestamp"], formatters.timestamp(view.runtime_market_timestamp))
+        set_label_text(self._labels["Vision Decision Timestamp"], formatters.timestamp(view.vision_decision_timestamp))
+        set_label_text(self._labels["Missing"], formatters.joined(view.missing_information))
+        set_label_text(self._labels["Explanation"], view.explanation)

@@ -9,7 +9,7 @@ from dashboard import formatters
 from dashboard.models import DashboardAnalyticsView
 from dashboard.models import DashboardJournalView
 from dashboard.panels.analytics_panel import AnalyticsPanel
-from dashboard.widgets import FieldGrid, StatusBadge
+from dashboard.widgets import FieldGrid, StatusBadge, set_label_text
 
 
 class JournalPanel(QGroupBox):
@@ -57,27 +57,27 @@ class JournalPanel(QGroupBox):
 
     def render(self, view: DashboardJournalView) -> None:
         self._labels["Status"].set_status_text(view.status)
-        self._labels["Records"].setText(formatters.integer(view.records))
-        self._labels["Message"].setText(formatters.text(view.message))
-        self._labels["Trade ID"].setText(formatters.text(view.latest_trade_id))
-        self._labels["Trade Source"].setText(formatters.text(view.latest_trade_source))
-        self._labels["Instrument"].setText(formatters.text(view.latest_instrument))
-        self._labels["Side"].setText(formatters.text(view.latest_side))
-        self._labels["Quantity"].setText(formatters.quantity(view.latest_quantity))
-        self._labels["Entry"].setText(formatters.price(view.latest_entry_price))
-        self._labels["Exit"].setText(formatters.price(view.latest_exit_price))
-        self._labels["Exit Type"].setText(formatters.text(view.latest_exit_type))
-        self._labels["Realized P&L"].setText(formatters.price(view.latest_realized_pnl))
-        self._labels["Opened"].setText(formatters.timestamp(view.latest_opened_at))
-        self._labels["Closed"].setText(formatters.timestamp(view.latest_closed_at))
-        self._labels["Holding Time"].setText(formatters.integer(view.latest_holding_seconds))
-        self._labels["MFE"].setText(formatters.price(view.latest_mfe))
-        self._labels["MAE"].setText(formatters.price(view.latest_mae))
-        self._labels["Daily P&L"].setText(formatters.price(view.daily_pnl))
-        self._labels["Wins"].setText(formatters.integer(view.wins))
-        self._labels["Losses"].setText(formatters.integer(view.losses))
-        self._labels["Win Rate"].setText(formatters.ratio(view.win_rate))
-        self._labels["Profit Factor"].setText(formatters.ratio(view.profit_factor))
+        set_label_text(self._labels["Records"], formatters.integer(view.records))
+        set_label_text(self._labels["Message"], view.message)
+        set_label_text(self._labels["Trade ID"], view.latest_trade_id)
+        set_label_text(self._labels["Trade Source"], view.latest_trade_source)
+        set_label_text(self._labels["Instrument"], view.latest_instrument)
+        set_label_text(self._labels["Side"], view.latest_side)
+        set_label_text(self._labels["Quantity"], formatters.quantity(view.latest_quantity))
+        set_label_text(self._labels["Entry"], formatters.price(view.latest_entry_price))
+        set_label_text(self._labels["Exit"], formatters.price(view.latest_exit_price))
+        set_label_text(self._labels["Exit Type"], view.latest_exit_type)
+        set_label_text(self._labels["Realized P&L"], formatters.price(view.latest_realized_pnl))
+        set_label_text(self._labels["Opened"], formatters.timestamp(view.latest_opened_at))
+        set_label_text(self._labels["Closed"], formatters.timestamp(view.latest_closed_at))
+        set_label_text(self._labels["Holding Time"], formatters.integer(view.latest_holding_seconds))
+        set_label_text(self._labels["MFE"], formatters.price(view.latest_mfe))
+        set_label_text(self._labels["MAE"], formatters.price(view.latest_mae))
+        set_label_text(self._labels["Daily P&L"], formatters.price(view.daily_pnl))
+        set_label_text(self._labels["Wins"], formatters.integer(view.wins))
+        set_label_text(self._labels["Losses"], formatters.integer(view.losses))
+        set_label_text(self._labels["Win Rate"], formatters.ratio(view.win_rate))
+        set_label_text(self._labels["Profit Factor"], formatters.ratio(view.profit_factor))
 
     def render_analytics(self, view: DashboardAnalyticsView) -> None:
         self._analytics_panel.render(view)

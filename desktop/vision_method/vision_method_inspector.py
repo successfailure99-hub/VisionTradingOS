@@ -23,6 +23,12 @@ class VisionMethodInspector(QGroupBox):
     def __init__(self, parent=None):
         super().__init__("Vision Method", parent)
         self._labels: dict[str, QLabel | StatusBadge] = {}
+        self._last_rendered_text: dict[str, str] = {}
+        self._field_updates_count = 0
+        self._field_skips_count = 0
+        self._trace_rebuild_count = 0
+        self._last_trace_signature: tuple[str, ...] = ()
+        self._trace_pool: list[QLabel] = []
         self._trace_labels: list[QLabel] = []
         self._cards = {
             "Candidate State": MetricCard("Candidate State"),
@@ -66,14 +72,7 @@ class VisionMethodInspector(QGroupBox):
             values.update(_snapshot_values(snapshot))
         if report is not None:
             values.update(_report_values(report))
-        for field, card in self._cards.items():
-            card.set_value(values[field])
-        for field, value in values.items():
-            label = self._labels[field]
-            if isinstance(label, StatusBadge):
-                label.set_status_text(value)
-            else:
-                label.setText(formatters.text(value))
+        self._render_values(values)
         self._render_trace(report)
 
     def render_live_status(
@@ -96,14 +95,7 @@ class VisionMethodInspector(QGroupBox):
             values.update(_snapshot_values(snapshot))
         if report is not None:
             values.update(_report_values(report))
-        for field, card in self._cards.items():
-            card.set_value(values[field])
-        for field, value in values.items():
-            label = self._labels[field]
-            if isinstance(label, StatusBadge):
-                label.set_status_text(value)
-            else:
-                label.setText(formatters.text(value))
+        self._render_values(values)
         if report is not None:
             self._render_trace(report)
         else:
@@ -132,63 +124,83 @@ class VisionMethodInspector(QGroupBox):
                 "Blocking Stage": failure.stage,
             }
         )
+        self._render_values(values)
+        self._render_failure_trace(failure)
+
+    def render_counters(self) -> dict[str, int]:
+        return {
+            "field_updates_count": self._field_updates_count,
+            "field_skips_count": self._field_skips_count,
+            "trace_rebuild_count": self._trace_rebuild_count,
+        }
+
+    def _render_values(self, values: dict[str, str]) -> None:
         for field, card in self._cards.items():
-            card.set_value(values[field])
+            if card.set_value(values[field]):
+                self._field_updates_count += 1
+            else:
+                self._field_skips_count += 1
         for field, value in values.items():
             label = self._labels[field]
             if isinstance(label, StatusBadge):
-                label.set_status_text(value)
+                if label.set_status_text(value):
+                    self._field_updates_count += 1
+                else:
+                    self._field_skips_count += 1
             else:
-                label.setText(formatters.text(value))
-        self._render_failure_trace(failure)
+                self._set_label_text(field, label, value)
+
+    def _set_label_text(self, field: str, label: QLabel, value) -> None:
+        text = formatters.text(value)
+        if self._last_rendered_text.get(field) == text:
+            self._field_skips_count += 1
+            return
+        label.setText(text)
+        self._last_rendered_text[field] = text
+        self._field_updates_count += 1
 
     def _render_trace(self, report: VisionMethodValidationReport | None) -> None:
-        while self._trace_labels:
-            label = self._trace_labels.pop()
-            self._trace_layout.removeWidget(label)
-            label.deleteLater()
         lines = ("-",) if report is None else tuple(report.export_record.trace)
-        for line in lines:
-            label = QLabel(line)
-            label.setWordWrap(True)
-            label.setMinimumHeight(24)
-            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            self._trace_layout.addWidget(label)
-            self._trace_labels.append(label)
+        self._set_trace_lines(lines)
 
     def _render_status_trace(self, status: VisionMethodLiveStatus) -> None:
-        while self._trace_labels:
-            label = self._trace_labels.pop()
-            self._trace_layout.removeWidget(label)
-            label.deleteLater()
         lines = (
             f"STATUS | Vision Method Live | {status.runtime_state.value} | {status.blocking_reason}",
             f"FINAL | Vision Method | {status.validation_result} | {status.candidate_state}",
         )
-        for line in lines:
-            label = QLabel(line)
-            label.setWordWrap(True)
-            label.setMinimumHeight(24)
-            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            self._trace_layout.addWidget(label)
-            self._trace_labels.append(label)
+        self._set_trace_lines(lines)
 
     def _render_failure_trace(self, failure: VisionContextAssemblyFailure) -> None:
-        while self._trace_labels:
-            label = self._trace_labels.pop()
-            self._trace_layout.removeWidget(label)
-            label.deleteLater()
         lines = (
             f"STEP | {failure.stage} | {failure.status.value} | {failure.validation_message}",
             "FINAL | Vision Method | insufficient_data | Context assembly incomplete",
         )
-        for line in lines:
-            label = QLabel(line)
+        self._set_trace_lines(lines)
+
+    def _set_trace_lines(self, lines: tuple[str, ...]) -> None:
+        if lines == self._last_trace_signature:
+            self._field_skips_count += len(lines)
+            return
+        while len(self._trace_pool) < len(lines):
+            label = QLabel()
             label.setWordWrap(True)
             label.setMinimumHeight(24)
             label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             self._trace_layout.addWidget(label)
-            self._trace_labels.append(label)
+            self._trace_pool.append(label)
+            self._trace_rebuild_count += 1
+        for index, line in enumerate(lines):
+            label = self._trace_pool[index]
+            if label.text() != line:
+                label.setText(line)
+                self._field_updates_count += 1
+            else:
+                self._field_skips_count += 1
+            label.show()
+        for label in self._trace_pool[len(lines):]:
+            label.hide()
+        self._trace_labels = self._trace_pool[: len(lines)]
+        self._last_trace_signature = lines
 
 
 def _snapshot_values(snapshot: VisionMethodSnapshot) -> dict[str, str]:

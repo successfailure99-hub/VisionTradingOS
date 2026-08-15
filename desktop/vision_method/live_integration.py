@@ -160,7 +160,7 @@ class VisionMethodLiveInspectorBridge:
     def last_status(self) -> VisionMethodLiveStatus | None:
         return self._last_status
 
-    def refresh(self) -> VisionMethodInspectorLiveResult:
+    def refresh(self, *, render_visual: bool = True) -> VisionMethodInspectorLiveResult:
         try:
             assembly = self._assemble_live()
             snapshot = assembly.snapshot
@@ -171,25 +171,34 @@ class VisionMethodLiveInspectorBridge:
             self._last_report = None
             status = self._status_from_not_ready(exc)
             self._last_status = status
-            self._inspector.render_live_status(status)
+            if render_visual:
+                self._inspector.render_live_status(status)
             self._log_status(status)
-            return VisionMethodInspectorLiveResult(None, None, status, True, False, str(exc), (*status.missing_contexts, *status.failed_contexts))
+            return VisionMethodInspectorLiveResult(None, None, status, render_visual, False, str(exc), (*status.missing_contexts, *status.failed_contexts))
         except Exception as exc:
             self._last_snapshot = None
             self._last_report = None
             status = self._internal_error_status(exc)
             self._last_status = status
-            self._inspector.render_live_status(status)
+            if render_visual:
+                self._inspector.render_live_status(status)
             self._logger.exception("[VisionMethodLive] state=INTERNAL_ERROR reason=%r", status.blocking_reason)
-            return VisionMethodInspectorLiveResult(None, None, status, True, False, _safe_error(exc), status.failed_contexts)
+            return VisionMethodInspectorLiveResult(None, None, status, render_visual, False, _safe_error(exc), status.failed_contexts)
 
         self._last_snapshot = snapshot
         self._last_report = report
         status = self._status_from_assembly(assembly)
         self._last_status = status
-        self._inspector.render_live_status(status, snapshot, report)
+        if render_visual:
+            self._inspector.render_live_status(status, snapshot, report)
         self._log_status(status)
-        return VisionMethodInspectorLiveResult(snapshot, report, status, True, not failures, failures=failures)
+        return VisionMethodInspectorLiveResult(snapshot, report, status, render_visual, not failures, failures=failures)
+
+    def render_latest(self) -> bool:
+        if self._last_status is None:
+            return False
+        self._inspector.render_live_status(self._last_status, self._last_snapshot, self._last_report)
+        return True
 
     def _assemble_live(self) -> _LiveAssembly:
         runtime = self._select_runtime()
