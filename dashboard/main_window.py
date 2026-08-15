@@ -89,8 +89,12 @@ class VisionMainWindow(QMainWindow):
             "dashboard_render_ms": 0.0,
             "runtime_supervisor_ms": 0.0,
             "vision_method_bridge_ms": 0.0,
+            "vision_data_capture_ms": 0.0,
             "queued_tab_render_ms": 0.0,
             "vision_visual_render_ms": 0.0,
+            "vision_visual_render_skipped": False,
+            "vision_render_count": 0,
+            "vision_hidden_compute_count": 0,
             "scroll_restore_count": 0,
             "dirty_panel_count": 0,
             "ui_responsiveness": "HEALTHY",
@@ -127,6 +131,7 @@ class VisionMainWindow(QMainWindow):
         self._live_market_data_panel = LiveMarketDataPanel()
         self._backtest_panel = BacktestPanel(command_target=lifecycle.orchestrator)
         self._vision_method_inspector = VisionMethodInspector()
+        self._vision_method_scroll = None
         self._vision_method_bridge = VisionMethodLiveInspectorBridge(lifecycle, self._vision_method_inspector)
         self._runtime_supervisor = RuntimeSupervisor(lifecycle, interval_ms=refresh_interval_ms)
         self._last_lifecycle_snapshot = None
@@ -167,14 +172,15 @@ class VisionMainWindow(QMainWindow):
         if self._deterministic_backtest_driver is not None:
             self._deterministic_backtest_driver.poll()
         bridge_started = perf_counter()
-        self._vision_method_bridge.refresh(render_visual=self._is_vision_method_visible())
+        self._vision_method_bridge.capture_latest_runtime_state()
         self._record_duration("vision_method_bridge_ms", bridge_started)
+        self._diagnostics["vision_data_capture_ms"] = self._diagnostics["vision_method_bridge_ms"]
         view = self._build_view()
         supervisor_started = perf_counter()
         self._runtime_supervisor.monitor(self._last_lifecycle_snapshot)
         self._record_duration("runtime_supervisor_ms", supervisor_started)
         self._current_view = view
-        if view != self._last_rendered_view:
+        if view != self._last_rendered_view or (self._is_vision_method_visible() and self._vision_method_bridge.has_unrendered_change):
             self.render(view)
         return view
 
@@ -291,8 +297,10 @@ class VisionMainWindow(QMainWindow):
             return
         if self._main_tabs.currentWidget() is self._vision_method_area:
             started = perf_counter()
-            self._vision_method_bridge.render_latest()
+            rendered = self._render_vision_preserving_scroll()
             self._record_duration("vision_visual_render_ms", started)
+            self._diagnostics["vision_visual_render_skipped"] = not rendered
+            self._diagnostics["vision_render_count"] = self._vision_method_bridge.visual_render_count
             self._last_active_panel_name = "Vision Method"
             return
         if self._tabs.currentIndex() < 0:
@@ -356,7 +364,8 @@ class VisionMainWindow(QMainWindow):
         self._vision_method_area = vision_method
         vision_layout = QVBoxLayout(vision_method)
         vision_layout.setContentsMargins(0, 0, 0, 0)
-        vision_layout.addWidget(self._scroll_area(self._vision_method_inspector), 1)
+        self._vision_method_scroll = self._scroll_area(self._vision_method_inspector)
+        vision_layout.addWidget(self._vision_method_scroll, 1)
 
         system = QWidget()
         self._system_area = system
@@ -530,6 +539,16 @@ class VisionMainWindow(QMainWindow):
             bar = scroll.verticalScrollBar()
             bar.setValue(min(previous_position, bar.maximum()))
             self._diagnostics["scroll_restore_count"] = int(self._diagnostics["scroll_restore_count"]) + 1
+
+    def _render_vision_preserving_scroll(self) -> bool:
+        scroll = self._vision_method_scroll
+        previous_position = scroll.verticalScrollBar().value() if scroll is not None else None
+        rendered = self._vision_method_bridge.render_latest()
+        if scroll is not None and previous_position is not None:
+            bar = scroll.verticalScrollBar()
+            bar.setValue(min(previous_position, bar.maximum()))
+            self._diagnostics["scroll_restore_count"] = int(self._diagnostics["scroll_restore_count"]) + 1
+        return rendered
 
     def _scroll_area_for_widget(self, widget) -> QScrollArea | None:
         current = widget

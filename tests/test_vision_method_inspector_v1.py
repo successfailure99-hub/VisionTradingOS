@@ -809,12 +809,19 @@ def test_live_bridge_status_model_is_immutable():
 def test_main_window_refresh_updates_live_vision_method_inspector():
     app()
     lifecycle, runtime = _live_lifecycle()
+    item = snapshot()
+    report = validate_vision_method(item)
+    runtime.current_snapshot = replace(
+        runtime.current_snapshot,
+        vision_method_snapshot=item,
+        vision_method_validation_report=report,
+    )
     window = VisionMainWindow(lifecycle)
     object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
 
     view = window.refresh()
 
-    assert window._vision_method_bridge.last_report is not None
+    assert window._vision_method_bridge.last_report is report
     assert window._vision_method_inspector._labels["Instrument"].text() == "-"
     window._main_tabs.setCurrentWidget(window._vision_method_area)
     app().processEvents()
@@ -823,8 +830,8 @@ def test_main_window_refresh_updates_live_vision_method_inspector():
     assert window._vision_method_inspector._labels["Instrument"].text() == "NIFTY"
     assert window._vision_method_inspector._labels["Candidate State"].text() != "-"
     runtime_snapshot = lifecycle.orchestrator.snapshot().runtime_snapshots[0]
-    assert runtime_snapshot.vision_method_snapshot is None
-    assert runtime_snapshot.vision_method_validation_report is None
+    assert runtime_snapshot.vision_method_snapshot is item
+    assert runtime_snapshot.vision_method_validation_report is report
     assert runtime_snapshot.vision_trade_candidate is None
     assert view.strategies[0].candidate_state == "-"
 
@@ -910,6 +917,9 @@ def _runtime_snapshot(
     price_action_trigger_context=_DEFAULT,
     price_action_trigger_stage_result=None,
     runtime_session=None,
+    vision_method_snapshot=None,
+    vision_method_validation_report=None,
+    vision_trade_candidate=None,
 ):
     history = _candles() if history is None else tuple(history)
     return RuntimeSnapshot(
@@ -937,6 +947,9 @@ def _runtime_snapshot(
         snapshot_created_at=timestamp,
         runtime_session=runtime_session,
         adr=None if adr is _DEFAULT else adr,
+        vision_method_snapshot=vision_method_snapshot,
+        vision_method_validation_report=vision_method_validation_report,
+        vision_trade_candidate=vision_trade_candidate,
         price_action_trigger_context=trigger(timestamp=timestamp) if price_action_trigger_context is _DEFAULT else price_action_trigger_context,
         price_action_trigger_stage_result=price_action_trigger_stage_result,
     )

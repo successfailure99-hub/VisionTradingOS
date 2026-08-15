@@ -147,6 +147,10 @@ class VisionMethodLiveInspectorBridge:
         self._last_snapshot: VisionMethodSnapshot | None = None
         self._last_report: VisionMethodValidationReport | None = None
         self._last_status: VisionMethodLiveStatus | None = None
+        self._latest_signature: tuple[object, ...] | None = None
+        self._last_rendered_signature: tuple[object, ...] | None = None
+        self._visual_render_count = 0
+        self._visual_render_skip_count = 0
 
     @property
     def last_snapshot(self) -> VisionMethodSnapshot | None:
@@ -160,7 +164,58 @@ class VisionMethodLiveInspectorBridge:
     def last_status(self) -> VisionMethodLiveStatus | None:
         return self._last_status
 
+    @property
+    def visual_render_count(self) -> int:
+        return self._visual_render_count
+
+    @property
+    def visual_render_skip_count(self) -> int:
+        return self._visual_render_skip_count
+
+    @property
+    def has_unrendered_change(self) -> bool:
+        return self._latest_signature is not None and self._latest_signature != self._last_rendered_signature
+
     def refresh(self, *, render_visual: bool = True) -> VisionMethodInspectorLiveResult:
+        return self.refresh_diagnostic_local_assembly(render_visual=render_visual)
+
+    def capture_latest_runtime_state(self) -> VisionMethodInspectorLiveResult:
+        try:
+            runtime = self._select_runtime()
+            runtime_snapshot = runtime.snapshot()
+        except _VisionMethodNotReady as exc:
+            self._last_snapshot = None
+            self._last_report = None
+            status = self._status_from_not_ready(exc)
+            self._last_status = status
+            self._latest_signature = self._presentation_signature(None, None, status)
+            self._log_status(status)
+            return VisionMethodInspectorLiveResult(None, None, status, False, False, str(exc), (*status.missing_contexts, *status.failed_contexts))
+        except Exception as exc:
+            self._last_snapshot = None
+            self._last_report = None
+            status = self._internal_error_status(exc)
+            self._last_status = status
+            self._latest_signature = self._presentation_signature(None, None, status)
+            self._logger.exception("[VisionMethodLive] state=INTERNAL_ERROR reason=%r", status.blocking_reason)
+            return VisionMethodInspectorLiveResult(None, None, status, False, False, _safe_error(exc), status.failed_contexts)
+
+        snapshot = getattr(runtime_snapshot, "vision_method_snapshot", None)
+        report = getattr(runtime_snapshot, "vision_method_validation_report", None)
+        if snapshot is not None and not isinstance(snapshot, VisionMethodSnapshot):
+            raise TypeError("runtime vision_method_snapshot must be VisionMethodSnapshot or None.")
+        if report is not None and not isinstance(report, VisionMethodValidationReport):
+            raise TypeError("runtime vision_method_validation_report must be VisionMethodValidationReport or None.")
+        self._last_snapshot = snapshot
+        self._last_report = report
+        status = self._status_from_runtime_snapshot(runtime_snapshot, snapshot, report)
+        self._last_status = status
+        self._latest_signature = self._presentation_signature(snapshot, report, status)
+        self._log_status(status)
+        failures = tuple(getattr(snapshot, "assembly_failures", ()) or ())
+        return VisionMethodInspectorLiveResult(snapshot, report, status, False, snapshot is not None and report is not None and not failures, failures=failures)
+
+    def refresh_diagnostic_local_assembly(self, *, render_visual: bool = False) -> VisionMethodInspectorLiveResult:
         try:
             assembly = self._assemble_live()
             snapshot = assembly.snapshot
@@ -194,11 +249,100 @@ class VisionMethodLiveInspectorBridge:
         self._log_status(status)
         return VisionMethodInspectorLiveResult(snapshot, report, status, render_visual, not failures, failures=failures)
 
-    def render_latest(self) -> bool:
+    def render_latest(self, *, force: bool = False) -> bool:
         if self._last_status is None:
             return False
+        signature = self._latest_signature or self._presentation_signature(self._last_snapshot, self._last_report, self._last_status)
+        if not force and signature == self._last_rendered_signature:
+            self._visual_render_skip_count += 1
+            return False
         self._inspector.render_live_status(self._last_status, self._last_snapshot, self._last_report)
+        self._last_rendered_signature = signature
+        self._visual_render_count += 1
         return True
+
+    def _status_from_runtime_snapshot(
+        self,
+        runtime_snapshot,
+        snapshot: VisionMethodSnapshot | None,
+        report: VisionMethodValidationReport | None,
+    ) -> VisionMethodLiveStatus:
+        timestamp = _runtime_display_timestamp(runtime_snapshot)
+        operational = getattr(runtime_snapshot, "operational_readiness", None)
+        history = getattr(runtime_snapshot, "vision_decision_history_readiness", None)
+        failures = tuple(getattr(snapshot, "assembly_failures", ()) or ())
+        if snapshot is not None and report is not None:
+            runtime_state = VisionMethodLiveRuntimeState.DEGRADED if failures else VisionMethodLiveRuntimeState.READY
+            candidate_state = snapshot.candidate_state.value
+            quality = str(snapshot.quality)
+            validation_result = report.validation_result.value
+            blocking_stage = report.metrics.blocking_stage or "none"
+            blocking_reason = _runtime_blocking_reason(operational, failures, "none")
+        else:
+            runtime_state = _runtime_state_from_readiness(operational, history, timestamp)
+            candidate_state = VisionCandidateState.INSUFFICIENT_DATA.value
+            quality = "insufficient"
+            validation_result = "insufficient_data"
+            blocking_stage = _readiness_component(history) or "VISION_METHOD"
+            blocking_reason = _runtime_blocking_reason(operational, failures, _readiness_reason(history))
+        return VisionMethodLiveStatus(
+            instrument=getattr(getattr(runtime_snapshot, "symbol", None), "value", "-"),
+            timeframe=str(getattr(runtime_snapshot, "vision_decision_timeframe", None) or getattr(runtime_snapshot, "timeframe", "-")),
+            market_timestamp=timestamp,
+            runtime_state=runtime_state,
+            candidate_state=candidate_state,
+            quality=quality,
+            validation_result=validation_result,
+            blocking_stage=blocking_stage,
+            blocking_reason=blocking_reason,
+            available_contexts=_available_contexts(runtime_snapshot, snapshot),
+            missing_contexts=(),
+            failed_contexts=failures,
+            unexpected_error=None,
+            updated_at=self._clock(),
+            market_data_age_seconds=_market_age_seconds(runtime_snapshot, _runtime_timestamp_or_none(runtime_snapshot), observed_at=self._clock()),
+            level_context=getattr(snapshot, "level_context", None) if snapshot is not None else None,
+            opening_range_context=getattr(snapshot, "opening_range_context", None) if snapshot is not None else None,
+            structure_context=getattr(snapshot, "structure_context", None) if snapshot is not None else None,
+            liquidity_context=getattr(snapshot, "liquidity_context", None) if snapshot is not None else None,
+            structure_event_context=getattr(snapshot, "structure_event_context", None) if snapshot is not None else None,
+            setup_qualification_context=getattr(snapshot, "setup_qualification_context", None) if snapshot is not None else None,
+            option_confirmation_context=getattr(snapshot, "option_confirmation_context", None) if snapshot is not None else None,
+            pivot_flight_plan=getattr(snapshot, "pivot_flight_plan", None) if snapshot is not None else getattr(runtime_snapshot, "pivot_flight_plan", None),
+            pivot_opening_assessment=getattr(snapshot, "pivot_opening_assessment", None) if snapshot is not None else getattr(runtime_snapshot, "pivot_opening_assessment", None),
+            pivot_confluence_context=getattr(snapshot, "pivot_confluence_context", None) if snapshot is not None else getattr(runtime_snapshot, "pivot_confluence_context", None),
+            price_action_trigger_context=getattr(snapshot, "price_action_trigger_context", None) if snapshot is not None else getattr(runtime_snapshot, "price_action_trigger_context", None),
+            price_action_trigger_stage_result=getattr(snapshot, "price_action_trigger_stage_result", None) if snapshot is not None else getattr(runtime_snapshot, "price_action_trigger_stage_result", None),
+        )
+
+    def _presentation_signature(
+        self,
+        snapshot: VisionMethodSnapshot | None,
+        report: VisionMethodValidationReport | None,
+        status: VisionMethodLiveStatus,
+    ) -> tuple[object, ...]:
+        report_metrics = getattr(report, "metrics", None)
+        trigger_stage = getattr(status.price_action_trigger_stage_result, "status", None)
+        return (
+            getattr(snapshot, "instrument", None),
+            getattr(snapshot, "timeframe", None),
+            getattr(snapshot, "timestamp", None),
+            getattr(getattr(snapshot, "candidate_state", None), "value", None),
+            getattr(snapshot, "quality", None),
+            getattr(getattr(report, "validation_result", None), "value", None),
+            getattr(report_metrics, "completed_steps", None),
+            getattr(report_metrics, "failed_steps", None),
+            getattr(report_metrics, "missing_steps", None),
+            getattr(report_metrics, "blocking_stage", None),
+            status.runtime_state.value,
+            status.blocking_stage,
+            status.blocking_reason,
+            status.candidate_state,
+            status.quality,
+            status.validation_result,
+            getattr(trigger_stage, "value", trigger_stage),
+            tuple((failure.stage, failure.status.value, failure.validation_message) for failure in (*status.missing_contexts, *status.failed_contexts)),
+        )
 
     def _assemble_live(self) -> _LiveAssembly:
         runtime = self._select_runtime()
@@ -709,6 +853,64 @@ def _runtime_timestamp(runtime_snapshot) -> object:
     return timestamp
 
 
+def _runtime_timestamp_or_none(runtime_snapshot):
+    try:
+        return _runtime_timestamp(runtime_snapshot)
+    except _VisionMethodNotReady:
+        return None
+
+
+def _runtime_display_timestamp(runtime_snapshot) -> str:
+    timestamp = _runtime_timestamp_or_none(runtime_snapshot)
+    return timestamp.isoformat() if hasattr(timestamp, "isoformat") else "unavailable"
+
+
+def _runtime_state_from_readiness(operational, history, timestamp: str) -> VisionMethodLiveRuntimeState:
+    if timestamp in {"", "-", "unavailable"}:
+        return VisionMethodLiveRuntimeState.WAITING_FOR_MARKET_DATA
+    if history is not None and getattr(history, "status", None) not in {None, "READY"}:
+        return VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+    if operational is not None and getattr(operational, "mandatory_blockers", ()):
+        return VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+    if operational is not None and getattr(operational, "optional_degradations", ()):
+        return VisionMethodLiveRuntimeState.DEGRADED
+    return VisionMethodLiveRuntimeState.COLLECTING_CONTEXT
+
+
+def _readiness_component(readiness) -> str | None:
+    component = getattr(readiness, "component", None)
+    return _stage_label(component) if isinstance(component, str) and component.strip() else None
+
+
+def _readiness_reason(readiness) -> str:
+    reason = getattr(readiness, "reason", None)
+    if isinstance(reason, str) and reason.strip() and reason.strip() != "-":
+        return reason.strip()
+    status = getattr(readiness, "status", None)
+    if isinstance(status, str) and status.strip() and status.strip() != "-":
+        return f"Vision runtime readiness is {status.strip()}."
+    return "Canonical Vision runtime snapshot is not available yet."
+
+
+def _runtime_blocking_reason(operational, failures: tuple[VisionContextAssemblyFailure, ...], fallback: str) -> str:
+    if failures:
+        return format_failures(failures)
+    primary = getattr(operational, "primary_blocker", None)
+    if isinstance(primary, str) and primary.strip() and primary.strip() != "-":
+        return primary.strip()
+    blockers = tuple(getattr(operational, "mandatory_blockers", ()) or ())
+    if blockers:
+        return "; ".join(str(item) for item in blockers if str(item).strip())
+    degradations = tuple(getattr(operational, "optional_degradations", ()) or ())
+    if degradations:
+        return "; ".join(str(item) for item in degradations if str(item).strip())
+    return fallback
+
+
+def format_failures(failures: tuple[VisionContextAssemblyFailure, ...]) -> str:
+    return "; ".join(f"{failure.stage}: {failure.validation_message}" for failure in failures) or "none"
+
+
 def _market_session_date(timestamp) -> object:
     return timestamp.date()
 
@@ -851,7 +1053,27 @@ def _stale_market_data_reason(market_timestamp, market_age_seconds: float | None
     )
 
 
-def _available_contexts(snapshot: VisionMethodSnapshot) -> tuple[str, ...]:
+def _available_contexts(runtime_snapshot, snapshot: VisionMethodSnapshot | None = None) -> tuple[str, ...]:
+    if snapshot is None and isinstance(runtime_snapshot, VisionMethodSnapshot):
+        snapshot = runtime_snapshot
+        runtime_snapshot = None
+    if snapshot is None:
+        contexts = []
+        if getattr(runtime_snapshot, "latest_tick", None) is not None or getattr(runtime_snapshot, "latest_closed_candle_at", None) is not None:
+            contexts.append("Market Data")
+        if getattr(runtime_snapshot, "candle_history_count", 0):
+            contexts.append("Candle Engine")
+        if getattr(runtime_snapshot, "cpr", None) is not None and getattr(runtime_snapshot, "camarilla", None) is not None:
+            contexts.append("Level Context")
+        if getattr(runtime_snapshot, "pivot_flight_plan", None) is not None:
+            contexts.append("Pivot Flight Plan")
+        if getattr(runtime_snapshot, "pivot_opening_assessment", None) is not None:
+            contexts.append("Opening Assessment")
+        if getattr(runtime_snapshot, "pivot_confluence_context", None) is not None:
+            contexts.append("Pivot Confluence")
+        if getattr(runtime_snapshot, "price_action_trigger_context", None) is not None:
+            contexts.append("Price-Action Trigger")
+        return tuple(contexts)
     contexts = ["Market Data", "Candle Engine", "Level Context"]
     if snapshot.pivot_flight_plan is not None:
         contexts.append("Pivot Flight Plan")

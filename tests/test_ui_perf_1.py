@@ -3,15 +3,19 @@ UI-PERF-1 dashboard rendering and navigation performance guards.
 """
 
 import os
+from dataclasses import replace
+from datetime import timedelta
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
 from application import ApplicationBootstrap
+from application.enums import RuntimeInstrument
 from dashboard.main_window import VisionMainWindow
 from dashboard.widgets import MetricCard, StatusBadge
 from engines.vision_method import validate_vision_method
+from tests.test_vision_method_inspector_v1 import _live_lifecycle
 from tests.test_vision_method_validation_v1 import snapshot
 
 
@@ -54,21 +58,150 @@ def test_vision_inspector_reuses_trace_labels_for_identical_report():
 
 def test_hidden_vision_inspector_refresh_updates_data_without_visual_render(monkeypatch):
     app()
-    window = VisionMainWindow(ApplicationBootstrap().create_application())
-    calls = []
+    lifecycle, runtime = _live_lifecycle()
+    item = snapshot()
+    report = validate_vision_method(item)
+    runtime.current_snapshot = replace(
+        runtime.current_snapshot,
+        vision_method_snapshot=item,
+        vision_method_validation_report=report,
+    )
+    window = VisionMainWindow(lifecycle)
+    object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
+    calls = {"assemble": 0, "calculate": 0, "validate": 0, "render": 0}
 
-    def record_refresh(*, render_visual=True):
-        calls.append(render_visual)
+    from desktop.vision_method import live_integration
 
-    monkeypatch.setattr(window._vision_method_bridge, "refresh", record_refresh)
+    def forbidden(name):
+        def _raise(*_args, **_kwargs):
+            calls[name] += 1
+            raise AssertionError(f"{name} must not run during dashboard capture")
+
+        return _raise
+
+    monkeypatch.setattr(live_integration, "assemble_vision_method_runtime", forbidden("assemble"))
+    monkeypatch.setattr(live_integration, "calculate_vision_method_snapshot", forbidden("calculate"))
+    monkeypatch.setattr(live_integration, "validate_vision_method", forbidden("validate"))
+    monkeypatch.setattr(window._vision_method_inspector, "render_live_status", lambda *_args, **_kwargs: calls.__setitem__("render", calls["render"] + 1))
 
     window.refresh()
-    assert calls[-1] is False
+    assert window._vision_method_bridge.last_report is report
+    assert calls == {"assemble": 0, "calculate": 0, "validate": 0, "render": 0}
+    assert window.diagnostics()["vision_hidden_compute_count"] == 0
 
     window._main_tabs.setCurrentWidget(window._vision_method_area)
     app().processEvents()
+    window._render_current_view()
+    assert calls["render"] == 1
+
+
+def test_hidden_vision_100_refresh_cycles_do_not_calculate_or_render(monkeypatch):
+    app()
+    lifecycle, runtime = _live_lifecycle()
+    item = snapshot()
+    report = validate_vision_method(item)
+    runtime.current_snapshot = replace(
+        runtime.current_snapshot,
+        vision_method_snapshot=item,
+        vision_method_validation_report=report,
+    )
+    window = VisionMainWindow(lifecycle)
+    object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
+    calls = {"assemble": 0, "calculate": 0, "validate": 0, "render": 0}
+    from desktop.vision_method import live_integration
+
+    def forbidden(name):
+        def _raise(*_args, **_kwargs):
+            calls[name] += 1
+            raise AssertionError(f"{name} must not run during hidden dashboard refresh")
+
+        return _raise
+
+    monkeypatch.setattr(live_integration, "assemble_vision_method_runtime", forbidden("assemble"))
+    monkeypatch.setattr(live_integration, "calculate_vision_method_snapshot", forbidden("calculate"))
+    monkeypatch.setattr(live_integration, "validate_vision_method", forbidden("validate"))
+    monkeypatch.setattr(window._vision_method_inspector, "render_live_status", lambda *_args, **_kwargs: calls.__setitem__("render", calls["render"] + 1))
+
+    for _ in range(100):
+        window.refresh()
+
+    assert calls == {"assemble": 0, "calculate": 0, "validate": 0, "render": 0}
+    assert window.diagnostics()["vision_hidden_compute_count"] == 0
+
+
+def test_visible_changed_vision_renders_once_and_unchanged_skips(monkeypatch):
+    app()
+    lifecycle, runtime = _live_lifecycle()
+    first = snapshot()
+    first_report = validate_vision_method(first)
+    second = snapshot(timestamp=first.timestamp + timedelta(minutes=5))
+    second_report = validate_vision_method(second)
+    runtime.current_snapshot = replace(
+        runtime.current_snapshot,
+        vision_method_snapshot=first,
+        vision_method_validation_report=first_report,
+    )
+    window = VisionMainWindow(lifecycle)
+    object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
+    renders = []
+    original_render = window._vision_method_inspector.render_live_status
+    monkeypatch.setattr(
+        window._vision_method_inspector,
+        "render_live_status",
+        lambda *args, **kwargs: (renders.append(args), original_render(*args, **kwargs))[1],
+    )
+
     window.refresh()
-    assert calls[-1] is True
+    window._main_tabs.setCurrentWidget(window._vision_method_area)
+    app().processEvents()
+    window._render_current_view()
+    assert len(renders) == 1
+
+    window.refresh()
+    assert len(renders) == 1
+    assert window.diagnostics()["vision_visual_render_skipped"] is True
+
+    runtime.current_snapshot = replace(
+        runtime.current_snapshot,
+        vision_method_snapshot=second,
+        vision_method_validation_report=second_report,
+    )
+    window.refresh()
+
+    assert len(renders) == 2
+    assert window._vision_method_inspector._labels["Timestamp"].text() == "29-Jul-2026 10:35:00 IST"
+
+
+def test_vision_dirty_render_preserves_scroll_position():
+    app()
+    lifecycle, runtime = _live_lifecycle()
+    first = snapshot()
+    first_report = validate_vision_method(first)
+    runtime.current_snapshot = replace(
+        runtime.current_snapshot,
+        vision_method_snapshot=first,
+        vision_method_validation_report=first_report,
+    )
+    window = VisionMainWindow(lifecycle)
+    object.__setattr__(lifecycle.orchestrator, "_runtimes", {RuntimeInstrument.NIFTY: runtime})
+    window.refresh()
+    window._main_tabs.setCurrentWidget(window._vision_method_area)
+    app().processEvents()
+    window._render_current_view()
+    window._vision_method_scroll.verticalScrollBar().setValue(25)
+    second = snapshot(timestamp=first.timestamp + timedelta(minutes=5))
+    second_report = validate_vision_method(second)
+    runtime.current_snapshot = replace(
+        runtime.current_snapshot,
+        vision_method_snapshot=second,
+        vision_method_validation_report=second_report,
+    )
+
+    window.refresh()
+
+    bar = window._vision_method_scroll.verticalScrollBar()
+    assert bar.value() == min(25, bar.maximum())
+    assert window._vision_method_scroll is window._main_tabs.widget(1).layout().itemAt(0).widget()
 
 
 def test_rapid_tab_switch_coalesces_to_final_visible_panel(monkeypatch):
