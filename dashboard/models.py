@@ -131,6 +131,12 @@ class DashboardRuntimeView:
     option_paper_execution_style: str = "-"
     option_paper_selection_policy: str = "-"
     option_paper_preferred_itm_step: int = 0
+    cross_feed_sample_count: int = 0
+    cross_feed_latest_skew_seconds: float | None = None
+    cross_feed_p95_skew_seconds: float | None = None
+    cross_feed_max_skew_seconds: float | None = None
+    cross_feed_nifty_feed_age_seconds: float | None = None
+    cross_feed_watchdog_state: str = "-"
     journal_persistence_status: str = "-"
     broker_read_only_sync: str = "-"
     primary_blocker: str = "-"

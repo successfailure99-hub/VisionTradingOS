@@ -193,13 +193,30 @@ class ApplicationOrchestrator:
         runtime = self.get_runtime(instrument)
         return runtime.get_candle_history()
 
-    def process_option_chain(self, instrument: str | RuntimeInstrument, snapshot):
+    def process_option_chain(self, instrument: str | RuntimeInstrument, snapshot, *, live_market_data_snapshot=None, option_receipt_timestamp=None):
         self._require_running()
-        return self.get_runtime(instrument).process_option_chain(snapshot)
+        return self.get_runtime(instrument).process_option_chain(
+            snapshot,
+            live_market_data_snapshot=live_market_data_snapshot,
+            option_receipt_timestamp=option_receipt_timestamp,
+        )
 
-    def process_option_chain_runtime(self, instrument: str | RuntimeInstrument, snapshot, analytics=None):
+    def process_option_chain_runtime(
+        self,
+        instrument: str | RuntimeInstrument,
+        snapshot,
+        analytics=None,
+        *,
+        live_market_data_snapshot=None,
+        option_receipt_timestamp=None,
+    ):
         self._require_running()
-        return self.get_runtime(instrument).process_option_chain_runtime(snapshot, analytics)
+        return self.get_runtime(instrument).process_option_chain_runtime(
+            snapshot,
+            analytics,
+            live_market_data_snapshot=live_market_data_snapshot,
+            option_receipt_timestamp=option_receipt_timestamp,
+        )
 
     def build_market_context(
         self,

@@ -125,6 +125,12 @@ class RuntimePanel(QGroupBox):
                 "Option Paper Style",
                 "Option Selection Policy",
                 "Option Preferred ITM Step",
+                "Cross-Feed Samples",
+                "Option-NIFTY Latest Skew",
+                "Option-NIFTY P95 Skew",
+                "Option-NIFTY Max Skew",
+                "NIFTY Feed Age",
+                "Cross-Feed Watchdog",
                 "Journal Persistence",
                 "Broker Read-only Sync",
                 "Primary Blocker",
@@ -215,6 +221,12 @@ class RuntimePanel(QGroupBox):
         self._labels["Option Paper Style"].setText(formatters.text(view.option_paper_execution_style))
         self._labels["Option Selection Policy"].setText(formatters.text(view.option_paper_selection_policy))
         self._labels["Option Preferred ITM Step"].setText(formatters.integer(view.option_paper_preferred_itm_step))
+        self._labels["Cross-Feed Samples"].setText(formatters.integer(view.cross_feed_sample_count))
+        self._labels["Option-NIFTY Latest Skew"].setText(formatters.ratio(view.cross_feed_latest_skew_seconds))
+        self._labels["Option-NIFTY P95 Skew"].setText(formatters.ratio(view.cross_feed_p95_skew_seconds))
+        self._labels["Option-NIFTY Max Skew"].setText(formatters.ratio(view.cross_feed_max_skew_seconds))
+        self._labels["NIFTY Feed Age"].setText(formatters.ratio(view.cross_feed_nifty_feed_age_seconds))
+        self._labels["Cross-Feed Watchdog"].setText(formatters.text(view.cross_feed_watchdog_state))
         self._labels["Journal Persistence"].setText(formatters.text(view.journal_persistence_status))
         self._labels["Broker Read-only Sync"].setText(formatters.text(view.broker_read_only_sync))
         self._labels["Primary Blocker"].setText(formatters.text(view.primary_blocker))

@@ -155,6 +155,7 @@ from application.models import (
     RuntimeVerificationStage,
     RuntimeVWAPSource,
 )
+from application.cross_feed_timestamp_telemetry import CrossFeedTimestampObservation, CrossFeedTimestampTelemetry
 from application.runtime_contract import RuntimeContractContext, RuntimeContractSubject, RuntimeContractValidator, RuntimeIntegrityViolation
 from application.vision_forensics import VisionForensicTrace
 _OPTION_CHAIN_MAX_AGE_SECONDS = 180.0
@@ -208,6 +209,7 @@ class SymbolRuntime:
         self._canonical_market_timestamp = None
         self._previous_runtime_snapshot_timestamp = None
         self._runtime_contract_validator = RuntimeContractValidator()
+        self._cross_feed_timestamp_telemetry = CrossFeedTimestampTelemetry()
         self._latest_tick_at = None
         self._latest_closed_candle_at = None
         self._latest_analysis_at = None
@@ -783,23 +785,108 @@ class SymbolRuntime:
             if aggregated:
                 candle_engine.seed_history(self._core_instrument, aggregated, replace=True)
 
-    def process_option_chain(self, snapshot: OptionChainSnapshot) -> OptionChainState:
+    def process_option_chain(
+        self,
+        snapshot: OptionChainSnapshot,
+        *,
+        live_market_data_snapshot=None,
+        option_receipt_timestamp: datetime | None = None,
+    ) -> OptionChainState:
         self._require_running()
         market_timestamp = self._trusted_market_timestamp()
         if market_timestamp is None:
             raise ValueError("Canonical market timestamp is unavailable for OptionChainSnapshot validation.")
-        self._validate_option_chain_snapshot(snapshot, market_timestamp)
+        try:
+            self._validate_option_chain_snapshot(snapshot, market_timestamp)
+        except Exception as exc:
+            self._record_cross_feed_timestamp_observation(
+                snapshot,
+                market_timestamp,
+                runtime_contract_status="REJECTED",
+                runtime_contract_reason=_safe_error(exc),
+                live_market_data_snapshot=live_market_data_snapshot,
+                option_receipt_timestamp=option_receipt_timestamp,
+            )
+            raise
         try:
             state = self.option_chain_engine.process(snapshot)
         except Exception as exc:
             self._option_chain_last_error = _safe_error(exc)
+            self._record_cross_feed_timestamp_observation(
+                snapshot,
+                market_timestamp,
+                runtime_contract_status="REJECTED",
+                runtime_contract_reason=self._option_chain_last_error,
+                live_market_data_snapshot=live_market_data_snapshot,
+                option_receipt_timestamp=option_receipt_timestamp,
+            )
             raise
         self._option_chain_last_error = None
+        self._record_cross_feed_timestamp_observation(
+            snapshot,
+            market_timestamp,
+            runtime_contract_status="ACCEPTED",
+            runtime_contract_reason="-",
+            live_market_data_snapshot=live_market_data_snapshot,
+            option_receipt_timestamp=option_receipt_timestamp,
+        )
         self._option_chain_snapshot_history = self._append_asof_history(
             self._option_chain_snapshot_history,
             self.option_chain_engine.snapshot,
         )
         return state
+
+    def _record_cross_feed_timestamp_observation(
+        self,
+        snapshot: OptionChainSnapshot,
+        market_timestamp: datetime,
+        *,
+        runtime_contract_status: str,
+        runtime_contract_reason: str,
+        live_market_data_snapshot=None,
+        option_receipt_timestamp: datetime | None = None,
+    ) -> None:
+        observed_at = self._cross_feed_timestamp_telemetry.now()
+        last_delivered = getattr(live_market_data_snapshot, "last_delivered_market_timestamp", None)
+        if last_delivered is None:
+            last_delivered = self._latest_tick_at
+        canonical_timestamp = _telemetry_aware_timestamp(market_timestamp)
+        option_timestamp = _telemetry_aware_timestamp(snapshot.timestamp)
+        last_delivered_timestamp = _telemetry_aware_timestamp(last_delivered) if last_delivered is not None else None
+        option_receipt = _telemetry_aware_timestamp(option_receipt_timestamp) if option_receipt_timestamp is not None else None
+        option_minus_canonical = (option_timestamp - canonical_timestamp).total_seconds()
+        option_minus_last_delivered = (
+            None
+            if last_delivered_timestamp is None
+            else (option_timestamp - last_delivered_timestamp).total_seconds()
+        )
+        nifty_feed_age = (
+            None
+            if last_delivered_timestamp is None
+            else max(0.0, (observed_at.astimezone(last_delivered_timestamp.tzinfo) - last_delivered_timestamp).total_seconds())
+        )
+        websocket = getattr(live_market_data_snapshot, "websocket", None)
+        observation = CrossFeedTimestampObservation(
+            observed_at=observed_at,
+            instrument=self._instrument.value,
+            canonical_nifty_timestamp=canonical_timestamp,
+            last_delivered_nifty_timestamp=last_delivered_timestamp,
+            option_snapshot_timestamp=option_timestamp,
+            option_snapshot_observed_at=option_timestamp,
+            option_receipt_timestamp=option_receipt,
+            option_minus_canonical_seconds=option_minus_canonical,
+            option_minus_last_delivered_seconds=option_minus_last_delivered,
+            nifty_feed_age_seconds=nifty_feed_age,
+            watchdog_state=_runtime_text(getattr(live_market_data_snapshot, "watchdog_state", None), default="UNKNOWN"),
+            market_data_health=_runtime_text(getattr(live_market_data_snapshot, "status", None), default="UNKNOWN"),
+            websocket_state=_runtime_text(getattr(websocket, "status", None), default="UNKNOWN"),
+            runtime_contract_status=runtime_contract_status,
+            runtime_contract_reason=runtime_contract_reason,
+            option_expiry=getattr(snapshot, "expiry_date", None),
+            option_source="LiveOptionChainRuntime",
+            session_date=self._exchange_session_date(market_timestamp),
+        )
+        self._cross_feed_timestamp_telemetry.record(observation)
 
     def set_option_universe(self, universe) -> None:
         if getattr(getattr(universe, "underlying", None), "value", None) != self._instrument.value:
@@ -810,8 +897,15 @@ class SymbolRuntime:
         self,
         snapshot: OptionChainSnapshot,
         analytics: OptionChainAnalyticsSnapshot | None = None,
+        *,
+        live_market_data_snapshot=None,
+        option_receipt_timestamp: datetime | None = None,
     ) -> RuntimeSnapshot:
-        self.process_option_chain(snapshot)
+        self.process_option_chain(
+            snapshot,
+            live_market_data_snapshot=live_market_data_snapshot,
+            option_receipt_timestamp=option_receipt_timestamp,
+        )
         if analytics is not None:
             self.process_option_chain_analytics(analytics)
         self._process_option_paper_market_update()
@@ -1225,6 +1319,7 @@ class SymbolRuntime:
         self._adr_history = ()
         self._option_chain_snapshot_history = ()
         self._option_chain_analytics_history = ()
+        self._cross_feed_timestamp_telemetry = CrossFeedTimestampTelemetry()
         self._option_trade_candidate = None
         self._option_selection_diagnostics = ()
         self._option_paper_risk = None
@@ -1349,6 +1444,7 @@ class SymbolRuntime:
             vision_decision_history_readiness=vision_history_readiness,
             liquidity_input_readiness=liquidity_input_readiness,
             vision_forensic_counters=self._vision_forensic_trace.counters,
+            cross_feed_timestamp_summary=self._cross_feed_timestamp_telemetry.summary(),
         )
 
     def _current_pivot_flight_plan(
@@ -4616,3 +4712,17 @@ def _lifecycle_rejection_reason(lifecycle) -> str:
 
 def _safe_error(exc: Exception) -> str:
     return str(exc).replace("token", "[redacted]").replace("credential", "[redacted]")
+
+
+def _runtime_text(value, *, default: str = "-") -> str:
+    if value is None:
+        return default
+    text = getattr(value, "value", value)
+    text = str(text).strip()
+    return text or default
+
+
+def _telemetry_aware_timestamp(timestamp: datetime) -> datetime:
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        return timestamp.replace(tzinfo=IST)
+    return timestamp

@@ -63,6 +63,7 @@ from application.live_shadow_session.models import LiveShadowSessionSnapshot
 from application.authorized_paper_execution.models import AuthorizedPaperHandoffSnapshot
 from application.broker_account_sync.models import BrokerAccountSnapshot, BrokerRuntimeVerificationStage
 from application.broker_session_persistence import BrokerSessionPersistenceSnapshot
+from application.cross_feed_timestamp_telemetry import CrossFeedTimestampSummary
 from application.runtime_contract import RuntimeContractReport
 from engines.position.models import PositionState
 from engines.price_action.models import PriceActionState
@@ -846,6 +847,7 @@ class RuntimeSnapshot:
     pivot_confluence_context: VisionPivotConfluenceContext | None = None
     price_action_trigger_context: VisionPriceActionTriggerContext | None = None
     price_action_trigger_stage_result: VisionPriceActionTriggerStageResult | None = None
+    cross_feed_timestamp_summary: CrossFeedTimestampSummary | None = None
 
     def __post_init__(self) -> None:
         if self.runtime_session is not None and not isinstance(self.runtime_session, RuntimeTradingSession):
@@ -879,6 +881,8 @@ class RuntimeSnapshot:
             raise TypeError("operational_readiness must be OperationalReadinessSnapshot or None")
         if self.runtime_contract_report is not None and not isinstance(self.runtime_contract_report, RuntimeContractReport):
             raise TypeError("runtime_contract_report must be RuntimeContractReport or None")
+        if self.cross_feed_timestamp_summary is not None and not isinstance(self.cross_feed_timestamp_summary, CrossFeedTimestampSummary):
+            raise TypeError("cross_feed_timestamp_summary must be CrossFeedTimestampSummary or None")
         if isinstance(self.candle_history_count, bool) or not isinstance(self.candle_history_count, int) or self.candle_history_count < 0:
             raise ValueError("candle_history_count must be a non-negative integer")
         object.__setattr__(self, "base_timeframe", _normalize_vision_forensic_text(self.base_timeframe, "base_timeframe"))

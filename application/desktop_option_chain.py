@@ -372,7 +372,15 @@ class DesktopOptionChainRuntimeManager:
                 snapshot = stack.live_integration.snapshot().option_chain.latest_option_chain_snapshot
                 analytics = getattr(outcome, "analytics_snapshot", None)
                 if snapshot is not None:
-                    self._lifecycle.orchestrator.process_option_chain_runtime(RuntimeInstrument(underlying.value), snapshot, analytics)
+                    market_snapshot = self._live_market_data_runtime.snapshot() if self._live_market_data_runtime is not None else None
+                    option_receipt_timestamp = getattr(live_snapshot.option_chain, "last_received_at", None)
+                    self._lifecycle.orchestrator.process_option_chain_runtime(
+                        RuntimeInstrument(underlying.value),
+                        snapshot,
+                        analytics,
+                        live_market_data_snapshot=market_snapshot,
+                        option_receipt_timestamp=option_receipt_timestamp,
+                    )
                     state.state = DesktopOptionChainRuntimeState.RECEIVING
                     state.ready = True
                     state.log(self._clock, "Analytics updated")

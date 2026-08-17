@@ -216,6 +216,7 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
     primary_runtime = runtime_snapshots[0] if runtime_snapshots else None
     operational = next((getattr(snapshot, "operational_readiness", None) for snapshot in runtime_snapshots if getattr(snapshot, "operational_readiness", None) is not None), None)
     journal_persistence = next((getattr(snapshot, "journal_persistence", None) for snapshot in runtime_snapshots if getattr(snapshot, "journal_persistence", None) is not None), None)
+    cross_feed = next((getattr(snapshot, "cross_feed_timestamp_summary", None) for snapshot in runtime_snapshots if getattr(snapshot, "cross_feed_timestamp_summary", None) is not None), None)
     canonical_journal_ready = bool(journal_persistence is not None and getattr(journal_persistence, "operational_state", "") in {"READY_EMPTY", "READY_WITH_RECORDS"})
     broker_account = getattr(orchestrator, "broker_account", None)
     component_health = _runtime_component_health(orchestrator)
@@ -279,6 +280,12 @@ def build_runtime_view(lifecycle_snapshot: LifecycleSnapshot) -> DashboardRuntim
         option_paper_execution_style=_plain_text(getattr(primary_runtime, "option_paper_execution_style", None)),
         option_paper_selection_policy=_plain_text(getattr(primary_runtime, "option_paper_selection_policy", None)),
         option_paper_preferred_itm_step=getattr(primary_runtime, "option_paper_preferred_itm_step", 0),
+        cross_feed_sample_count=getattr(cross_feed, "sample_count", 0),
+        cross_feed_latest_skew_seconds=getattr(cross_feed, "latest_skew_seconds", None),
+        cross_feed_p95_skew_seconds=getattr(cross_feed, "p95_skew_seconds", None),
+        cross_feed_max_skew_seconds=getattr(cross_feed, "max_skew_seconds", None),
+        cross_feed_nifty_feed_age_seconds=getattr(cross_feed, "latest_nifty_feed_age_seconds", None),
+        cross_feed_watchdog_state=_plain_text(getattr(cross_feed, "latest_watchdog_state", None)),
         journal_persistence_status=_enum_text(getattr(journal_persistence, "operational_state", None)),
         broker_read_only_sync="READY" if _broker_account_ready(broker_account) else "AUTH_REQUIRED",
         primary_blocker=primary_blocker,
