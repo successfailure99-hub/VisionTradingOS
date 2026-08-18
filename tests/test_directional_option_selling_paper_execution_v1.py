@@ -750,11 +750,14 @@ def test_symbol_runtime_rejects_excessive_future_option_mark_without_advancing_c
     before = item.snapshot().option_paper_position
 
     try:
-        item.process_option_chain_runtime(chain_snapshot(put_bid=80.0, timestamp=NOW + timedelta(seconds=2)))
+        item.process_option_chain_runtime(
+            chain_snapshot(put_bid=80.0, timestamp=NOW + timedelta(seconds=2)),
+            option_receipt_timestamp=NOW,
+        )
     except ValueError as exc:
-        assert "future" in str(exc)
+        assert "OPTION_TIMESTAMP_FUTURE_LOCAL" in str(exc)
     else:
-        raise AssertionError("future option mark beyond tolerance must be rejected")
+        raise AssertionError("true local-future option mark beyond tolerance must be rejected")
     after = item.snapshot()
 
     assert after.runtime_session.market_timestamp == NOW

@@ -55,16 +55,28 @@ def test_option_chain_newer_feed_timestamp_does_not_advance_canonical_runtime_ti
     assert runtime_snapshot.option_chain_runtime.latency_ms == 175.0
 
 
-def test_option_chain_beyond_timestamp_tolerance_is_rejected_without_clock_poisoning():
+def test_option_chain_beyond_old_cross_domain_tolerance_is_accepted_without_clock_poisoning():
+    runtime = _runtime()
+    option_time = NOW + timedelta(seconds=6, microseconds=342996)
+
+    runtime.process_option_chain(_snapshot(option_time), option_receipt_timestamp=option_time)
+
+    runtime_snapshot = runtime.snapshot()
+    assert runtime_snapshot.option_chain_snapshot.timestamp == option_time
+    assert runtime_snapshot.snapshot_created_at == NOW
+    assert runtime_snapshot.runtime_session.market_timestamp == NOW
+
+
+def test_true_local_future_option_chain_timestamp_is_rejected_without_clock_poisoning():
     runtime = _runtime()
     option_time = NOW + timedelta(seconds=2)
 
     try:
-        runtime.process_option_chain(_snapshot(option_time))
+        runtime.process_option_chain(_snapshot(option_time), option_receipt_timestamp=NOW)
     except ValueError as exc:
-        assert "future" in str(exc)
+        assert "OPTION_TIMESTAMP_FUTURE_LOCAL" in str(exc)
     else:
-        raise AssertionError("future option-chain snapshots must remain rejected")
+        raise AssertionError("true local-future option-chain snapshots must remain rejected")
 
     runtime_snapshot = runtime.snapshot()
     assert runtime_snapshot.snapshot_created_at == NOW
@@ -76,7 +88,7 @@ def test_stale_option_chain_timestamp_remains_strict_after_canonical_timestamp_a
     runtime.process_tick(_tick(NOW + timedelta(minutes=5)))
 
     try:
-        runtime.process_option_chain(_snapshot(NOW))
+        runtime.process_option_chain(_snapshot(NOW), option_receipt_timestamp=NOW + timedelta(minutes=5))
     except ValueError as exc:
         assert "stale" in str(exc)
     else:

@@ -11,7 +11,6 @@ from zoneinfo import ZoneInfo
 
 from application.enums import RuntimeInstrument
 from core.enums.instrument import Instrument
-from core.time_domain import OPTION_EVIDENCE_TIMESTAMP_TOLERANCE
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -25,6 +24,9 @@ class RuntimeTemporalClass(str, Enum):
     CURRENT_OR_HISTORICAL_SERIES = "current_or_historical_series"
     PERSISTENT_CROSS_SESSION = "persistent_cross_session"
 
+
+
+_OPTION_EVIDENCE_OBJECTS = {"OptionChainSnapshot", "OptionChainAnalyticsSnapshot", "OptionPaperPosition"}
 
 _TEMPORAL_CLASSES = {
     "RuntimeSnapshot": RuntimeTemporalClass.EVENT_TIMESTAMPED,
@@ -235,15 +237,13 @@ class RuntimeContractValidator:
                 violations.append(_violation(object_name, "Timezone mismatch", owner, producer, consumer, "timezone-aware Asia/Kolkata-compatible timestamp", repr(timestamp)))
             if candle_interval is not None:
                 violations.extend(_candle_interval_violations(candle_interval, context, object_name, owner, producer, consumer))
-            elif context.runtime_timestamp is not None and _same_awareness(timestamp, context.runtime_timestamp):
-                allowed_future = (
-                    OPTION_EVIDENCE_TIMESTAMP_TOLERANCE
-                    if object_name in {"OptionChainSnapshot", "OptionChainAnalyticsSnapshot", "OptionPaperPosition"}
-                    else None
-                )
-                latest_allowed = context.runtime_timestamp + allowed_future if allowed_future is not None else context.runtime_timestamp
-                if timestamp > latest_allowed:
-                    violations.append(_violation(object_name, "Future timestamp", owner, producer, consumer, f"<= {latest_allowed.isoformat()}", timestamp.isoformat()))
+            elif (
+                context.runtime_timestamp is not None
+                and _same_awareness(timestamp, context.runtime_timestamp)
+                and object_name not in _OPTION_EVIDENCE_OBJECTS
+            ):
+                if timestamp > context.runtime_timestamp:
+                    violations.append(_violation(object_name, "Future timestamp", owner, producer, consumer, f"<= {context.runtime_timestamp.isoformat()}", timestamp.isoformat()))
         if object_name == "RuntimeSnapshot" and timestamp is not None and context.previous_runtime_timestamp is not None:
             if _same_awareness(timestamp, context.previous_runtime_timestamp) and timestamp < context.previous_runtime_timestamp:
                 violations.append(_violation(object_name, "Runtime ordering mismatch", owner, producer, consumer, f">= {context.previous_runtime_timestamp.isoformat()}", timestamp.isoformat()))

@@ -210,17 +210,16 @@ def test_runtime_contract_allows_option_paper_position_within_evidence_skew_tole
     assert report.valid is True
 
 
-def test_runtime_contract_rejects_option_paper_position_beyond_evidence_skew_tolerance():
+def test_runtime_contract_does_not_use_canonical_nifty_future_rule_for_option_paper_position():
     subject = SimpleNamespace(
         instrument=RuntimeInstrument.NIFTY,
         timeframe="5m",
-        updated_at=VISION_NOW + timedelta(seconds=2),
+        updated_at=VISION_NOW + timedelta(seconds=13, milliseconds=500),
     )
 
     report = _report_for(subject, object_name="OptionPaperPosition", context=_decision_context())
 
-    assert report.valid is False
-    assert report.violations[0].reason == "Future timestamp"
+    assert report.valid is True
 
 
 def test_runtime_contract_accepts_live_building_candle_interval_boundary():

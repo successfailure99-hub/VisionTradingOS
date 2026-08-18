@@ -101,7 +101,7 @@ def test_option_chain_newer_feed_timestamp_within_tolerance_does_not_advance_run
 
     runtime.process_tick(_tick(NOW + timedelta(minutes=5)))
     with pytest.raises(ValueError, match="stale"):
-        runtime.process_option_chain(_snapshot(NOW))
+        runtime.process_option_chain(_snapshot(NOW), option_receipt_timestamp=NOW + timedelta(minutes=5))
 
 
 def test_option_chain_subsecond_async_arrival_is_synchronized_not_blocked():

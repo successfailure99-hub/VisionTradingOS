@@ -159,7 +159,16 @@ from application.cross_feed_timestamp_telemetry import CrossFeedTimestampObserva
 from application.runtime_contract import RuntimeContractContext, RuntimeContractSubject, RuntimeContractValidator, RuntimeIntegrityViolation
 from application.vision_forensics import VisionForensicTrace
 _OPTION_CHAIN_MAX_AGE_SECONDS = 180.0
+_OPTION_CHAIN_LOCAL_FUTURE_TOLERANCE = OPTION_EVIDENCE_TIMESTAMP_TOLERANCE
 _OPTION_CHAIN_TIMESTAMP_TOLERANCE = OPTION_EVIDENCE_TIMESTAMP_TOLERANCE
+_NIFTY_FEED_BLOCKING_WATCHDOG_STATES = {
+    "reconnect_scheduled",
+    "reconnecting",
+    "resubscribing",
+    "stale_detected",
+    "verifying_fresh_tick",
+    "recovery_failed",
+}
 _VISION_LIQUIDITY_MIN_CANDLES = 3
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -796,12 +805,15 @@ class SymbolRuntime:
         market_timestamp = self._trusted_market_timestamp()
         if market_timestamp is None:
             raise ValueError("Canonical market timestamp is unavailable for OptionChainSnapshot validation.")
+        observed_at = self._option_observation_timestamp(option_receipt_timestamp, snapshot.timestamp)
         try:
-            self._validate_option_chain_snapshot(snapshot, market_timestamp)
+            self._validate_nifty_feed_health(live_market_data_snapshot, observed_at)
+            self._validate_option_chain_snapshot(snapshot, market_timestamp, observed_at)
         except Exception as exc:
             self._record_cross_feed_timestamp_observation(
                 snapshot,
                 market_timestamp,
+                observed_at=observed_at,
                 runtime_contract_status="REJECTED",
                 runtime_contract_reason=_safe_error(exc),
                 live_market_data_snapshot=live_market_data_snapshot,
@@ -815,6 +827,7 @@ class SymbolRuntime:
             self._record_cross_feed_timestamp_observation(
                 snapshot,
                 market_timestamp,
+                observed_at=observed_at,
                 runtime_contract_status="REJECTED",
                 runtime_contract_reason=self._option_chain_last_error,
                 live_market_data_snapshot=live_market_data_snapshot,
@@ -825,6 +838,7 @@ class SymbolRuntime:
         self._record_cross_feed_timestamp_observation(
             snapshot,
             market_timestamp,
+            observed_at=observed_at,
             runtime_contract_status="ACCEPTED",
             runtime_contract_reason="-",
             live_market_data_snapshot=live_market_data_snapshot,
@@ -841,12 +855,13 @@ class SymbolRuntime:
         snapshot: OptionChainSnapshot,
         market_timestamp: datetime,
         *,
+        observed_at: datetime | None = None,
         runtime_contract_status: str,
         runtime_contract_reason: str,
         live_market_data_snapshot=None,
         option_receipt_timestamp: datetime | None = None,
     ) -> None:
-        observed_at = self._cross_feed_timestamp_telemetry.now()
+        observed_at = _telemetry_aware_timestamp(observed_at or self._cross_feed_timestamp_telemetry.now())
         last_delivered = getattr(live_market_data_snapshot, "last_delivered_market_timestamp", None)
         if last_delivered is None:
             last_delivered = self._latest_tick_at
@@ -907,16 +922,22 @@ class SymbolRuntime:
             option_receipt_timestamp=option_receipt_timestamp,
         )
         if analytics is not None:
-            self.process_option_chain_analytics(analytics)
+            self.process_option_chain_analytics(analytics, option_receipt_timestamp=option_receipt_timestamp)
         self._process_option_paper_market_update()
         return self.snapshot()
 
-    def process_option_chain_analytics(self, analytics: OptionChainAnalyticsSnapshot) -> OptionChainAnalyticsSnapshot:
+    def process_option_chain_analytics(
+        self,
+        analytics: OptionChainAnalyticsSnapshot,
+        *,
+        option_receipt_timestamp: datetime | None = None,
+    ) -> OptionChainAnalyticsSnapshot:
         self._require_running()
         market_timestamp = self._trusted_market_timestamp()
         if market_timestamp is None:
             raise ValueError("Canonical market timestamp is unavailable for OptionChainAnalyticsSnapshot validation.")
-        self._validate_option_chain_analytics(analytics, market_timestamp)
+        observed_at = self._option_observation_timestamp(option_receipt_timestamp, analytics.timestamp)
+        self._validate_option_chain_analytics(analytics, market_timestamp, observed_at)
         self._option_chain_analytics = analytics
         self._option_chain_last_error = None
         self._option_chain_analytics_history = self._append_asof_history(
@@ -932,13 +953,9 @@ class SymbolRuntime:
         timestamp = getattr(self.option_chain_engine.snapshot, "timestamp", None)
         if premium is None or not isinstance(timestamp, datetime):
             return
-        market_timestamp = self._trusted_market_timestamp()
-        if (
-            market_timestamp is not None
-            and self._timestamps_are_comparable(timestamp, market_timestamp)
-            and timestamp - market_timestamp > _OPTION_CHAIN_TIMESTAMP_TOLERANCE
-        ):
-            self._option_chain_last_error = "Option paper mark timestamp exceeds certified option evidence skew tolerance."
+        observed_at = self._option_observation_timestamp(None, timestamp)
+        if self._timestamps_are_comparable(timestamp, observed_at) and timestamp - observed_at > _OPTION_CHAIN_LOCAL_FUTURE_TOLERANCE:
+            self._option_chain_last_error = "OPTION_TIMESTAMP_FUTURE_LOCAL: Option paper mark timestamp is in the future relative to trusted local observation time."
             return
         underlying_price = getattr(self.option_chain_engine.snapshot, "underlying_price", None)
         self._option_paper_position = update_option_paper_position(
@@ -2461,7 +2478,7 @@ class SymbolRuntime:
         if latest.tzinfo is None or timestamp.tzinfo is None or latest.utcoffset() != timestamp.utcoffset():
             return "timezone_mismatch", None
         latency_ms = abs((timestamp - latest).total_seconds()) * 1000.0
-        return ("synchronized" if latency_ms <= (_OPTION_CHAIN_TIMESTAMP_TOLERANCE.total_seconds() * 1000.0) else "not_aligned", round(latency_ms, 3))
+        return "synchronized", round(latency_ms, 3)
 
     def _current_strategy_decision_v2_snapshot(self):
         if self._vision_trade_candidate is not None:
@@ -2975,7 +2992,38 @@ class SymbolRuntime:
             previous = candle
         return None
 
-    def _validate_option_chain_snapshot(self, snapshot: OptionChainSnapshot, market_timestamp: datetime) -> None:
+    def _option_observation_timestamp(self, option_receipt_timestamp: datetime | None, fallback_timestamp: datetime) -> datetime:
+        if option_receipt_timestamp is not None:
+            if not isinstance(option_receipt_timestamp, datetime):
+                raise TypeError("option receipt timestamp must be datetime.")
+            if option_receipt_timestamp.tzinfo is None or option_receipt_timestamp.utcoffset() is None:
+                raise ValueError("option receipt timestamp must be timezone-aware.")
+            return option_receipt_timestamp
+        if not isinstance(fallback_timestamp, datetime):
+            raise TypeError("option observation fallback timestamp must be datetime.")
+        return fallback_timestamp
+
+    def _validate_nifty_feed_health(self, live_market_data_snapshot, observed_at: datetime) -> None:
+        if live_market_data_snapshot is None:
+            return
+        watchdog_state = _runtime_text(getattr(live_market_data_snapshot, "watchdog_state", None), default="UNKNOWN").lower()
+        if watchdog_state in _NIFTY_FEED_BLOCKING_WATCHDOG_STATES:
+            raise ValueError(f"NIFTY_FEED_BLOCKED: NIFTY feed health is {watchdog_state}.")
+        last_delivered = getattr(live_market_data_snapshot, "last_delivered_market_timestamp", None)
+        if last_delivered is None:
+            return
+        if not isinstance(last_delivered, datetime):
+            raise TypeError("last delivered NIFTY timestamp must be datetime.")
+        if last_delivered.tzinfo is None or last_delivered.utcoffset() is None:
+            raise ValueError("last delivered NIFTY timestamp must be timezone-aware.")
+        threshold = getattr(getattr(live_market_data_snapshot, "configuration", None), "stale_data_seconds", None)
+        if threshold is None:
+            threshold = 120
+        age_seconds = (observed_at.astimezone(last_delivered.tzinfo) - last_delivered).total_seconds()
+        if age_seconds > float(threshold):
+            raise ValueError(f"NIFTY_FEED_STALE: last delivered tick age {age_seconds:.3f}s exceeds {float(threshold):.3f}s.")
+
+    def _validate_option_chain_snapshot(self, snapshot: OptionChainSnapshot, market_timestamp: datetime, observed_at: datetime) -> None:
         if not isinstance(snapshot, OptionChainSnapshot):
             raise TypeError("snapshot must be OptionChainSnapshot")
         if snapshot.symbol != self._instrument.value:
@@ -2988,17 +3036,20 @@ class SymbolRuntime:
             raise TypeError("OptionChainSnapshot timestamp must be datetime.")
         snapshot_is_aware = snapshot.timestamp.tzinfo is not None and snapshot.timestamp.utcoffset() is not None
         market_is_aware = market_timestamp.tzinfo is not None and market_timestamp.utcoffset() is not None
+        observed_is_aware = observed_at.tzinfo is not None and observed_at.utcoffset() is not None
         if snapshot_is_aware != market_is_aware:
             raise ValueError("OptionChainSnapshot timestamp timezone-awareness must match runtime timestamp.")
-        if snapshot.timestamp - market_timestamp > _OPTION_CHAIN_TIMESTAMP_TOLERANCE:
-            raise ValueError("OptionChainSnapshot timestamp cannot be in the future relative to runtime timestamp.")
+        if snapshot_is_aware != observed_is_aware:
+            raise ValueError("OptionChainSnapshot timestamp timezone-awareness must match trusted option observation timestamp.")
+        if snapshot.timestamp - observed_at > _OPTION_CHAIN_LOCAL_FUTURE_TOLERANCE:
+            raise ValueError("OPTION_TIMESTAMP_FUTURE_LOCAL: OptionChainSnapshot timestamp is in the future relative to trusted local observation time.")
         if self._exchange_session_date(snapshot.timestamp) != self._exchange_session_date(market_timestamp):
             raise ValueError("OptionChainSnapshot trading session does not match runtime session.")
-        age = max(0.0, (market_timestamp - snapshot.timestamp).total_seconds())
+        age = max(0.0, (observed_at - snapshot.timestamp).total_seconds())
         if age > _OPTION_CHAIN_MAX_AGE_SECONDS:
-            raise ValueError("OptionChainSnapshot is stale for the runtime timestamp.")
+            raise ValueError("OPTION_TIMESTAMP_STALE: OptionChainSnapshot is stale for trusted local observation time.")
 
-    def _validate_option_chain_analytics(self, analytics: OptionChainAnalyticsSnapshot, market_timestamp: datetime) -> None:
+    def _validate_option_chain_analytics(self, analytics: OptionChainAnalyticsSnapshot, market_timestamp: datetime, observed_at: datetime) -> None:
         if not isinstance(analytics, OptionChainAnalyticsSnapshot):
             raise TypeError("analytics must be OptionChainAnalyticsSnapshot")
         if analytics.underlying.value != self._instrument.value:
@@ -3007,21 +3058,24 @@ class SymbolRuntime:
             raise ValueError("OptionChainAnalyticsSnapshot expiry does not match canonical runtime option-chain engine.")
         analytics_is_aware = analytics.timestamp.tzinfo is not None and analytics.timestamp.utcoffset() is not None
         market_is_aware = market_timestamp.tzinfo is not None and market_timestamp.utcoffset() is not None
+        observed_is_aware = observed_at.tzinfo is not None and observed_at.utcoffset() is not None
         if analytics_is_aware != market_is_aware:
             raise ValueError("OptionChainAnalyticsSnapshot timestamp timezone-awareness must match runtime timestamp.")
+        if analytics_is_aware != observed_is_aware:
+            raise ValueError("OptionChainAnalyticsSnapshot timestamp timezone-awareness must match trusted option observation timestamp.")
         if analytics.timestamp != analytics.source_snapshot.timestamp:
             raise ValueError("OptionChainAnalyticsSnapshot timestamp must match its source snapshot.")
         if analytics.source_snapshot != self.option_chain_engine.snapshot:
             raise ValueError("OptionChainAnalyticsSnapshot must reference the canonical runtime option-chain snapshot.")
         if analytics.source_analysis != self.option_chain_engine.state:
             raise ValueError("OptionChainAnalyticsSnapshot must reference the canonical runtime option-chain analysis.")
-        if analytics.timestamp - market_timestamp > _OPTION_CHAIN_TIMESTAMP_TOLERANCE:
-            raise ValueError("OptionChainAnalyticsSnapshot timestamp cannot be in the future relative to runtime timestamp.")
+        if analytics.timestamp - observed_at > _OPTION_CHAIN_LOCAL_FUTURE_TOLERANCE:
+            raise ValueError("OPTION_TIMESTAMP_FUTURE_LOCAL: OptionChainAnalyticsSnapshot timestamp is in the future relative to trusted local observation time.")
         if self._exchange_session_date(analytics.timestamp) != self._exchange_session_date(market_timestamp):
             raise ValueError("OptionChainAnalyticsSnapshot trading session does not match runtime session.")
-        age = max(0.0, (market_timestamp - analytics.timestamp).total_seconds())
+        age = max(0.0, (observed_at - analytics.timestamp).total_seconds())
         if age > _OPTION_CHAIN_MAX_AGE_SECONDS:
-            raise ValueError("OptionChainAnalyticsSnapshot is stale for the runtime timestamp.")
+            raise ValueError("OPTION_TIMESTAMP_STALE: OptionChainAnalyticsSnapshot is stale for trusted local observation time.")
 
     def _exchange_session_date(self, timestamp: datetime) -> date | None:
         return self._exchange_calendar.resolve_active_session(
@@ -3082,10 +3136,7 @@ class SymbolRuntime:
             latency_reference = self._latest_tick_at if isinstance(self._latest_tick_at, datetime) else market_timestamp
             latency_seconds = abs((latency_reference - last_update).total_seconds())
             latency_ms = latency_seconds * 1000.0
-            if latency_seconds <= _OPTION_CHAIN_TIMESTAMP_TOLERANCE.total_seconds():
-                synchronization_status = "SYNCHRONIZED"
-            else:
-                synchronization_status = "TIMESTAMP_DRIFT_EXCEEDS_TOLERANCE"
+            synchronization_status = "SYNCHRONIZED"
         recovery = "-"
         if snapshot is None:
             feed_status = "WAITING_FOR_OPTION_TICKS"
@@ -3678,9 +3729,9 @@ class SymbolRuntime:
             timestamp = self._snapshot_timestamp(snapshot)
             if market_timestamp is None or timestamp is None or not self._timestamps_are_comparable(timestamp, market_timestamp):
                 continue
-            allowed_future = timedelta(0)
             if object_name == "PaperPosition" and getattr(snapshot, "source", "") == "VISION_METHOD_OPTION_SELLING_PAPER":
-                allowed_future = _OPTION_CHAIN_TIMESTAMP_TOLERANCE
+                continue
+            allowed_future = timedelta(0)
             if timestamp - market_timestamp > allowed_future:
                 violations.append(
                     self._runtime_integrity_violation(

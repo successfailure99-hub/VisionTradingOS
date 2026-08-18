@@ -104,11 +104,11 @@ def _runtime_with_directional_option_paper(tmp_path: Path):
     return item
 
 
-def _live_feed_snapshot():
+def _live_feed_snapshot(*, watchdog_state=LiveFeedWatchdogState.HEALTHY, last_delivered_market_timestamp=NOW):
     return SimpleNamespace(
-        watchdog_state=LiveFeedWatchdogState.HEALTHY,
+        watchdog_state=watchdog_state,
         status=LiveMarketDataRuntimeStatus.RUNNING,
-        last_delivered_market_timestamp=NOW,
+        last_delivered_market_timestamp=last_delivered_market_timestamp,
         websocket=SimpleNamespace(status="connected"),
     )
 
@@ -182,23 +182,76 @@ def test_symbol_runtime_records_accepted_option_snapshot_without_advancing_canon
     assert runtime_snapshot.cross_feed_timestamp_summary.latest_runtime_contract_status == "ACCEPTED"
 
 
-def test_symbol_runtime_records_rejected_option_snapshot_without_suppressing_validation(tmp_path):
+def test_symbol_runtime_records_true_local_future_option_snapshot_without_clock_poisoning(tmp_path):
     runtime = _runtime(tmp_path)
     option_snapshot = _snapshot(NOW + timedelta(seconds=2), expiry=EXPIRY)
 
-    with pytest.raises(ValueError, match="future"):
+    with pytest.raises(ValueError, match="OPTION_TIMESTAMP_FUTURE_LOCAL"):
         runtime.process_option_chain(
             option_snapshot,
             live_market_data_snapshot=_live_feed_snapshot(),
-            option_receipt_timestamp=NOW + timedelta(seconds=2),
+            option_receipt_timestamp=NOW,
         )
 
     summary = runtime.snapshot().cross_feed_timestamp_summary
     assert summary.sample_count == 1
     assert summary.latest_skew_seconds == pytest.approx(2.0)
     assert summary.latest_runtime_contract_status == "REJECTED"
-    assert "future" in summary.latest_runtime_contract_reason
+    assert "OPTION_TIMESTAMP_FUTURE_LOCAL" in summary.latest_runtime_contract_reason
     assert runtime.snapshot().snapshot_created_at == NOW
+
+
+def test_symbol_runtime_accepts_measured_healthy_cross_feed_leads_without_advancing_clock(tmp_path):
+    for lead in (4.411518, 5.2, 6.342996, 11.8, 12.7, 13.5):
+        runtime = _runtime(tmp_path)
+        option_time = NOW + timedelta(seconds=lead)
+        runtime_snapshot = runtime.process_option_chain_runtime(
+            _snapshot(option_time, expiry=EXPIRY),
+            _analytics(_snapshot(option_time, expiry=EXPIRY)),
+            live_market_data_snapshot=_live_feed_snapshot(),
+            option_receipt_timestamp=option_time,
+        )
+
+        assert runtime_snapshot.snapshot_created_at == NOW
+        assert runtime_snapshot.runtime_session.market_timestamp == NOW
+        assert runtime_snapshot.cross_feed_timestamp_summary.latest_skew_seconds == pytest.approx(lead)
+        assert runtime_snapshot.cross_feed_timestamp_summary.latest_runtime_contract_status == "ACCEPTED"
+
+
+def test_symbol_runtime_blocks_exact_reconnecting_incident_by_feed_health(tmp_path):
+    runtime = _runtime(tmp_path)
+    option_time = NOW + timedelta(seconds=4, microseconds=20719)
+
+    with pytest.raises(ValueError, match="NIFTY_FEED_BLOCKED"):
+        runtime.process_option_chain(
+            _snapshot(option_time, expiry=EXPIRY),
+            live_market_data_snapshot=_live_feed_snapshot(
+                watchdog_state=LiveFeedWatchdogState.RECONNECTING,
+                last_delivered_market_timestamp=NOW,
+            ),
+            option_receipt_timestamp=NOW + timedelta(seconds=137, microseconds=509627),
+        )
+
+    summary = runtime.snapshot().cross_feed_timestamp_summary
+    assert summary.latest_skew_seconds == pytest.approx(4.020719)
+    assert summary.latest_runtime_contract_status == "REJECTED"
+    assert "NIFTY_FEED_BLOCKED" in summary.latest_runtime_contract_reason
+
+
+def test_symbol_runtime_blocks_stale_nifty_even_when_option_is_fresh(tmp_path):
+    runtime = _runtime(tmp_path)
+    option_time = NOW + timedelta(minutes=3, seconds=29)
+
+    with pytest.raises(ValueError, match="NIFTY_FEED_STALE"):
+        runtime.process_option_chain(
+            _snapshot(option_time, expiry=EXPIRY),
+            live_market_data_snapshot=_live_feed_snapshot(last_delivered_market_timestamp=NOW),
+            option_receipt_timestamp=NOW + timedelta(minutes=3, seconds=30),
+        )
+
+    summary = runtime.snapshot().cross_feed_timestamp_summary
+    assert summary.latest_runtime_contract_status == "REJECTED"
+    assert "NIFTY_FEED_STALE" in summary.latest_runtime_contract_reason
 
 
 def test_dashboard_runtime_view_exposes_cross_feed_summary_read_only():
