@@ -3,6 +3,8 @@ Desktop live market-data composition tests.
 """
 
 import os
+import sys
+import types
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 from unittest.mock import patch
@@ -14,6 +16,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 import desktop_main
+from application import ApplicationBootstrap
+from application.futures_vwap import DesktopFuturesVWAPRuntimeManager
 from application.desktop_live_data import (
     DesktopLiveDataConfigurationError,
     create_dashboard_application,
@@ -26,6 +30,7 @@ from application.live_market_data import LiveMarketDataRuntimeFactory, LiveMarke
 from application.reference_data_bootstrap import resolve_reference_bootstrap_bounds
 from application.reference_data_bootstrap import _active_reference_trading_date
 from brokers.zerodha.auth import ZerodhaCredentials, ZerodhaSessionManager
+from brokers.zerodha.market_data import KiteTickerClient
 from core.enums.exchange import Exchange
 from core.enums.instrument import Instrument
 from dashboard.presenters import build_runtime_view
@@ -125,6 +130,35 @@ class FakeTickerClient:
 
     def unsubscribe(self, instrument_tokens):
         self.unsubscriptions.append(tuple(instrument_tokens))
+
+    def set_mode(self, mode, instrument_tokens):
+        self.modes.append((mode, tuple(instrument_tokens)))
+
+
+class FakeKiteTickerWithNullableSocket:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.ws = object()
+        self.subscribed = []
+        self.unsubscribed = []
+        self.modes = []
+        self.connected = []
+        self.closed = 0
+
+    def connect(self, threaded=True):
+        self.connected.append(threaded)
+
+    def close(self):
+        self.closed += 1
+        self.ws = None
+
+    def subscribe(self, instrument_tokens):
+        self.subscribed.append(tuple(instrument_tokens))
+
+    def unsubscribe(self, instrument_tokens):
+        if self.ws is None:
+            raise AttributeError("NoneType object has no attribute sendMessage")
+        self.unsubscribed.append(tuple(instrument_tokens))
 
     def set_mode(self, mode, instrument_tokens):
         self.modes.append((mode, tuple(instrument_tokens)))
@@ -796,7 +830,61 @@ def test_futures_vwap_discovers_valid_contracts_warms_vwap_and_surfaces_source_m
     assert instrument_clients[0].calls == ["NFO", "NFO", "BFO"]
     dashboard.shutdown()
     dashboard.shutdown()
+    stopped_snapshot = dashboard.live_futures_vwap_runtime.snapshot()
+    assert stopped_snapshot.futures_token_count == 0
+    assert all(item.subscription_active is False for item in stopped_snapshot.instruments)
     assert ticker.unsubscriptions.count((201, 202, 203)) == 1
+
+
+
+def test_futures_vwap_stop_before_start_is_safe_and_idempotent():
+    lifecycle = ApplicationBootstrap().create_application()
+    ticker = FakeTickerClient()
+    manager = DesktopFuturesVWAPRuntimeManager(
+        lifecycle=lifecycle,
+        ticker_client=ticker,
+        instrument_client=FakeInstrumentClient(futures_records()),
+        historical_client=FakeHistoricalClient(),
+        clock=lambda: NOW,
+    )
+
+    first = manager.stop()
+    second = manager.stop()
+
+    assert first.futures_token_count == 0
+    assert second.futures_token_count == 0
+    assert ticker.unsubscriptions == []
+
+
+def test_futures_vwap_shutdown_with_missing_kite_socket_skips_network_and_cleans_local_state(monkeypatch):
+    qt_app()
+    module = types.ModuleType("kiteconnect")
+    module.KiteTicker = FakeKiteTickerWithNullableSocket
+    monkeypatch.setitem(sys.modules, "kiteconnect", module)
+    ticker = KiteTickerClient(api_key="desktop_api_key", access_token="desktop_access_token")
+    dashboard = create_dashboard_application(
+        environ=live_env(
+            LIVE_MARKET_DATA_AUTO_CONNECT="false",
+            LIVE_FUTURES_VWAP_ENABLED="true",
+            REFERENCE_DATA_BOOTSTRAP_ENABLED="false",
+        ),
+        auth_client_factory=auth_factory,
+        runtime_factory=LiveMarketDataRuntimeFactory(clock=lambda: NOW),
+        instrument_client_factory=instrument_factory_factory([], futures_records()),
+        historical_client_factory=historical_factory_factory([]),
+        ticker_client=ticker,
+        clock=lambda: NOW,
+    )
+    assert dashboard.live_futures_vwap_runtime.snapshot().futures_token_count == 3
+    ticker._ticker.ws = None
+
+    dashboard.shutdown()
+    dashboard.shutdown()
+
+    snapshot = dashboard.live_futures_vwap_runtime.snapshot()
+    assert snapshot.futures_token_count == 0
+    assert all(item.subscription_active is False for item in snapshot.instruments)
+    assert ticker._ticker.unsubscribed == []
 
 
 def test_futures_vwap_before_open_reports_waiting_not_error_on_market_closed_startup():

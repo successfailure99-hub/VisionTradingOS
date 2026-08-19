@@ -19,6 +19,8 @@ class FakeKiteTicker:
         self.subscribed = []
         self.unsubscribed = []
         self.modes = []
+        self.ws = object()
+        self.fail_unsubscribe = None
 
     def connect(self, threaded=True):
         self.connected.append(threaded)
@@ -30,6 +32,8 @@ class FakeKiteTicker:
         self.subscribed.append(list(instrument_tokens))
 
     def unsubscribe(self, instrument_tokens):
+        if self.fail_unsubscribe is not None:
+            raise self.fail_unsubscribe
         self.unsubscribed.append(list(instrument_tokens))
 
     def set_mode(self, mode, instrument_tokens):
@@ -111,6 +115,25 @@ def test_delegates_connection_and_subscription_methods(fake_kiteconnect):
     assert client._ticker.subscribed == [[101]]
     assert client._ticker.unsubscribed == [[101]]
     assert client._ticker.modes == [("full", [101])]
+
+
+def test_unsubscribe_skips_network_when_kite_websocket_is_none(fake_kiteconnect):
+    client = KiteTickerClient(api_key="api", access_token="token")
+    client._ticker.ws = None
+
+    client.unsubscribe([101])
+
+    assert client._ticker.unsubscribed == []
+
+
+def test_unsubscribe_preserves_unexpected_errors_when_socket_is_available(fake_kiteconnect):
+    client = KiteTickerClient(api_key="api", access_token="token")
+    client._ticker.fail_unsubscribe = RuntimeError("unsubscribe failed")
+
+    with pytest.raises(RuntimeError, match="unsubscribe failed"):
+        client.unsubscribe([101])
+
+    assert client._ticker.unsubscribed == []
 
 
 def test_raw_client_not_publicly_exposed_and_repr_redacts(fake_kiteconnect):

@@ -43,6 +43,12 @@ def _require_text(value: str, field_name: str) -> str:
     return normalized
 
 
+def _ticker_socket_available(ticker) -> bool:
+    if not hasattr(ticker, "ws"):
+        return True
+    return getattr(ticker, "ws") is not None
+
+
 class KiteTickerClient:
     MODE_LTP = "ltp"
     MODE_QUOTE = "quote"
@@ -111,6 +117,8 @@ class KiteTickerClient:
         self._ticker.subscribe(instrument_tokens)
 
     def unsubscribe(self, instrument_tokens: list[int]) -> None:
+        if not _ticker_socket_available(self._ticker):
+            return
         self._ticker.unsubscribe(instrument_tokens)
 
     def set_mode(self, mode: str, instrument_tokens: list[int]) -> None:

@@ -285,8 +285,22 @@ class DesktopFuturesVWAPRuntimeManager:
     def stop(self) -> FuturesVWAPRuntimeSnapshot:
         if self._stopped:
             return self.snapshot()
-        if self._token_owner:
-            self._ticker_client.unsubscribe(tuple(sorted(self._token_owner)))
+        owners = dict(self._token_owner)
+        if owners:
+            self._ticker_client.unsubscribe(tuple(sorted(owners)))
+        self._token_owner.clear()
+        for underlying in set(owners.values()):
+            state = self._states[underlying]
+            state.subscription_active = False
+            state.state = FuturesVWAPRuntimeState.STOPPED
+            state.message = "Futures proxy VWAP stopped"
+            self._mark_runtime_vwap_unavailable(
+                underlying,
+                "Futures proxy VWAP stopped",
+                contract=state.contract,
+                state=FuturesVWAPRuntimeState.STOPPED,
+                subscription_active=False,
+            )
         self._stop_count += 1
         self._stopped = True
         self._last_updated_at = _safe_now(self._clock)
