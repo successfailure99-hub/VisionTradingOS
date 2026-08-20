@@ -1,5 +1,12 @@
 # Changelog
 
+## VM-19 Version 1.0 Final Certification
+
+- Added the read-only V1 final certification gate in `tests/test_vm_19_v1_final_certification.py`.
+- Added `docs/VM_19_V1_FINAL_CERTIFICATION.md` with the certification scope, safety boundary, acceptance commands, and explicit non-certification boundaries.
+- Added repository guards for release identity, protected execution defaults, explicit directional option-selling paper configuration, generated-artifact hygiene, legacy MarketContextV2 isolation, direct broker-mutation absence, and credential-safe `.env.example` content.
+- Confirmed VM-19 introduces no trading logic, indicator changes, broker mutation, risk-rule changes, lifecycle changes, or journal schema changes.
+
 ## V1 Release Hardening
 
 - Removed tracked generated Python cache artifacts, a generated repository tree,
