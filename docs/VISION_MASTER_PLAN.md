@@ -5,8 +5,8 @@
 Build a production-quality event-driven trading platform for: - NIFTY -
 BANKNIFTY - SENSEX
 
-Primary decision flow: Price Action -\> Market Context -\> Option Chain
--\> Confirmation -\> AI Reasoning
+Primary decision flow: Price Action -> Market Context -> Option Chain
+-> Confirmation -> AI Reasoning
 
 ## Development Rules
 
@@ -95,8 +95,7 @@ Runtime ownership:
 Event flow:
 
 Tick -> Market Data Engine -> Candle Engine -> closed Candle -> Moving Average
-Context Engine -> TradingView Evidence Assembly Coordinator -> TradingView
-Evidence Mapping Engine.
+Context Engine -> TradingView Evidence Assembly Coordinator -> TradingView Evidence Mapping Engine.
 
 ## Momentum Context Engine V1
 
@@ -118,8 +117,7 @@ Runtime ownership:
 Event flow:
 
 Tick -> Market Data Engine -> Candle Engine -> closed Candle -> Momentum
-Context Engine -> TradingView Evidence Assembly Coordinator -> TradingView
-Evidence Mapping Engine.
+Context Engine -> TradingView Evidence Assembly Coordinator -> TradingView Evidence Mapping Engine.
 
 ## Volume Context Engine V1
 
@@ -143,8 +141,7 @@ Runtime ownership:
 Event flow:
 
 Tick -> Market Data Engine -> Candle Engine -> closed Candle -> Volume Context
-Engine -> TradingView Evidence Assembly Coordinator -> TradingView Evidence
-Mapping Engine.
+Engine -> TradingView Evidence Assembly Coordinator -> TradingView Evidence Mapping Engine.
 
 ## Multi-Timeframe Evidence Fusion Engine V1
 
@@ -374,3 +371,32 @@ Status: COMPLETE.
 VM-18 is the final engineering hardening milestone before Version 1.0 certification. It does not add trading features. It validates runtime stability, memory growth, CPU/latency guardrails, thread cleanup, event bus behavior, reconnect recovery, session rollover, dashboard rendering, journal duplication protection, and secret redaction. The detailed report is maintained in `docs/VM_18_PRODUCTION_HARDENING_REPORT.md`.
 
 Remaining step after VM-18: VM-19 Version 1.0 Final Certification, which should be read-only.
+
+## VM-19 Version 1.0 Final Certification
+
+Status: CERTIFICATION GATE IMPLEMENTED.
+
+VM-19 is a read-only release gate over the protected V1 workstation. It does
+not introduce trading rules, indicators, broker mutation, risk changes,
+lifecycle changes, or journal schema changes.
+
+The focused certification suite is `tests/test_vm_19_v1_final_certification.py`.
+The certification report is `docs/VM_19_V1_FINAL_CERTIFICATION.md`.
+
+The gate verifies release identity, active-chain documentation, protected
+execution defaults, explicit directional option-selling paper configuration,
+repository hygiene, absence of legacy MarketContextV2 dependencies in the
+active AI chain, absence of direct broker mutation calls in active runtime
+surfaces, and absence of real credentials in `.env.example`.
+
+Certification commands:
+
+```powershell
+python -m pytest tests/test_vm_19_v1_final_certification.py -v
+python -m compileall -q .
+git diff --check
+```
+
+VM-19 is not a live-money certification. Live broker mutation remains disabled
+by design, and live-market observation still requires controlled operational
+validation.
