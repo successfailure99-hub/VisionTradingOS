@@ -93,6 +93,9 @@ class KiteTickerClient:
         self._applied_subscription_tokens: set[int] = set()
         self._applied_modes_by_token: dict[int, str] = {}
         self._handling_connect_callback = False
+        self._post_connect_recovery_callbacks: list[object] = []
+        self._recovery_callback_failure_count = 0
+        self._last_recovery_callback_error: str | None = None
 
     def __repr__(self) -> str:
         return "KiteTickerClient(ticker='[PRIVATE]')"
@@ -115,6 +118,14 @@ class KiteTickerClient:
         self._ticker.on_error = on_error
         self._ticker.on_reconnect = on_reconnect
         self._ticker.on_noreconnect = on_noreconnect
+
+    def register_reconnect_recovery(self, callback) -> None:
+        if not callable(callback):
+            raise TypeError("reconnect recovery callback must be callable")
+        with self._lock:
+            if any(existing is callback for existing in self._post_connect_recovery_callbacks):
+                return
+            self._post_connect_recovery_callbacks.append(callback)
 
     def connect(self, *, threaded: bool = True) -> None:
         self._ticker.connect(threaded=threaded)
@@ -171,11 +182,23 @@ class KiteTickerClient:
             try:
                 if callback is not None:
                     callback(ws, response)
+                self._run_post_connect_recovery_callbacks()
                 self._recover_desired_subscriptions()
             finally:
                 with self._lock:
                     self._handling_connect_callback = False
         return wrapped
+
+    def _run_post_connect_recovery_callbacks(self) -> None:
+        with self._lock:
+            callbacks = tuple(self._post_connect_recovery_callbacks)
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception as exc:
+                with self._lock:
+                    self._recovery_callback_failure_count += 1
+                    self._last_recovery_callback_error = f"{exc.__class__.__name__}: reconnect recovery callback failed"
 
     def _recover_desired_subscriptions(self) -> None:
         with self._lock:
