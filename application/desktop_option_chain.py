@@ -218,6 +218,40 @@ class DesktopOptionChainRuntimeManager:
     def option_tokens(self) -> set[int]:
         return set(self._token_owner)
 
+    def recover_subscriptions(self) -> DesktopOptionChainRuntimeSnapshot:
+        """Re-apply every active option subscription after the shared WebSocket reconnects."""
+        if not self._started or self._stopped or not self._stacks:
+            return self.snapshot()
+        first_error = None
+        for underlying, stack in tuple(self._stacks.items()):
+            state = self._instrument_state[underlying]
+            state.state = DesktopOptionChainRuntimeState.SUBSCRIBING
+            state.log(self._clock, "Recovering subscriptions after WebSocket reconnect...")
+            try:
+                stack.live_integration.subscription_manager.recover()
+            except Exception as exc:
+                error = _safe_error(exc, self._redactions)
+                state.subscriptions_active = False
+                state.last_error = error
+                state.state = DesktopOptionChainRuntimeState.ERROR
+                state.log(self._clock, f"Subscription recovery failed: {error}")
+                first_error = first_error or exc
+                continue
+            state.subscriptions_active = True
+            state.last_error = None
+            state.state = (
+                DesktopOptionChainRuntimeState.RECEIVING
+                if state.option_ticks_received
+                else DesktopOptionChainRuntimeState.SUBSCRIBING
+            )
+            state.log(self._clock, "Subscription recovery successful")
+        self._last_updated_at = _safe_now(self._clock) or self._last_updated_at
+        if first_error is not None:
+            self._last_error = _safe_error(first_error, self._redactions)
+            raise first_error
+        self._last_error = None
+        return self.snapshot()
+
     def snapshot(self) -> DesktopOptionChainRuntimeSnapshot:
         instrument_snapshots = tuple(self._snapshot_for(underlying) for underlying in SUPPORTED_OPTION_CHAIN_INSTRUMENTS)
         return DesktopOptionChainRuntimeSnapshot(
