@@ -93,6 +93,7 @@ class KiteTickerClient:
         self._applied_subscription_tokens: set[int] = set()
         self._applied_modes_by_token: dict[int, str] = {}
         self._handling_connect_callback = False
+        self._callbacks_registered = False
         self._post_connect_recovery_callbacks: list[object] = []
         self._recovery_callback_failure_count = 0
         self._last_recovery_callback_error: str | None = None
@@ -112,6 +113,8 @@ class KiteTickerClient:
         on_reconnect,
         on_noreconnect,
     ) -> None:
+        with self._lock:
+            self._callbacks_registered = True
         self._ticker.on_connect = self._on_connect_wrapper(on_connect)
         self._ticker.on_ticks = on_ticks
         self._ticker.on_close = on_close
@@ -135,6 +138,15 @@ class KiteTickerClient:
 
     def subscribe(self, instrument_tokens: list[int]) -> None:
         tokens = _validate_tokens(instrument_tokens)
+        with self._lock:
+            should_queue = (
+                self._callbacks_registered
+                and self._connection_generation == 0
+                and not self._handling_connect_callback
+            )
+            if should_queue:
+                self._desired_subscription_tokens.update(tokens)
+                return
         self._ticker.subscribe(tokens)
         with self._lock:
             self._desired_subscription_tokens.update(tokens)
@@ -143,7 +155,13 @@ class KiteTickerClient:
 
     def unsubscribe(self, instrument_tokens: list[int]) -> None:
         tokens = _validate_tokens(instrument_tokens)
-        if _ticker_socket_available(self._ticker):
+        with self._lock:
+            should_skip_network = (
+                self._callbacks_registered
+                and self._connection_generation == 0
+                and not self._handling_connect_callback
+            )
+        if not should_skip_network and _ticker_socket_available(self._ticker):
             self._ticker.unsubscribe(tokens)
         with self._lock:
             for token in tokens:
@@ -156,6 +174,16 @@ class KiteTickerClient:
         if not isinstance(mode, str) or not mode:
             raise ValueError("mode must be non-empty string")
         tokens = _validate_tokens(instrument_tokens)
+        with self._lock:
+            should_queue = (
+                self._callbacks_registered
+                and self._connection_generation == 0
+                and not self._handling_connect_callback
+            )
+            if should_queue:
+                for token in tokens:
+                    self._desired_modes_by_token[token] = mode
+                return
         self._ticker.set_mode(mode, tokens)
         with self._lock:
             for token in tokens:

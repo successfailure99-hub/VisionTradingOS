@@ -240,7 +240,7 @@ class DesktopFuturesVWAPRuntimeManager:
             state.state = FuturesVWAPRuntimeState.WAITING_FOR_TICK if state.cumulative_volume == 0 else FuturesVWAPRuntimeState.READY
             state.message = "Waiting for first futures tick" if state.cumulative_volume == 0 else "Futures proxy VWAP ready"
         if self._token_owner:
-            tokens = tuple(sorted(self._token_owner))
+            tokens = list(sorted(self._token_owner))
             for state in self._states.values():
                 if state.contract is not None and state.contract.instrument_token in self._token_owner:
                     state.state = FuturesVWAPRuntimeState.SUBSCRIBING
@@ -286,8 +286,12 @@ class DesktopFuturesVWAPRuntimeManager:
         if self._stopped:
             return self.snapshot()
         owners = dict(self._token_owner)
+        unsubscribe_error: Exception | None = None
         if owners:
-            self._ticker_client.unsubscribe(tuple(sorted(owners)))
+            try:
+                self._ticker_client.unsubscribe(list(sorted(owners)))
+            except Exception as exc:
+                unsubscribe_error = exc
         self._token_owner.clear()
         for underlying in set(owners.values()):
             state = self._states[underlying]
@@ -304,6 +308,10 @@ class DesktopFuturesVWAPRuntimeManager:
         self._stop_count += 1
         self._stopped = True
         self._last_updated_at = _safe_now(self._clock)
+        if unsubscribe_error is not None:
+            self._last_error = _safe_error(unsubscribe_error, self._redactions)
+            raise unsubscribe_error
+        self._last_error = None
         return self.snapshot()
 
     def deliver_futures_ticks(self, raw_ticks) -> None:
