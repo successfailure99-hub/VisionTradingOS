@@ -165,12 +165,11 @@ class KiteTickerClient:
 
     def _on_connect_wrapper(self, callback):
         def wrapped(ws, response):
+            connection_object = getattr(self._ticker, "ws", None)
             with self._lock:
-                if ws is not None and ws is self._last_connection_object:
-                    duplicate = True
-                else:
-                    duplicate = False
-                    self._last_connection_object = ws
+                duplicate = connection_object is not None and connection_object is self._last_connection_object
+                if not duplicate:
+                    self._last_connection_object = connection_object
                     self._connection_generation += 1
                     self._applied_subscription_tokens.clear()
                     self._applied_modes_by_token.clear()
