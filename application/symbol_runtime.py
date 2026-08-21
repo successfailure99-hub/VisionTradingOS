@@ -158,7 +158,7 @@ from application.models import (
 from application.cross_feed_timestamp_telemetry import CrossFeedTimestampObservation, CrossFeedTimestampTelemetry
 from application.runtime_contract import RuntimeContractContext, RuntimeContractSubject, RuntimeContractValidator, RuntimeIntegrityViolation
 from application.vision_forensics import VisionForensicTrace
-_OPTION_CHAIN_MAX_AGE_SECONDS = 180.0
+_OPTION_CHAIN_MAX_AGE_SECONDS = 15.0
 _OPTION_CHAIN_LOCAL_FUTURE_TOLERANCE = OPTION_EVIDENCE_TIMESTAMP_TOLERANCE
 _OPTION_CHAIN_TIMESTAMP_TOLERANCE = OPTION_EVIDENCE_TIMESTAMP_TOLERANCE
 _NIFTY_FEED_BLOCKING_WATCHDOG_STATES = {
@@ -2370,6 +2370,15 @@ class SymbolRuntime:
         option_snapshot = self.option_chain_engine.snapshot
         if option_snapshot is None:
             self._record_decision_audit("OPTION_CHAIN_UNAVAILABLE", "Canonical option-chain snapshot unavailable.", vision_trade_candidate=candidate)
+            return
+        option_status = self._option_chain_runtime_status(candidate.timestamp, runtime_session)
+        if option_status.feed_status != "READY" or option_status.snapshot_status != "READY":
+            reason = option_status.blocking_reason if option_status.blocking_reason != "-" else "Option feed is not ready for decision."
+            self._record_decision_audit(
+                option_status.snapshot_status or option_status.feed_status or "OPTION_FEED_NOT_READY",
+                f"Option feed is not decision-ready: {reason}",
+                vision_trade_candidate=candidate,
+            )
             return
         try:
             from engines.option_paper_execution.selector import build_directional_option_trade_candidate

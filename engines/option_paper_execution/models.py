@@ -95,7 +95,7 @@ class DirectionalOptionSellingConfiguration:
     maximum_spread_fraction: float = 0.15
     minimum_open_interest: int = 1
     minimum_volume: int = 1
-    maximum_quote_age_seconds: float = 180.0
+    maximum_quote_age_seconds: float = 15.0
     selectable_itm_steps: tuple[int, ...] = (0, 1, 2, 3)
     selection_policy: OptionPaperSelectionPolicy = OptionPaperSelectionPolicy.ATM_FIRST
     preferred_itm_step: int = 0

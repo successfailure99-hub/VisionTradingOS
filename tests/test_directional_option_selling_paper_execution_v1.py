@@ -512,6 +512,27 @@ def test_future_option_quote_is_rejected_with_typed_stage():
     assert future.value.stage == "OPTION_CHAIN_FUTURE"
 
 
+
+def test_default_option_quote_freshness_rejects_cached_chain_after_live_window():
+    method = snapshot()
+    report = validate_vision_method(method)
+    trade = __import__("engines.runtime_adapter", fromlist=["adapt_vision_method_to_trade_candidate"]).adapt_vision_method_to_trade_candidate(method, report)
+
+    with pytest.raises(OptionContractSelectionError) as stale:
+        build_directional_option_trade_candidate(
+            trade_candidate=trade,
+            vision_snapshot=method,
+            validation_report=report,
+            option_universe=universe(),
+            option_chain_snapshot=chain_snapshot(timestamp=NOW - timedelta(seconds=16)),
+            configuration=option_config(),
+            runtime_session_id="NIFTY:2026-08-03",
+            trading_date=NOW.date(),
+        )
+
+    assert stale.value.stage == "OPTION_CHAIN_STALE"
+
+
 def test_stale_option_quote_is_rejected_without_absolute_age():
     method = snapshot()
     report = validate_vision_method(method)
@@ -638,6 +659,34 @@ def test_symbol_runtime_directional_option_selling_stays_paper_only_and_has_no_s
     assert view.option_paper_position.position_id == view.canonical_paper_position.trade_id
     assert build_position_view(view).status == "Paper Option Position Open"
     assert build_position_view(view).last_price == view.option_paper_position.current_premium
+
+
+
+def test_symbol_runtime_blocks_stale_cached_option_chain_before_strike_selection():
+    item = SymbolRuntime(
+        EventBus(),
+        RuntimeConfiguration(option_expiry_date=EXPIRY, directional_option_selling_configuration=option_config()),
+        RuntimeInstrument.NIFTY,
+    )
+    item.start()
+    runtime_tick = __import__("tests.test_vision_paper_trading_integration_v1", fromlist=["tick"]).tick
+    item.process_tick(runtime_tick(timestamp=NOW))
+    item.set_option_universe(universe())
+    item.process_option_chain_runtime(chain_snapshot(timestamp=NOW))
+
+    stale_time = NOW + timedelta(seconds=16)
+    item.process_tick(runtime_tick(timestamp=stale_time))
+    method = snapshot(timestamp=stale_time, price_action_trigger_context=trigger(timestamp=stale_time))
+    report = validate_vision_method(method)
+    item.process_vision_method_paper_trade(method, report)
+    view = item.snapshot()
+
+    assert view.option_chain_runtime.state == "STALE"
+    assert view.option_trade_candidate is None
+    assert view.option_paper_position is None
+    assert view.decision_audit.rejected_at == "STALE"
+    assert "not decision-ready" in view.decision_audit.reason
+    assert "stale" in view.decision_audit.reason.lower()
 
 
 def test_symbol_runtime_exposes_option_selection_rejection_diagnostics():
