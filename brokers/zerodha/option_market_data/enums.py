@@ -10,6 +10,7 @@ class ZerodhaOptionSubscriptionStatus(str, Enum):
     PREPARED = "prepared"
     ACTIVATING = "activating"
     ACTIVE = "active"
+    RECOVERING = "recovering"
     REPLACING = "replacing"
     DEACTIVATING = "deactivating"
     INACTIVE = "inactive"
@@ -20,6 +21,7 @@ class ZerodhaOptionSubscriptionStatus(str, Enum):
 class ZerodhaOptionSubscriptionOperation(str, Enum):
     PREPARE = "prepare"
     ACTIVATE = "activate"
+    RECOVER = "recover"
     REPLACE = "replace"
     DEACTIVATE = "deactivate"
     CLEAR = "clear"
