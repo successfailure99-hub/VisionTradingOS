@@ -35,5 +35,8 @@ jobs:
       - name: VM-19 focused certification
         run: python -m pytest tests/test_vm_19_v1_final_certification.py -v
 
+      - name: Zerodha ticker reconnect recovery regression
+        run: python -m pytest tests/test_zerodha_ticker_client.py -v
+
       - name: Diff check
         run: git diff --check
