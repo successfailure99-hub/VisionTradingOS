@@ -11,7 +11,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QSettings, QTimer
 from PySide6.QtWidgets import QApplication, QLabel
 
 from application import ApplicationBootstrap
@@ -258,9 +258,16 @@ def test_refresh_calls_lifecycle_snapshot_once_and_stores_view():
     assert window.current_view() is view
 
 
-def test_first_render_initializes_visible_panel_and_defers_hidden_panels():
+def test_first_render_initializes_visible_panel_and_defers_hidden_panels(tmp_path):
+    app()
+    settings = QSettings(
+        str(tmp_path / "dashboard_test_settings.ini"),
+        QSettings.IniFormat,
+    )
+    settings.clear()
+
     lifecycle = ApplicationBootstrap().create_application()
-    window = VisionMainWindow(lifecycle)
+    window = VisionMainWindow(lifecycle, settings=settings)
     view = window.refresh()
     symbol = view.markets[0].symbol
     assert symbol in window._instrument_panels
@@ -360,9 +367,12 @@ def test_hidden_panel_activation_uses_latest_prepared_view_without_refresh(monke
     assert option_panel._labels["Message"].text() == "Live option chain synchronized"
 
 
-def test_repeated_tab_switches_reuse_prepared_view_and_keep_ui_responsive(monkeypatch):
+def test_repeated_tab_switches_reuse_prepared_view_and_keep_ui_responsive(monkeypatch, tmp_path):
+    app()
+    settings = QSettings(str(tmp_path / "dashboard_test_settings.ini"), QSettings.IniFormat)
+    settings.clear()
     lifecycle = ApplicationBootstrap().create_application()
-    window = VisionMainWindow(lifecycle)
+    window = VisionMainWindow(lifecycle, settings=settings)
     window.refresh()
     calls = {"snapshot": 0}
 

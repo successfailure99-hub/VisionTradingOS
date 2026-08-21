@@ -23,6 +23,7 @@ class DashboardApplication:
         argv: list[str] | None = None,
         refresh_interval_ms: int = 500,
         clock=None,
+        settings=None,
     ):
         if not isinstance(lifecycle, ApplicationLifecycleManager):
             raise TypeError("lifecycle must be an ApplicationLifecycleManager.")
@@ -43,6 +44,7 @@ class DashboardApplication:
             deterministic_backtest_driver=deterministic_backtest_driver,
             refresh_interval_ms=refresh_interval_ms,
             clock=clock,
+            settings=settings,
         )
         self._shutdown = False
 

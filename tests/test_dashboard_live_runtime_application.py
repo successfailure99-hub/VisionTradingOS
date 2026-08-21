@@ -9,6 +9,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
 from application import ApplicationBootstrap, RuntimeStatus
@@ -177,7 +178,7 @@ def test_live_stop_failure_still_attempts_lifecycle_stop_and_preserves_first_exc
     assert lifecycle.status is RuntimeStatus.STOPPED
 
 
-def test_end_to_end_offscreen_dashboard_observes_live_runtime_without_credentials_or_orders():
+def test_end_to_end_offscreen_dashboard_observes_live_runtime_without_credentials_or_orders(tmp_path):
     app()
     lifecycle = ApplicationBootstrap().create_application()
     lifecycle.start()
@@ -200,7 +201,9 @@ def test_end_to_end_offscreen_dashboard_observes_live_runtime_without_credential
         configuration=configuration,
         ticker_client=ticker,
     )
-    dashboard = DashboardApplication(lifecycle, live_market_data_runtime=runtime)
+    settings = QSettings(str(tmp_path / "dashboard_test_settings.ini"), QSettings.IniFormat)
+    settings.clear()
+    dashboard = DashboardApplication(lifecycle, live_market_data_runtime=runtime, settings=settings)
 
     assert ticker.connect_calls == 0
     runtime.validate()

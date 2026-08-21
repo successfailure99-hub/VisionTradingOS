@@ -662,12 +662,13 @@ def test_symbol_runtime_directional_option_selling_stays_paper_only_and_has_no_s
 
 
 
-def test_symbol_runtime_blocks_stale_cached_option_chain_before_strike_selection():
+def test_symbol_runtime_blocks_stale_cached_option_chain_before_strike_selection(tmp_path):
     item = SymbolRuntime(
         EventBus(),
         RuntimeConfiguration(option_expiry_date=EXPIRY, directional_option_selling_configuration=option_config()),
         RuntimeInstrument.NIFTY,
     )
+    item.trade_journal_v1_engine = _journal_engine(tmp_path)
     item.start()
     runtime_tick = __import__("tests.test_vision_paper_trading_integration_v1", fromlist=["tick"]).tick
     item.process_tick(runtime_tick(timestamp=NOW))
