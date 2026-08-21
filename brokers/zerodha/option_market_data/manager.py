@@ -125,6 +125,39 @@ class ZerodhaOptionMarketDataSubscriptionManager:
                 self._record_failure(exc, rollback_error=rollback_error)
                 raise
 
+    def recover(self) -> ZerodhaOptionSubscriptionSnapshot:
+        """Re-apply the authoritative active registry after a transport reconnect."""
+        with self._lock:
+            entries = self._registry.all()
+            if not self._active:
+                raise RuntimeError("recover requires active subscriptions")
+            if not entries:
+                raise RuntimeError("recover requires prepared option subscriptions")
+            tokens = self._tokens(entries)
+            try:
+                self._begin(ZerodhaOptionSubscriptionOperation.RECOVER)
+                self._status = ZerodhaOptionSubscriptionStatus.RECOVERING
+                self._transport.subscribe(list(tokens))
+                mode_tokens = self._apply_modes(entries)
+                completed_at = self._now()
+                self._active = True
+                self._status = ZerodhaOptionSubscriptionStatus.ACTIVE
+                self._successful_operation_count += 1
+                self._last_completed_at = completed_at
+                self._last_result = ZerodhaOptionSubscriptionBatchResult(
+                    ZerodhaOptionSubscriptionOperation.RECOVER,
+                    tokens,
+                    (),
+                    mode_tokens,
+                    tokens,
+                    completed_at,
+                )
+                return self._snapshot_unlocked()
+            except Exception as exc:
+                self._active = True
+                self._record_failure(exc)
+                raise
+
     def replace(self, universe: ZerodhaOptionUniverse) -> ZerodhaOptionSubscriptionSnapshot:
         proposed = entries_from_universe(universe)
         with self._lock:
