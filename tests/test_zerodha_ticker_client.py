@@ -50,7 +50,6 @@ def fake_kiteconnect(monkeypatch):
 
 def test_lazy_import_allows_module_import_without_dependency(monkeypatch):
     monkeypatch.setitem(sys.modules, "kiteconnect", None)
-
     assert KiteTickerClient.MODE_FULL == "full"
 
 
@@ -64,7 +63,6 @@ def test_missing_dependency_fails_only_at_construction(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-
     with pytest.raises(RuntimeError, match="kiteconnect is required"):
         KiteTickerClient(api_key="api", access_token="token")
 
@@ -84,32 +82,28 @@ def test_constructor_performs_no_network_and_delegates_reconnect_config(fake_kit
         reconnect_max_tries=3,
         reconnect_max_delay=9,
     )
-
     assert client._ticker.connected == []
     assert client._ticker.kwargs["reconnect"] is False
     assert client._ticker.kwargs["reconnect_max_tries"] == 3
     assert client._ticker.kwargs["reconnect_max_delay"] == 9
 
 
-def test_callback_assignment(fake_kiteconnect):
+def test_callback_assignment_preserves_non_connect_callbacks_and_wraps_connect(fake_kiteconnect):
     client = KiteTickerClient(api_key="api", access_token="token")
     callbacks = {name: object() for name in ("on_connect", "on_ticks", "on_close", "on_error", "on_reconnect", "on_noreconnect")}
-
     client.set_callbacks(**callbacks)
-
-    for name, value in callbacks.items():
-        assert getattr(client._ticker, name) is value
+    assert client._ticker.on_connect is not callbacks["on_connect"]
+    for name in ("on_ticks", "on_close", "on_error", "on_reconnect", "on_noreconnect"):
+        assert getattr(client._ticker, name) is callbacks[name]
 
 
 def test_delegates_connection_and_subscription_methods(fake_kiteconnect):
     client = KiteTickerClient(api_key="api", access_token="token")
-
     client.connect()
     client.close()
     client.subscribe([101])
     client.unsubscribe([101])
     client.set_mode("full", [101])
-
     assert client._ticker.connected == [True]
     assert client._ticker.closed == 1
     assert client._ticker.subscribed == [[101]]
@@ -119,26 +113,79 @@ def test_delegates_connection_and_subscription_methods(fake_kiteconnect):
 
 def test_unsubscribe_skips_network_when_kite_websocket_is_none(fake_kiteconnect):
     client = KiteTickerClient(api_key="api", access_token="token")
+    client.subscribe([101])
+    client.set_mode("full", [101])
     client._ticker.ws = None
-
     client.unsubscribe([101])
-
     assert client._ticker.unsubscribed == []
+    assert 101 not in client._desired_subscription_tokens
+    assert 101 not in client._desired_modes_by_token
 
 
 def test_unsubscribe_preserves_unexpected_errors_when_socket_is_available(fake_kiteconnect):
     client = KiteTickerClient(api_key="api", access_token="token")
     client._ticker.fail_unsubscribe = RuntimeError("unsubscribe failed")
-
     with pytest.raises(RuntimeError, match="unsubscribe failed"):
         client.unsubscribe([101])
-
     assert client._ticker.unsubscribed == []
+
+
+def test_dynamic_subscriptions_recover_after_reconnect_and_restore_modes(fake_kiteconnect):
+    client = KiteTickerClient(api_key="api", access_token="token")
+    callback_calls = []
+
+    def on_connect(ws, response):
+        callback_calls.append("connect")
+        client.subscribe([1001])
+        client.set_mode("full", [1001])
+
+    client.set_callbacks(
+        on_connect=on_connect,
+        on_ticks=lambda *_: None,
+        on_close=lambda *_: None,
+        on_error=lambda *_: None,
+        on_reconnect=lambda *_: None,
+        on_noreconnect=lambda *_: None,
+    )
+    client.subscribe([2002])
+    client.set_mode("quote", [2002])
+
+    client._ticker.on_connect(object(), {})
+    assert callback_calls == ["connect"]
+    assert client._ticker.subscribed == [[1001], [2002]]
+    assert client._ticker.modes == [("full", [1001]), ("quote", [2002])]
+
+    client._ticker.subscribed.clear()
+    client._ticker.modes.clear()
+    client._ticker.on_connect(object(), {})
+    assert client._ticker.subscribed == [[1001, 2002]]
+    assert client._ticker.modes == [("full", [1001]), ("quote", [2002])]
+
+
+def test_reconnect_does_not_duplicate_same_websocket_connect_callback(fake_kiteconnect):
+    client = KiteTickerClient(api_key="api", access_token="token")
+    callback_calls = []
+    ws = object()
+    client.set_callbacks(
+        on_connect=lambda *_: callback_calls.append("connect"),
+        on_ticks=lambda *_: None,
+        on_close=lambda *_: None,
+        on_error=lambda *_: None,
+        on_reconnect=lambda *_: None,
+        on_noreconnect=lambda *_: None,
+    )
+    client.subscribe([101])
+    client._ticker.on_connect(ws, {})
+    client._ticker.subscribed.clear()
+    client._ticker.modes.clear()
+    client._ticker.on_connect(ws, {})
+    assert callback_calls == ["connect", "connect"]
+    assert client._ticker.subscribed == []
+    assert client._ticker.modes == []
 
 
 def test_raw_client_not_publicly_exposed_and_repr_redacts(fake_kiteconnect):
     client = KiteTickerClient(api_key="api_secret_key", access_token="access_secret_token")
-
     assert "ticker" not in vars(client)
     assert "api_secret_key" not in repr(client)
     assert "access_secret_token" not in repr(client)
