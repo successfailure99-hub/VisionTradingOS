@@ -7,6 +7,7 @@ import pytest
 from brokers.zerodha.market_data import ZerodhaInstrumentSubscription, ZerodhaSubscriptionMode
 from brokers.zerodha.option_market_data import (
     ZerodhaOptionMarketDataSubscriptionManager,
+    ZerodhaOptionMarketDataSubscriptionManagerFactory,
     ZerodhaOptionSubscriptionOperation,
     ZerodhaOptionSubscriptionStatus,
 )
@@ -40,6 +41,44 @@ class FakeTransport:
 
     def set_mode(self, mode, instrument_tokens):
         self.mode_calls.append((mode, list(instrument_tokens)))
+
+
+class FakeRecoverableTicker:
+    def __init__(self):
+        self.subscribe_calls = []
+        self.unsubscribe_calls = []
+        self.mode_calls = []
+        self.recovery_callbacks = []
+
+    def subscribe(self, instrument_tokens):
+        self.subscribe_calls.append(list(instrument_tokens))
+
+    def unsubscribe(self, instrument_tokens):
+        self.unsubscribe_calls.append(list(instrument_tokens))
+
+    def set_mode(self, mode, instrument_tokens):
+        self.mode_calls.append((mode, list(instrument_tokens)))
+
+    def register_reconnect_recovery(self, callback):
+        self.recovery_callbacks.append(callback)
+
+
+class FakeDesktopTickerRouter:
+    def __init__(self, client):
+        self._client = client
+
+    def subscribe(self, instrument_tokens):
+        self._client.subscribe(instrument_tokens)
+
+    def unsubscribe(self, instrument_tokens):
+        self._client.unsubscribe(instrument_tokens)
+
+    def set_mode(self, mode, instrument_tokens):
+        self._client.set_mode(mode, instrument_tokens)
+
+
+def _clock():
+    return datetime(2026, 8, 21, 6, 0, tzinfo=UTC)
 
 
 def _universe() -> ZerodhaOptionUniverse:
@@ -101,16 +140,13 @@ def _universe() -> ZerodhaOptionUniverse:
         strike_step=50.0,
         pairs=(pair,),
         subscriptions=subscriptions,
-        resolved_at=datetime(2026, 8, 21, 6, 0, tzinfo=UTC),
+        resolved_at=_clock(),
     )
 
 
 def test_recover_reapplies_authoritative_active_tokens_and_modes():
     transport = FakeTransport()
-    manager = ZerodhaOptionMarketDataSubscriptionManager(
-        transport=transport,
-        clock=lambda: datetime(2026, 8, 21, 6, 0, tzinfo=UTC),
-    )
+    manager = ZerodhaOptionMarketDataSubscriptionManager(transport=transport, clock=_clock)
     manager.prepare(_universe())
     manager.activate()
     transport.subscribe_calls.clear()
@@ -129,10 +165,7 @@ def test_recover_reapplies_authoritative_active_tokens_and_modes():
 
 
 def test_recover_requires_active_registry():
-    manager = ZerodhaOptionMarketDataSubscriptionManager(
-        transport=FakeTransport(),
-        clock=lambda: datetime(2026, 8, 21, 6, 0, tzinfo=UTC),
-    )
+    manager = ZerodhaOptionMarketDataSubscriptionManager(transport=FakeTransport(), clock=_clock)
     manager.prepare(_universe())
 
     with pytest.raises(RuntimeError, match="recover requires active subscriptions"):
@@ -141,10 +174,7 @@ def test_recover_requires_active_registry():
 
 def test_failed_recovery_preserves_logical_active_registry_for_next_attempt():
     transport = FakeTransport()
-    manager = ZerodhaOptionMarketDataSubscriptionManager(
-        transport=transport,
-        clock=lambda: datetime(2026, 8, 21, 6, 0, tzinfo=UTC),
-    )
+    manager = ZerodhaOptionMarketDataSubscriptionManager(transport=transport, clock=_clock)
     manager.prepare(_universe())
     manager.activate()
     transport.fail_subscribe = RuntimeError("socket unavailable")
@@ -158,3 +188,22 @@ def test_failed_recovery_preserves_logical_active_registry_for_next_attempt():
     assert snapshot.prepared is True
     assert snapshot.last_operation is ZerodhaOptionSubscriptionOperation.RECOVER
     assert snapshot.failed_operation_count == 1
+
+
+def test_factory_registers_recovery_on_shared_ticker_behind_desktop_router():
+    raw_ticker = FakeRecoverableTicker()
+    router = FakeDesktopTickerRouter(raw_ticker)
+    manager = ZerodhaOptionMarketDataSubscriptionManagerFactory().create(client=router, clock=_clock)
+
+    assert len(raw_ticker.recovery_callbacks) == 1
+
+    manager.prepare(_universe())
+    manager.activate()
+    raw_ticker.subscribe_calls.clear()
+    raw_ticker.mode_calls.clear()
+
+    raw_ticker.recovery_callbacks[0]()
+
+    assert raw_ticker.subscribe_calls == [[1001, 1002]]
+    assert raw_ticker.mode_calls == [("full", [1001, 1002])]
+    assert manager.snapshot().last_operation is ZerodhaOptionSubscriptionOperation.RECOVER
