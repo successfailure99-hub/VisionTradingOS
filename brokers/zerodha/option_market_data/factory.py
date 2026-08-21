@@ -15,4 +15,19 @@ class ZerodhaOptionMarketDataSubscriptionManagerFactory:
         clock=None,
     ) -> ZerodhaOptionMarketDataSubscriptionManager:
         transport = ZerodhaTickerOptionSubscriptionTransport(client)
-        return ZerodhaOptionMarketDataSubscriptionManager(transport=transport, clock=clock)
+        manager = ZerodhaOptionMarketDataSubscriptionManager(transport=transport, clock=clock)
+        _register_reconnect_recovery(client, manager)
+        return manager
+
+
+def _register_reconnect_recovery(client, manager: ZerodhaOptionMarketDataSubscriptionManager) -> None:
+    """Attach recovery to the shared raw ticker without coupling to the desktop router type."""
+    candidate = client
+    visited = set()
+    while candidate is not None and id(candidate) not in visited:
+        visited.add(id(candidate))
+        register = getattr(candidate, "register_reconnect_recovery", None)
+        if callable(register):
+            register(manager.recover)
+            return
+        candidate = getattr(candidate, "_client", None)
