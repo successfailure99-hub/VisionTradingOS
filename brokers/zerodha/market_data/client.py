@@ -2,6 +2,7 @@
 Official KiteTicker client boundary.
 """
 
+from threading import RLock
 from typing import Protocol
 
 
@@ -84,6 +85,14 @@ class KiteTickerClient:
             reconnect_max_tries=reconnect_max_tries,
             reconnect_max_delay=reconnect_max_delay,
         )
+        self._lock = RLock()
+        self._desired_subscription_tokens: set[int] = set()
+        self._desired_modes_by_token: dict[int, str] = {}
+        self._connection_generation = 0
+        self._last_connection_object = None
+        self._applied_subscription_tokens: set[int] = set()
+        self._applied_modes_by_token: dict[int, str] = {}
+        self._handling_connect_callback = False
 
     def __repr__(self) -> str:
         return "KiteTickerClient(ticker='[PRIVATE]')"
@@ -100,7 +109,7 @@ class KiteTickerClient:
         on_reconnect,
         on_noreconnect,
     ) -> None:
-        self._ticker.on_connect = on_connect
+        self._ticker.on_connect = self._on_connect_wrapper(on_connect)
         self._ticker.on_ticks = on_ticks
         self._ticker.on_close = on_close
         self._ticker.on_error = on_error
@@ -114,12 +123,93 @@ class KiteTickerClient:
         self._ticker.close()
 
     def subscribe(self, instrument_tokens: list[int]) -> None:
-        self._ticker.subscribe(instrument_tokens)
+        tokens = _validate_tokens(instrument_tokens)
+        self._ticker.subscribe(tokens)
+        with self._lock:
+            self._desired_subscription_tokens.update(tokens)
+            if self._handling_connect_callback:
+                self._applied_subscription_tokens.update(tokens)
 
     def unsubscribe(self, instrument_tokens: list[int]) -> None:
-        if not _ticker_socket_available(self._ticker):
-            return
-        self._ticker.unsubscribe(instrument_tokens)
+        tokens = _validate_tokens(instrument_tokens)
+        if _ticker_socket_available(self._ticker):
+            self._ticker.unsubscribe(tokens)
+        with self._lock:
+            for token in tokens:
+                self._desired_subscription_tokens.discard(token)
+                self._desired_modes_by_token.pop(token, None)
+                self._applied_subscription_tokens.discard(token)
+                self._applied_modes_by_token.pop(token, None)
 
     def set_mode(self, mode: str, instrument_tokens: list[int]) -> None:
-        self._ticker.set_mode(mode, instrument_tokens)
+        if not isinstance(mode, str) or not mode:
+            raise ValueError("mode must be non-empty string")
+        tokens = _validate_tokens(instrument_tokens)
+        self._ticker.set_mode(mode, tokens)
+        with self._lock:
+            for token in tokens:
+                self._desired_modes_by_token[token] = mode
+                if self._handling_connect_callback:
+                    self._applied_modes_by_token[token] = mode
+
+    def _on_connect_wrapper(self, callback):
+        def wrapped(ws, response):
+            with self._lock:
+                if ws is not None and ws is self._last_connection_object:
+                    duplicate = True
+                else:
+                    duplicate = False
+                    self._last_connection_object = ws
+                    self._connection_generation += 1
+                    self._applied_subscription_tokens.clear()
+                    self._applied_modes_by_token.clear()
+                    self._handling_connect_callback = True
+            if duplicate:
+                if callback is not None:
+                    callback(ws, response)
+                return
+            try:
+                if callback is not None:
+                    callback(ws, response)
+                self._recover_desired_subscriptions()
+            finally:
+                with self._lock:
+                    self._handling_connect_callback = False
+        return wrapped
+
+    def _recover_desired_subscriptions(self) -> None:
+        with self._lock:
+            missing_tokens = sorted(self._desired_subscription_tokens - self._applied_subscription_tokens)
+            desired_modes = dict(self._desired_modes_by_token)
+            applied_modes = dict(self._applied_modes_by_token)
+        if missing_tokens:
+            self._ticker.subscribe(missing_tokens)
+            with self._lock:
+                self._applied_subscription_tokens.update(missing_tokens)
+        mode_groups: dict[str, list[int]] = {}
+        for token, mode in sorted(desired_modes.items()):
+            if token not in self._desired_subscription_tokens:
+                continue
+            if applied_modes.get(token) == mode:
+                continue
+            mode_groups.setdefault(mode, []).append(token)
+        for mode, tokens in mode_groups.items():
+            self._ticker.set_mode(mode, tokens)
+            with self._lock:
+                for token in tokens:
+                    self._applied_modes_by_token[token] = mode
+
+
+def _validate_tokens(instrument_tokens: list[int]) -> list[int]:
+    if not isinstance(instrument_tokens, list):
+        raise TypeError("instrument_tokens must be list")
+    if not instrument_tokens:
+        raise ValueError("instrument_tokens must not be empty")
+    seen: set[int] = set()
+    for token in instrument_tokens:
+        if isinstance(token, bool) or not isinstance(token, int) or token <= 0:
+            raise ValueError("instrument_tokens must contain positive integers")
+        if token in seen:
+            raise ValueError("instrument_tokens must be unique")
+        seen.add(token)
+    return list(instrument_tokens)
