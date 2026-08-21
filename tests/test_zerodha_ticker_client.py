@@ -133,6 +133,7 @@ def test_unsubscribe_preserves_unexpected_errors_when_socket_is_available(fake_k
 def test_dynamic_subscriptions_recover_after_reconnect_and_restore_modes(fake_kiteconnect):
     client = KiteTickerClient(api_key="api", access_token="token")
     callback_calls = []
+    callback_ws = object()
 
     def on_connect(ws, response):
         callback_calls.append("connect")
@@ -150,22 +151,49 @@ def test_dynamic_subscriptions_recover_after_reconnect_and_restore_modes(fake_ki
     client.subscribe([2002])
     client.set_mode("quote", [2002])
 
-    client._ticker.on_connect(object(), {})
+    client._ticker.on_connect(callback_ws, {})
     assert callback_calls == ["connect"]
     assert client._ticker.subscribed == [[1001], [2002]]
     assert client._ticker.modes == [("full", [1001]), ("quote", [2002])]
 
     client._ticker.subscribed.clear()
     client._ticker.modes.clear()
-    client._ticker.on_connect(object(), {})
+    client._ticker.ws = object()
+    client._ticker.on_connect(callback_ws, {})
+    assert callback_calls == ["connect", "connect"]
     assert client._ticker.subscribed == [[1001], [2002]]
     assert client._ticker.modes == [("full", [1001]), ("quote", [2002])]
 
 
-def test_reconnect_does_not_duplicate_same_websocket_connect_callback(fake_kiteconnect):
+def test_same_callback_ws_still_recovers_when_underlying_socket_changes(fake_kiteconnect):
+    client = KiteTickerClient(api_key="api", access_token="token")
+    callback_ws = object()
+    client.set_callbacks(
+        on_connect=lambda *_: None,
+        on_ticks=lambda *_: None,
+        on_close=lambda *_: None,
+        on_error=lambda *_: None,
+        on_reconnect=lambda *_: None,
+        on_noreconnect=lambda *_: None,
+    )
+    client.subscribe([101])
+    client.set_mode("full", [101])
+
+    client._ticker.on_connect(callback_ws, {})
+    client._ticker.subscribed.clear()
+    client._ticker.modes.clear()
+    client._ticker.ws = object()
+    client._ticker.on_connect(callback_ws, {})
+
+    assert client._connection_generation == 2
+    assert client._ticker.subscribed == [[101]]
+    assert client._ticker.modes == [("full", [101])]
+
+
+def test_duplicate_connect_callback_for_same_underlying_socket_is_not_recovered_twice(fake_kiteconnect):
     client = KiteTickerClient(api_key="api", access_token="token")
     callback_calls = []
-    ws = object()
+    callback_ws = object()
     client.set_callbacks(
         on_connect=lambda *_: callback_calls.append("connect"),
         on_ticks=lambda *_: None,
@@ -175,13 +203,47 @@ def test_reconnect_does_not_duplicate_same_websocket_connect_callback(fake_kitec
         on_noreconnect=lambda *_: None,
     )
     client.subscribe([101])
-    client._ticker.on_connect(ws, {})
+    client._ticker.on_connect(callback_ws, {})
     client._ticker.subscribed.clear()
     client._ticker.modes.clear()
-    client._ticker.on_connect(ws, {})
+    client._ticker.on_connect(callback_ws, {})
+
     assert callback_calls == ["connect", "connect"]
+    assert client._connection_generation == 1
     assert client._ticker.subscribed == []
     assert client._ticker.modes == []
+
+
+def test_registered_reconnect_recovery_runs_once_per_connection_and_isolates_failure(fake_kiteconnect):
+    client = KiteTickerClient(api_key="api", access_token="token")
+    calls = []
+
+    def good_recovery():
+        calls.append("good")
+
+    def bad_recovery():
+        calls.append("bad")
+        raise RuntimeError("boom")
+
+    client.register_reconnect_recovery(good_recovery)
+    client.register_reconnect_recovery(good_recovery)
+    client.register_reconnect_recovery(bad_recovery)
+    client.set_callbacks(
+        on_connect=lambda *_: None,
+        on_ticks=lambda *_: None,
+        on_close=lambda *_: None,
+        on_error=lambda *_: None,
+        on_reconnect=lambda *_: None,
+        on_noreconnect=lambda *_: None,
+    )
+
+    client._ticker.on_connect(object(), {})
+    client._ticker.ws = object()
+    client._ticker.on_connect(object(), {})
+
+    assert calls == ["good", "bad", "good", "bad"]
+    assert client._recovery_callback_failure_count == 2
+    assert client._last_recovery_callback_error == "RuntimeError: reconnect recovery callback failed"
 
 
 def test_raw_client_not_publicly_exposed_and_repr_redacts(fake_kiteconnect):
