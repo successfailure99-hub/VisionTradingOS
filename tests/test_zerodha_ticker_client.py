@@ -158,7 +158,7 @@ def test_dynamic_subscriptions_recover_after_reconnect_and_restore_modes(fake_ki
     client._ticker.subscribed.clear()
     client._ticker.modes.clear()
     client._ticker.on_connect(object(), {})
-    assert client._ticker.subscribed == [[1001, 2002]]
+    assert client._ticker.subscribed == [[1001], [2002]]
     assert client._ticker.modes == [("full", [1001]), ("quote", [2002])]
 
 
