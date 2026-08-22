@@ -1,8 +1,9 @@
 # VM-19 Version 1.0 Final Certification
 
-Status: IMPLEMENTED — CERTIFICATION GATE ADDED
-Branch: `milestone/vm19-v1-final-certification`
-Baseline: `6024729b8e952895f39746ac1a7a095236e3a7c3`
+Status: COMPLETE — CERTIFIED
+Certification baseline: `eb54a8fad86433d72ae2a7c915208599fab9f4f9`
+Certified branch: `develop`
+Certified remote: `origin/develop`
 
 ## Purpose
 
@@ -11,8 +12,8 @@ workstation. It does not introduce trading logic, indicators, broker mutation,
 risk-rule changes, lifecycle-rule changes, or journal-schema changes.
 
 The certification gate verifies that the repository still satisfies the frozen
-Version 1 release boundary after VM-18 production hardening and the shutdown
-lifecycle repair.
+Version 1 release boundary after VM-18 production hardening, reconnect recovery,
+and the shutdown lifecycle repair.
 
 ## Certification Scope
 
@@ -66,9 +67,35 @@ python -m compileall -q .
 git diff --check
 ```
 
-The VM-19 gate is considered repository-certified only after the focused suite,
-compile check, and diff check have been executed successfully on the exact
-candidate commit and the working tree is clean.
+## Final Certification Record
+
+VM-19 was closed against certified runtime baseline
+`eb54a8fad86433d72ae2a7c915208599fab9f4f9` on `develop` after the reconnect
+recovery regression fixes were integrated and pushed normally.
+
+Recorded validation result:
+
+- Full regression suite: `2404 passed in 1:26:18`.
+- Reconnect/runtime affected suite: `262 passed`.
+- Focused post-rebase regression tests: `2 passed`.
+- Python compile check: passed.
+- `git diff --check`: passed.
+- Working tree: clean.
+- Local `develop`: synchronized with `origin/develop`.
+- Force push: not used.
+
+The certification baseline above is the code/runtime baseline. This documentation
+closure changes certification records only and does not modify trading logic,
+runtime behavior, execution safety, or the frozen V1 architecture.
+
+## Certification Decision
+
+**PASS — VERSION 1.0 PROTECTED WORKSTATION CERTIFIED.**
+
+VM-19 is complete. The protected Version 1 release boundary is closed at the
+certification baseline above. Future development must begin as a separately
+defined post-V1 milestone and must not silently expand the VM-19 safety or
+execution boundary.
 
 ## Explicit Non-Certification
 
@@ -89,4 +116,4 @@ Those remain outside the protected Version 1 release boundary.
 - VM-17: read-only broker account observability — complete.
 - VM-18: production hardening and stress validation — complete.
 - SHUTDOWN-LIFECYCLE-1: idempotent market-data cleanup — complete.
-- VM-19: final protected V1 certification gate — this milestone.
+- VM-19: final protected V1 certification — complete and certified.
