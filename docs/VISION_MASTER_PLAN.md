@@ -334,10 +334,14 @@ The active and retained compatibility package boundaries are documented in
 
 ## Future Milestones
 
-Future milestones should extend the canonical architecture without introducing
-duplicate engines or reverse dependencies. Known future areas are Price Action
-V2, Option Chain V2, dashboard/runtime exposure polish, broker synchronization,
-and product-surface hardening.
+Version 1 certification is complete. Post-V1 milestones must be defined
+explicitly before implementation and must extend the canonical architecture
+without introducing duplicate engines or reverse dependencies.
+
+Known future areas are Price Action V2, Option Chain V2, dashboard/runtime
+exposure polish, broker synchronization, and product-surface hardening. This
+list records future areas only; it does not assign milestone numbers or silently
+authorize implementation scope.
 
 ## VM-17 Broker Readiness & Read-Only Account Synchronization
 
@@ -370,33 +374,34 @@ Status: COMPLETE.
 
 VM-18 is the final engineering hardening milestone before Version 1.0 certification. It does not add trading features. It validates runtime stability, memory growth, CPU/latency guardrails, thread cleanup, event bus behavior, reconnect recovery, session rollover, dashboard rendering, journal duplication protection, and secret redaction. The detailed report is maintained in `docs/VM_18_PRODUCTION_HARDENING_REPORT.md`.
 
-Remaining step after VM-18: VM-19 Version 1.0 Final Certification, which should be read-only.
+VM-18 is closed. Its successor, VM-19 Version 1.0 Final Certification, is also
+complete and certified.
 
 ## VM-19 Version 1.0 Final Certification
 
-Status: CERTIFICATION GATE IMPLEMENTED.
+Status: COMPLETE — CERTIFIED.
 
-VM-19 is a read-only release gate over the protected V1 workstation. It does
-not introduce trading rules, indicators, broker mutation, risk changes,
+Certification baseline: `eb54a8fad86433d72ae2a7c915208599fab9f4f9`.
+
+VM-19 is the final read-only release gate over the protected V1 workstation. It
+does not introduce trading rules, indicators, broker mutation, risk changes,
 lifecycle changes, or journal schema changes.
 
 The focused certification suite is `tests/test_vm_19_v1_final_certification.py`.
-The certification report is `docs/VM_19_V1_FINAL_CERTIFICATION.md`.
+The final certification record is `docs/VM_19_V1_FINAL_CERTIFICATION.md`.
 
-The gate verifies release identity, active-chain documentation, protected
-execution defaults, explicit directional option-selling paper configuration,
-repository hygiene, absence of legacy MarketContextV2 dependencies in the
-active AI chain, absence of direct broker mutation calls in active runtime
-surfaces, and absence of real credentials in `.env.example`.
+Final recorded validation:
 
-Certification commands:
+- Full regression suite: `2404 passed in 1:26:18`.
+- Reconnect/runtime affected suite: `262 passed`.
+- Focused post-rebase regression tests: `2 passed`.
+- Python compile check: passed.
+- `git diff --check`: passed.
+- Working tree: clean and synchronized with `origin/develop` at the certified
+  runtime baseline.
 
-```powershell
-python -m pytest tests/test_vm_19_v1_final_certification.py -v
-python -m compileall -q .
-git diff --check
-```
+Certification decision: **PASS — VERSION 1.0 PROTECTED WORKSTATION CERTIFIED.**
 
 VM-19 is not a live-money certification. Live broker mutation remains disabled
 by design, and live-market observation still requires controlled operational
-validation.
+validation. Any post-V1 work must begin under a separately defined milestone.
